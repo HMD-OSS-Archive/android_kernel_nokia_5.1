@@ -182,7 +182,8 @@ static void loopback_timer_start(struct loopback_pcm *dpcm)
 	}
 	tick = dpcm->period_size_frac - dpcm->irq_pos;
 	tick = (tick + dpcm->pcm_bps - 1) / dpcm->pcm_bps;
-	mod_timer(&dpcm->timer, jiffies + tick);
+	dpcm->timer.expires = jiffies + tick;
+	add_timer(&dpcm->timer);
 }
 
 /* call in cable->lock */
@@ -556,7 +557,7 @@ static snd_pcm_uframes_t loopback_pointer(struct snd_pcm_substream *substream)
 	return bytes_to_frames(runtime, pos);
 }
 
-static const struct snd_pcm_hardware loopback_pcm_hardware =
+static struct snd_pcm_hardware loopback_pcm_hardware =
 {
 	.info =		(SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP |
 			 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_PAUSE |
@@ -769,7 +770,7 @@ static int loopback_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static const struct snd_pcm_ops loopback_playback_ops = {
+static struct snd_pcm_ops loopback_playback_ops = {
 	.open =		loopback_open,
 	.close =	loopback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -782,7 +783,7 @@ static const struct snd_pcm_ops loopback_playback_ops = {
 	.mmap =		snd_pcm_lib_mmap_vmalloc,
 };
 
-static const struct snd_pcm_ops loopback_capture_ops = {
+static struct snd_pcm_ops loopback_capture_ops = {
 	.open =		loopback_open,
 	.close =	loopback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1087,6 +1088,8 @@ static int loopback_mixer_new(struct loopback *loopback, int notify)
 	return 0;
 }
 
+#ifdef CONFIG_PROC_FS
+
 static void print_dpcm_info(struct snd_info_buffer *buffer,
 			    struct loopback_pcm *dpcm,
 			    const char *id)
@@ -1159,6 +1162,12 @@ static int loopback_proc_new(struct loopback *loopback, int cidx)
 	snd_info_set_text_ops(entry, loopback, print_cable_info);
 	return 0;
 }
+
+#else /* !CONFIG_PROC_FS */
+
+#define loopback_proc_new(loopback, cidx) do { } while (0)
+
+#endif
 
 static int loopback_probe(struct platform_device *devptr)
 {
@@ -1245,6 +1254,7 @@ static struct platform_driver loopback_driver = {
 	.remove		= loopback_remove,
 	.driver		= {
 		.name	= SND_LOOPBACK_DRIVER,
+		.owner	= THIS_MODULE,
 		.pm	= LOOPBACK_PM_OPS,
 	},
 };

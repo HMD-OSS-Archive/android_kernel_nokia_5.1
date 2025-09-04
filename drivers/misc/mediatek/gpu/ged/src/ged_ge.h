@@ -15,10 +15,8 @@
 #define __GED_GE_H__
 
 #include <linux/types.h>
-#include <ged_type.h>
 
-/* Must be the same as region_num in gralloc_extra/ge_config.h */
-#define GE_ALLOC_STRUCT_NUM 10
+#include <ged_type.h>
 
 int ged_ge_init(void);
 int ged_ge_exit(void);

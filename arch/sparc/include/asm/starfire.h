@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * starfire.h: Group all starfire specific code together.
  *
@@ -13,6 +12,7 @@
 extern int this_is_starfire;
 
 void check_if_starfire(void);
+int starfire_hard_smp_processor_id(void);
 void starfire_hookup(int);
 unsigned int starfire_translate(unsigned long imap, unsigned int upaid);
 

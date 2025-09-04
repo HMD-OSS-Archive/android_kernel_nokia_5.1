@@ -141,14 +141,14 @@ static inline void * phys_to_virt(unsigned long address)
 /*
  * ISA I/O bus memory addresses are 1:1 with the physical address.
  */
-static inline unsigned long isa_virt_to_bus(volatile void *address)
+static inline unsigned long isa_virt_to_bus(volatile void * address)
 {
-	return virt_to_phys(address);
+	return (unsigned long)address - PAGE_OFFSET;
 }
 
-static inline void *isa_bus_to_virt(unsigned long address)
+static inline void * isa_bus_to_virt(unsigned long address)
 {
-	return phys_to_virt(address);
+	return (void *)(address + PAGE_OFFSET);
 }
 
 #define isa_page_to_bus page_to_phys
@@ -167,7 +167,7 @@ static inline void *isa_bus_to_virt(unsigned long address)
  */
 #define page_to_phys(page)	((dma_addr_t)page_to_pfn(page) << PAGE_SHIFT)
 
-extern void __iomem * __ioremap(phys_addr_t offset, phys_addr_t size, unsigned long flags);
+extern void __iomem * __ioremap(phys_t offset, phys_t size, unsigned long flags);
 extern void __iounmap(const volatile void __iomem *addr);
 
 #ifndef CONFIG_PCI
@@ -175,7 +175,7 @@ struct pci_dev;
 static inline void pci_iounmap(struct pci_dev *dev, void __iomem *addr) {}
 #endif
 
-static inline void __iomem * __ioremap_mode(phys_addr_t offset, unsigned long size,
+static inline void __iomem * __ioremap_mode(phys_t offset, unsigned long size,
 	unsigned long flags)
 {
 	void __iomem *addr = plat_ioremap(offset, size, flags);
@@ -183,7 +183,7 @@ static inline void __iomem * __ioremap_mode(phys_addr_t offset, unsigned long si
 	if (addr)
 		return addr;
 
-#define __IS_LOW512(addr) (!((phys_addr_t)(addr) & (phys_addr_t) ~0x1fffffffULL))
+#define __IS_LOW512(addr) (!((phys_t)(addr) & (phys_t) ~0x1fffffffULL))
 
 	if (cpu_has_64bit_addresses) {
 		u64 base = UNCAC_BASE;
@@ -197,7 +197,7 @@ static inline void __iomem * __ioremap_mode(phys_addr_t offset, unsigned long si
 		return (void __iomem *) (unsigned long) (base + offset);
 	} else if (__builtin_constant_p(offset) &&
 		   __builtin_constant_p(size) && __builtin_constant_p(flags)) {
-		phys_addr_t phys_addr, last_addr;
+		phys_t phys_addr, last_addr;
 
 		phys_addr = fixup_bigphys_addr(offset, size);
 
@@ -256,7 +256,6 @@ static inline void __iomem * __ioremap_mode(phys_addr_t offset, unsigned long si
  */
 #define ioremap_nocache(offset, size)					\
 	__ioremap_mode((offset), (size), _CACHE_UNCACHED)
-#define ioremap_uc ioremap_nocache
 
 /*
  * ioremap_cachable -	map bus memory into CPU space
@@ -275,7 +274,6 @@ static inline void __iomem * __ioremap_mode(phys_addr_t offset, unsigned long si
  */
 #define ioremap_cachable(offset, size)					\
 	__ioremap_mode((offset), (size), _page_cachable_default)
-#define ioremap_cache ioremap_cachable
 
 /*
  * These two are MIPS specific ioremap variant.	 ioremap_cacheable_cow
@@ -304,10 +302,10 @@ static inline void iounmap(const volatile void __iomem *addr)
 #undef __IS_KSEG1
 }
 
-#if defined(CONFIG_CPU_CAVIUM_OCTEON) || defined(CONFIG_LOONGSON3_ENHANCEMENT)
-#define war_io_reorder_wmb()		wmb()
+#ifdef CONFIG_CPU_CAVIUM_OCTEON
+#define war_octeon_io_reorder_wmb()		wmb()
 #else
-#define war_io_reorder_wmb()		barrier()
+#define war_octeon_io_reorder_wmb()		do { } while (0)
 #endif
 
 #define __BUILD_MEMORY_SINGLE(pfx, bwlq, type, irq)			\
@@ -318,7 +316,7 @@ static inline void pfx##write##bwlq(type val,				\
 	volatile type *__mem;						\
 	type __val;							\
 									\
-	war_io_reorder_wmb();					\
+	war_octeon_io_reorder_wmb();					\
 									\
 	__mem = (void *)__swizzle_addr_##bwlq((unsigned long)(mem));	\
 									\
@@ -389,7 +387,7 @@ static inline void pfx##out##bwlq##p(type val, unsigned long port)	\
 	volatile type *__addr;						\
 	type __val;							\
 									\
-	war_io_reorder_wmb();					\
+	war_octeon_io_reorder_wmb();					\
 									\
 	__addr = (void *)__swizzle_addr_##bwlq(mips_io_port_base + port); \
 									\
@@ -635,7 +633,5 @@ extern void (*_dma_cache_inv)(unsigned long start, unsigned long size);
  * Convert a virtual cached pointer to an uncached pointer
  */
 #define xlate_dev_kmem_ptr(p)	p
-
-void __ioread64_copy(void *to, const void __iomem *from, size_t count);
 
 #endif /* _ASM_IO_H */

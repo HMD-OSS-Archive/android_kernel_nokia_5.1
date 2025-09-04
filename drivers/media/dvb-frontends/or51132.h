@@ -13,6 +13,10 @@
  *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *    GNU General Public License for more details.
  *
+ *    You should have received a copy of the GNU General Public License
+ *    along with this program; if not, write to the Free Software
+ *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
 */
 
 #ifndef OR51132_H
@@ -43,3 +47,9 @@ static inline struct dvb_frontend* or51132_attach(const struct or51132_config* c
 #endif // CONFIG_DVB_OR51132
 
 #endif // OR51132_H
+
+/*
+ * Local variables:
+ * c-basic-offset: 8
+ * End:
+ */

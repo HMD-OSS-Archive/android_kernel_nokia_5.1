@@ -15,11 +15,14 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/completion.h>
 #include <linux/delay.h>
-#include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
@@ -363,25 +366,16 @@ static int si4713_powerup(struct si4713_device *sdev)
 	if (sdev->power_state)
 		return 0;
 
-	if (sdev->vdd) {
-		err = regulator_enable(sdev->vdd);
+	if (sdev->supplies) {
+		err = regulator_bulk_enable(sdev->supplies, sdev->supply_data);
 		if (err) {
-			v4l2_err(&sdev->sd, "Failed to enable vdd: %d\n", err);
+			v4l2_err(&sdev->sd, "Failed to enable supplies: %d\n", err);
 			return err;
 		}
 	}
-
-	if (sdev->vio) {
-		err = regulator_enable(sdev->vio);
-		if (err) {
-			v4l2_err(&sdev->sd, "Failed to enable vio: %d\n", err);
-			return err;
-		}
-	}
-
-	if (sdev->gpio_reset) {
+	if (gpio_is_valid(sdev->gpio_reset)) {
 		udelay(50);
-		gpiod_set_value(sdev->gpio_reset, 1);
+		gpio_set_value(sdev->gpio_reset, 1);
 	}
 
 	if (client->irq)
@@ -403,19 +397,13 @@ static int si4713_powerup(struct si4713_device *sdev)
 						SI4713_STC_INT | SI4713_CTS);
 		return err;
 	}
-	gpiod_set_value(sdev->gpio_reset, 0);
-
-
-	if (sdev->vdd) {
-		err = regulator_disable(sdev->vdd);
+	if (gpio_is_valid(sdev->gpio_reset))
+		gpio_set_value(sdev->gpio_reset, 0);
+	if (sdev->supplies) {
+		err = regulator_bulk_disable(sdev->supplies, sdev->supply_data);
 		if (err)
-			v4l2_err(&sdev->sd, "Failed to disable vdd: %d\n", err);
-	}
-
-	if (sdev->vio) {
-		err = regulator_disable(sdev->vio);
-		if (err)
-			v4l2_err(&sdev->sd, "Failed to disable vio: %d\n", err);
+			v4l2_err(&sdev->sd,
+				 "Failed to disable supplies: %d\n", err);
 	}
 
 	return err;
@@ -442,23 +430,14 @@ static int si4713_powerdown(struct si4713_device *sdev)
 		v4l2_dbg(1, debug, &sdev->sd, "Power down response: 0x%02x\n",
 				resp[0]);
 		v4l2_dbg(1, debug, &sdev->sd, "Device in reset mode\n");
-		if (sdev->gpio_reset)
-			gpiod_set_value(sdev->gpio_reset, 0);
-
-		if (sdev->vdd) {
-			err = regulator_disable(sdev->vdd);
-			if (err) {
+		if (gpio_is_valid(sdev->gpio_reset))
+			gpio_set_value(sdev->gpio_reset, 0);
+		if (sdev->supplies) {
+			err = regulator_bulk_disable(sdev->supplies,
+						     sdev->supply_data);
+			if (err)
 				v4l2_err(&sdev->sd,
-					"Failed to disable vdd: %d\n", err);
-			}
-		}
-
-		if (sdev->vio) {
-			err = regulator_disable(sdev->vio);
-			if (err) {
-				v4l2_err(&sdev->sd,
-					"Failed to disable vio: %d\n", err);
-			}
+					 "Failed to disable supplies: %d\n", err);
 		}
 		sdev->power_state = POWER_OFF;
 	}
@@ -712,9 +691,9 @@ static int si4713_tx_tune_status(struct si4713_device *sdev, u8 intack,
 		*power = val[5];
 		*antcap = val[6];
 		*noise = val[7];
-		v4l2_dbg(1, debug, &sdev->sd,
-			 "%s: response: %d x 10 kHz (power %d, antcap %d, rnl %d)\n",
-			 __func__, *frequency, *power, *antcap, *noise);
+		v4l2_dbg(1, debug, &sdev->sd, "%s: response: %d x 10 kHz "
+				"(power %d, antcap %d, rnl %d)\n", __func__,
+				*frequency, *power, *antcap, *noise);
 	}
 
 	return err;
@@ -754,9 +733,10 @@ static int si4713_tx_rds_buff(struct si4713_device *sdev, u8 mode, u16 rdsb,
 		v4l2_dbg(1, debug, &sdev->sd,
 			"%s: status=0x%02x\n", __func__, val[0]);
 		*cbleft = (s8)val[2] - val[3];
-		v4l2_dbg(1, debug, &sdev->sd,
-			 "%s: response: interrupts 0x%02x cb avail: %d cb used %d fifo avail %d fifo used %d\n",
-			 __func__, val[1], val[2], val[3], val[4], val[5]);
+		v4l2_dbg(1, debug, &sdev->sd, "%s: response: interrupts"
+				" 0x%02x cb avail: %d cb used %d fifo avail"
+				" %d fifo used %d\n", __func__, val[1],
+				val[2], val[3], val[4], val[5]);
 	}
 
 	return err;
@@ -1440,46 +1420,38 @@ static int si4713_probe(struct i2c_client *client,
 					const struct i2c_device_id *id)
 {
 	struct si4713_device *sdev;
-	struct v4l2_ctrl_handler *hdl;
 	struct si4713_platform_data *pdata = client->dev.platform_data;
-	struct device_node *np = client->dev.of_node;
-	struct radio_si4713_platform_data si4713_pdev_pdata;
-	struct platform_device *si4713_pdev;
-	int rval;
+	struct v4l2_ctrl_handler *hdl;
+	int rval, i;
 
-	sdev = devm_kzalloc(&client->dev, sizeof(*sdev), GFP_KERNEL);
+	sdev = kzalloc(sizeof(*sdev), GFP_KERNEL);
 	if (!sdev) {
 		dev_err(&client->dev, "Failed to alloc video device.\n");
 		rval = -ENOMEM;
 		goto exit;
 	}
 
-	sdev->gpio_reset = devm_gpiod_get_optional(&client->dev, "reset",
-						   GPIOD_OUT_LOW);
-	if (IS_ERR(sdev->gpio_reset)) {
-		rval = PTR_ERR(sdev->gpio_reset);
-		dev_err(&client->dev, "Failed to request gpio: %d\n", rval);
-		goto exit;
+	sdev->gpio_reset = -1;
+	if (pdata && gpio_is_valid(pdata->gpio_reset)) {
+		rval = gpio_request(pdata->gpio_reset, "si4713 reset");
+		if (rval) {
+			dev_err(&client->dev,
+				"Failed to request gpio: %d\n", rval);
+			goto free_sdev;
+		}
+		sdev->gpio_reset = pdata->gpio_reset;
+		gpio_direction_output(sdev->gpio_reset, 0);
+		sdev->supplies = pdata->supplies;
 	}
 
-	sdev->vdd = devm_regulator_get_optional(&client->dev, "vdd");
-	if (IS_ERR(sdev->vdd)) {
-		rval = PTR_ERR(sdev->vdd);
-		if (rval == -EPROBE_DEFER)
-			goto exit;
+	for (i = 0; i < sdev->supplies; i++)
+		sdev->supply_data[i].supply = pdata->supply_names[i];
 
-		dev_dbg(&client->dev, "no vdd regulator found: %d\n", rval);
-		sdev->vdd = NULL;
-	}
-
-	sdev->vio = devm_regulator_get_optional(&client->dev, "vio");
-	if (IS_ERR(sdev->vio)) {
-		rval = PTR_ERR(sdev->vio);
-		if (rval == -EPROBE_DEFER)
-			goto exit;
-
-		dev_dbg(&client->dev, "no vio regulator found: %d\n", rval);
-		sdev->vio = NULL;
+	rval = regulator_bulk_get(&client->dev, sdev->supplies,
+				  sdev->supply_data);
+	if (rval) {
+		dev_err(&client->dev, "Cannot get regulators: %d\n", rval);
+		goto free_gpio;
 	}
 
 	v4l2_i2c_subdev_init(&sdev->sd, client, &si4713_subdev_ops);
@@ -1582,12 +1554,12 @@ static int si4713_probe(struct i2c_client *client,
 	sdev->sd.ctrl_handler = hdl;
 
 	if (client->irq) {
-		rval = devm_request_irq(&client->dev, client->irq,
+		rval = request_irq(client->irq,
 			si4713_handler, IRQF_TRIGGER_FALLING,
 			client->name, sdev);
 		if (rval < 0) {
 			v4l2_err(&sdev->sd, "Could not request IRQ\n");
-			goto free_ctrls;
+			goto put_reg;
 		}
 		v4l2_dbg(1, debug, &sdev->sd, "IRQ requested.\n");
 	} else {
@@ -1597,37 +1569,23 @@ static int si4713_probe(struct i2c_client *client,
 	rval = si4713_initialize(sdev);
 	if (rval < 0) {
 		v4l2_err(&sdev->sd, "Failed to probe device information.\n");
-		goto free_ctrls;
+		goto free_irq;
 	}
-
-	if (!np && (!pdata || !pdata->is_platform_device))
-		return 0;
-
-	si4713_pdev = platform_device_alloc("radio-si4713", -1);
-	if (!si4713_pdev) {
-		rval = -ENOMEM;
-		goto put_main_pdev;
-	}
-
-	si4713_pdev_pdata.subdev = client;
-	rval = platform_device_add_data(si4713_pdev, &si4713_pdev_pdata,
-					sizeof(si4713_pdev_pdata));
-	if (rval)
-		goto put_main_pdev;
-
-	rval = platform_device_add(si4713_pdev);
-	if (rval)
-		goto put_main_pdev;
-
-	sdev->pd = si4713_pdev;
 
 	return 0;
 
-put_main_pdev:
-	platform_device_put(si4713_pdev);
-	v4l2_device_unregister_subdev(&sdev->sd);
+free_irq:
+	if (client->irq)
+		free_irq(client->irq, sdev);
 free_ctrls:
 	v4l2_ctrl_handler_free(hdl);
+put_reg:
+	regulator_bulk_free(sdev->supplies, sdev->supply_data);
+free_gpio:
+	if (gpio_is_valid(sdev->gpio_reset))
+		gpio_free(sdev->gpio_reset);
+free_sdev:
+	kfree(sdev);
 exit:
 	return rval;
 }
@@ -1638,13 +1596,18 @@ static int si4713_remove(struct i2c_client *client)
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct si4713_device *sdev = to_si4713_device(sd);
 
-	platform_device_unregister(sdev->pd);
-
 	if (sdev->power_state)
 		si4713_set_power_state(sdev, POWER_DOWN);
 
+	if (client->irq > 0)
+		free_irq(client->irq, sdev);
+
 	v4l2_device_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
+	regulator_bulk_free(sdev->supplies, sdev->supply_data);
+	if (gpio_is_valid(sdev->gpio_reset))
+		gpio_free(sdev->gpio_reset);
+	kfree(sdev);
 
 	return 0;
 }
@@ -1656,18 +1619,9 @@ static const struct i2c_device_id si4713_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, si4713_id);
 
-#if IS_ENABLED(CONFIG_OF)
-static const struct of_device_id si4713_of_match[] = {
-	{ .compatible = "silabs,si4713" },
-	{ },
-};
-MODULE_DEVICE_TABLE(of, si4713_of_match);
-#endif
-
 static struct i2c_driver si4713_i2c_driver = {
 	.driver		= {
 		.name	= "si4713",
-		.of_match_table = of_match_ptr(si4713_of_match),
 	},
 	.probe		= si4713_probe,
 	.remove         = si4713_remove,

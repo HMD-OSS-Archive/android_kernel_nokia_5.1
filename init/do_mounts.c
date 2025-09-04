@@ -225,11 +225,9 @@ dev_t name_to_dev_t(const char *name)
 #endif
 
 	if (strncmp(name, "/dev/", 5) != 0) {
-		unsigned maj, min, offset;
-		char dummy;
+		unsigned maj, min;
 
-		if ((sscanf(name, "%u:%u%c", &maj, &min, &dummy) == 2) ||
-		    (sscanf(name, "%u:%u:%u:%c", &maj, &min, &offset, &dummy) == 3)) {
+		if (sscanf(name, "%u:%u", &maj, &min) == 2) {
 			res = MKDEV(maj, min);
 			if (maj != MAJOR(res) || min != MINOR(res))
 				goto fail;
@@ -288,7 +286,6 @@ fail:
 done:
 	return res;
 }
-EXPORT_SYMBOL_GPL(name_to_dev_t);
 
 static int __init root_dev_setup(char *line)
 {
@@ -373,14 +370,15 @@ static int __init do_mount_root(char *name, char *fs, int flags, void *data)
 	printk(KERN_INFO
 	       "VFS: Mounted root (%s filesystem)%s on device %u:%u.\n",
 	       s->s_type->name,
-	       sb_rdonly(s) ? " readonly" : "",
+	       s->s_flags & MS_RDONLY ?  " readonly" : "",
 	       MAJOR(ROOT_DEV), MINOR(ROOT_DEV));
 	return 0;
 }
 
 void __init mount_block_root(char *name, int flags)
 {
-	struct page *page = alloc_page(GFP_KERNEL);
+	struct page *page = alloc_page(GFP_KERNEL |
+					__GFP_NOTRACK_FALSE_POSITIVE);
 	char *fs_names = page_address(page);
 	char *p;
 #ifdef CONFIG_BLOCK
@@ -397,6 +395,8 @@ retry:
 			case 0:
 				goto out;
 			case -EACCES:
+				flags |= MS_RDONLY;
+				goto retry;
 			case -EINVAL:
 				continue;
 		}
@@ -418,10 +418,6 @@ retry:
 		       "explicit textual name for \"root=\" boot option.\n");
 #endif
 		panic("VFS: Unable to mount root fs on %s", b);
-	}
-	if (!(flags & SB_RDONLY)) {
-		flags |= SB_RDONLY;
-		goto retry;
 	}
 
 	printk("List of all partitions:\n");
@@ -508,6 +504,8 @@ void __init change_floppy(char *fmt, ...)
 }
 #endif
 
+void __attribute__((weak)) mount_block_root_post(void) { }
+
 void __init mount_root(void)
 {
 #ifdef CONFIG_ROOT_NFS
@@ -532,13 +530,9 @@ void __init mount_root(void)
 	}
 #endif
 #ifdef CONFIG_BLOCK
-	{
-		int err = create_dev("/dev/root", ROOT_DEV);
-
-		if (err < 0)
-			pr_emerg("Failed to create /dev/root: %d\n", err);
-		mount_block_root("/dev/root", root_mountflags);
-	}
+	create_dev("/dev/root", ROOT_DEV);
+	mount_block_root("/dev/root", root_mountflags);
+	mount_block_root_post();
 #endif
 }
 
@@ -565,6 +559,7 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
+	dm_run_setup();
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
@@ -587,7 +582,7 @@ void __init prepare_namespace(void)
 			saved_root_name);
 		while (driver_probe_done() != 0 ||
 			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
-			msleep(5);
+			msleep(100);
 		async_synchronize_full();
 	}
 

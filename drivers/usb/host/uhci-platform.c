@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Generic UHCI HCD (Host Controller Driver) for Platform Devices
  *
@@ -16,9 +15,7 @@ static int uhci_platform_init(struct usb_hcd *hcd)
 {
 	struct uhci_hcd *uhci = hcd_to_uhci(hcd);
 
-	/* Probe number of ports if not already provided by DT */
-	if (!uhci->rh_numports)
-		uhci->rh_numports = uhci_count_ports(hcd);
+	uhci->rh_numports = uhci_count_ports(hcd);
 
 	/* Set up pointers to to generic functions */
 	uhci->reset_hc = uhci_generic_reset_hc;
@@ -66,7 +63,6 @@ static const struct hc_driver uhci_platform_hc_driver = {
 
 static int uhci_hcd_platform_probe(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
 	struct usb_hcd *hcd;
 	struct uhci_hcd	*uhci;
 	struct resource *res;
@@ -90,35 +86,18 @@ static int uhci_hcd_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hcd->rsrc_start = res->start;
+	hcd->rsrc_len = resource_size(res);
+
 	hcd->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hcd->regs)) {
 		ret = PTR_ERR(hcd->regs);
 		goto err_rmr;
 	}
-	hcd->rsrc_start = res->start;
-	hcd->rsrc_len = resource_size(res);
-
 	uhci = hcd_to_uhci(hcd);
 
 	uhci->regs = hcd->regs;
 
-	/* Grab some things from the device-tree */
-	if (np) {
-		u32 num_ports;
-
-		if (of_property_read_u32(np, "#ports", &num_ports) == 0) {
-			uhci->rh_numports = num_ports;
-			dev_info(&pdev->dev,
-				"Detected %d ports from device-tree\n",
-				num_ports);
-		}
-		if (of_device_is_compatible(np, "aspeed,ast2400-uhci") ||
-		    of_device_is_compatible(np, "aspeed,ast2500-uhci")) {
-			uhci->is_aspeed = 1;
-			dev_info(&pdev->dev,
-				 "Enabled Aspeed implementation workarounds\n");
-		}
-	}
 	ret = usb_add_hcd(hcd, pdev->resource[1].start, IRQF_SHARED);
 	if (ret)
 		goto err_rmr;
@@ -161,7 +140,6 @@ static const struct of_device_id platform_uhci_ids[] = {
 	{ .compatible = "platform-uhci", },
 	{}
 };
-MODULE_DEVICE_TABLE(of, platform_uhci_ids);
 
 static struct platform_driver uhci_platform_driver = {
 	.probe		= uhci_hcd_platform_probe,
@@ -169,6 +147,7 @@ static struct platform_driver uhci_platform_driver = {
 	.shutdown	= uhci_hcd_platform_shutdown,
 	.driver = {
 		.name = "platform-uhci",
+		.owner = THIS_MODULE,
 		.of_match_table = platform_uhci_ids,
 	},
 };

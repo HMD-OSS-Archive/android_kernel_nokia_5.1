@@ -51,6 +51,7 @@
 #include "s3c2410_udc.h"
 
 #define DRIVER_DESC	"S3C2410 USB Device Controller Gadget"
+#define DRIVER_VERSION	"29 Apr 2007"
 #define DRIVER_AUTHOR	"Herbert Pötzl <herbert@13thfloor.at>, " \
 			"Arnaud Patard <arnaud.patard@rtp-net.org>"
 
@@ -91,38 +92,40 @@ static struct s3c2410_udc_mach_info *udc_info;
 
 static uint32_t s3c2410_ticks = 0;
 
-__printf(2, 3)
-static void dprintk(int level, const char *fmt, ...)
+static int dprintk(int level, const char *fmt, ...)
 {
+	static char printk_buf[1024];
 	static long prevticks;
 	static int invocation;
-	struct va_format vaf;
 	va_list args;
+	int len;
 
 	if (level > USB_S3C2410_DEBUG_LEVEL)
-		return;
-
-	va_start(args, fmt);
-
-	vaf.fmt = fmt;
-	vaf.va = &args;
+		return 0;
 
 	if (s3c2410_ticks != prevticks) {
 		prevticks = s3c2410_ticks;
 		invocation = 0;
 	}
 
-	pr_debug("%1lu.%02d USB: %pV", prevticks, invocation++, &vaf);
+	len = scnprintf(printk_buf,
+			sizeof(printk_buf), "%1lu.%02d USB: ",
+			prevticks, invocation++);
 
+	va_start(args, fmt);
+	len = vscnprintf(printk_buf+len,
+			sizeof(printk_buf)-len, fmt, args);
 	va_end(args);
+
+	pr_debug("%s", printk_buf);
+	return len;
 }
 #else
-__printf(2, 3)
-static void dprintk(int level, const char *fmt, ...)
+static int dprintk(int level, const char *fmt, ...)
 {
+	return 0;
 }
 #endif
-
 static int s3c2410_udc_debugfs_seq_show(struct seq_file *m, void *p)
 {
 	u32 addr_reg, pwr_reg, ep_int_reg, usb_int_reg;
@@ -235,6 +238,14 @@ static inline void s3c2410_udc_set_ep0_de_out(void __iomem *base)
 			S3C2410_UDC_EP0_CSR_REG);
 }
 
+static inline void s3c2410_udc_set_ep0_sse_out(void __iomem *base)
+{
+	udc_writeb(base, S3C2410_UDC_INDEX_EP0, S3C2410_UDC_INDEX_REG);
+	udc_writeb(base, (S3C2410_UDC_EP0_CSR_SOPKTRDY
+				| S3C2410_UDC_EP0_CSR_SSE),
+			S3C2410_UDC_EP0_CSR_REG);
+}
+
 static inline void s3c2410_udc_set_ep0_de_in(void __iomem *base)
 {
 	udc_writeb(base, S3C2410_UDC_INDEX_EP0, S3C2410_UDC_INDEX_REG);
@@ -278,6 +289,18 @@ static void s3c2410_udc_nuke(struct s3c2410_udc *udc,
 				queue);
 		s3c2410_udc_done(ep, req, status);
 	}
+}
+
+static inline void s3c2410_udc_clear_ep_state(struct s3c2410_udc *dev)
+{
+	unsigned i;
+
+	/* hardware SET_{CONFIGURATION,INTERFACE} automagic resets endpoint
+	 * fifos, and pending transactions mustn't be continued in any case.
+	 */
+
+	for (i = 1; i < S3C2410_ENDPOINTS; i++)
+		s3c2410_udc_nuke(dev, &dev->ep[i], -ECONNABORTED);
 }
 
 static inline int s3c2410_udc_fifo_count_out(void)
@@ -1046,10 +1069,10 @@ static int s3c2410_udc_ep_enable(struct usb_ep *_ep,
 	if (!dev->driver || dev->gadget.speed == USB_SPEED_UNKNOWN)
 		return -ESHUTDOWN;
 
-	max = usb_endpoint_maxp(desc);
+	max = usb_endpoint_maxp(desc) & 0x1fff;
 
 	local_irq_save(flags);
-	_ep->maxpacket = max;
+	_ep->maxpacket = max & 0x7ff;
 	ep->ep.desc = desc;
 	ep->halted = 0;
 	ep->bEndpointAddress = desc->bEndpointAddress;
@@ -1431,7 +1454,6 @@ static int s3c2410_udc_set_selfpowered(struct usb_gadget *gadget, int value)
 
 	dprintk(DEBUG_NORMAL, "%s()\n", __func__);
 
-	gadget->is_selfpowered = (value != 0);
 	if (value)
 		udc->devstatus |= (1 << USB_DEVICE_SELF_POWERED);
 	else
@@ -1484,7 +1506,7 @@ static int s3c2410_udc_pullup(struct usb_gadget *gadget, int is_on)
 
 	dprintk(DEBUG_NORMAL, "%s()\n", __func__);
 
-	s3c2410_udc_set_pullup(udc, is_on);
+	s3c2410_udc_set_pullup(udc, is_on ? 0 : 1);
 	return 0;
 }
 
@@ -1519,7 +1541,8 @@ static int s3c2410_vbus_draw(struct usb_gadget *_gadget, unsigned ma)
 
 static int s3c2410_udc_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
-static int s3c2410_udc_stop(struct usb_gadget *g);
+static int s3c2410_udc_stop(struct usb_gadget *g,
+		struct usb_gadget_driver *driver);
 
 static const struct usb_gadget_ops s3c2410_ops = {
 	.get_frame		= s3c2410_udc_get_frame,
@@ -1660,7 +1683,8 @@ static int s3c2410_udc_start(struct usb_gadget *g,
 	return 0;
 }
 
-static int s3c2410_udc_stop(struct usb_gadget *g)
+static int s3c2410_udc_stop(struct usb_gadget *g,
+		struct usb_gadget_driver *driver)
 {
 	struct s3c2410_udc *udc = to_s3c2410(g);
 
@@ -1690,8 +1714,6 @@ static struct s3c2410_udc memory = {
 			.name		= ep0name,
 			.ops		= &s3c2410_ep_ops,
 			.maxpacket	= EP0_FIFO_SIZE,
-			.caps		= USB_EP_CAPS(USB_EP_CAPS_TYPE_CONTROL,
-						USB_EP_CAPS_DIR_ALL),
 		},
 		.dev		= &memory,
 	},
@@ -1703,8 +1725,6 @@ static struct s3c2410_udc memory = {
 			.name		= "ep1-bulk",
 			.ops		= &s3c2410_ep_ops,
 			.maxpacket	= EP_FIFO_SIZE,
-			.caps		= USB_EP_CAPS(USB_EP_CAPS_TYPE_BULK,
-						USB_EP_CAPS_DIR_ALL),
 		},
 		.dev		= &memory,
 		.fifo_size	= EP_FIFO_SIZE,
@@ -1717,8 +1737,6 @@ static struct s3c2410_udc memory = {
 			.name		= "ep2-bulk",
 			.ops		= &s3c2410_ep_ops,
 			.maxpacket	= EP_FIFO_SIZE,
-			.caps		= USB_EP_CAPS(USB_EP_CAPS_TYPE_BULK,
-						USB_EP_CAPS_DIR_ALL),
 		},
 		.dev		= &memory,
 		.fifo_size	= EP_FIFO_SIZE,
@@ -1731,8 +1749,6 @@ static struct s3c2410_udc memory = {
 			.name		= "ep3-bulk",
 			.ops		= &s3c2410_ep_ops,
 			.maxpacket	= EP_FIFO_SIZE,
-			.caps		= USB_EP_CAPS(USB_EP_CAPS_TYPE_BULK,
-						USB_EP_CAPS_DIR_ALL),
 		},
 		.dev		= &memory,
 		.fifo_size	= EP_FIFO_SIZE,
@@ -1745,8 +1761,6 @@ static struct s3c2410_udc memory = {
 			.name		= "ep4-bulk",
 			.ops		= &s3c2410_ep_ops,
 			.maxpacket	= EP_FIFO_SIZE,
-			.caps		= USB_EP_CAPS(USB_EP_CAPS_TYPE_BULK,
-						USB_EP_CAPS_DIR_ALL),
 		},
 		.dev		= &memory,
 		.fifo_size	= EP_FIFO_SIZE,
@@ -1983,6 +1997,7 @@ MODULE_DEVICE_TABLE(platform, s3c_udc_ids);
 static struct platform_driver udc_driver_24x0 = {
 	.driver		= {
 		.name	= "s3c24x0-usbgadget",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= s3c2410_udc_probe,
 	.remove		= s3c2410_udc_remove,
@@ -1995,7 +2010,7 @@ static int __init udc_init(void)
 {
 	int retval;
 
-	dprintk(DEBUG_NORMAL, "%s\n", gadget_name);
+	dprintk(DEBUG_NORMAL, "%s: version %s\n", gadget_name, DRIVER_VERSION);
 
 	s3c2410_udc_debugfs_root = debugfs_create_dir(gadget_name, NULL);
 	if (IS_ERR(s3c2410_udc_debugfs_root)) {
@@ -2026,4 +2041,5 @@ module_exit(udc_exit);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
+MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");

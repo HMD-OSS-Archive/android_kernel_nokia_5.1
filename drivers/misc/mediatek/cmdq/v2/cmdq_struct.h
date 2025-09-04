@@ -17,11 +17,11 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 
-struct cmdqFileNodeStruct {
+typedef struct cmdqFileNodeStruct {
 	pid_t userPID;
 	pid_t userTGID;
 	struct list_head taskList;
 	spinlock_t nodeLock;
-};
+} cmdqFileNodeStruct;
 
 #endif				/* __CMDQ_STRUCT_H__ */

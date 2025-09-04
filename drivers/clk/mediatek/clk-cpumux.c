@@ -19,14 +19,25 @@
 #include "clk-mtk.h"
 #include "clk-cpumux.h"
 
-static inline struct mtk_clk_cpumux *to_mtk_clk_cpumux(struct clk_hw *_hw)
+#define WORKAROUND_318_WARNING	1
+
+struct mtk_clk_cpumux {
+	struct clk_hw	hw;
+	struct regmap	*regmap;
+	u32		reg;
+	u32		mask;
+	u8		shift;
+};
+
+static inline struct mtk_clk_cpumux *to_clk_mux(struct clk_hw *_hw)
 {
 	return container_of(_hw, struct mtk_clk_cpumux, hw);
 }
 
 static u8 clk_cpumux_get_parent(struct clk_hw *hw)
 {
-	struct mtk_clk_cpumux *mux = to_mtk_clk_cpumux(hw);
+	struct mtk_clk_cpumux *mux = to_clk_mux(hw);
+	int num_parents = __clk_get_num_parents(hw->clk);
 	unsigned int val;
 
 	regmap_read(mux->regmap, mux->reg, &val);
@@ -34,12 +45,15 @@ static u8 clk_cpumux_get_parent(struct clk_hw *hw)
 	val >>= mux->shift;
 	val &= mux->mask;
 
+	if (val >= num_parents)
+		return -EINVAL;
+
 	return val;
 }
 
 static int clk_cpumux_set_parent(struct clk_hw *hw, u8 index)
 {
-	struct mtk_clk_cpumux *mux = to_mtk_clk_cpumux(hw);
+	struct mtk_clk_cpumux *mux = to_clk_mux(hw);
 	u32 mask, val;
 
 	val = index << mux->shift;
@@ -53,9 +67,8 @@ static const struct clk_ops clk_cpumux_ops = {
 	.set_parent = clk_cpumux_set_parent,
 };
 
-static struct clk __init *
-mtk_clk_register_cpumux(const struct mtk_composite *mux,
-			struct regmap *regmap)
+static struct clk __init *mtk_clk_register_cpumux(const struct mtk_composite *mux,
+					   struct regmap *regmap)
 {
 	struct mtk_clk_cpumux *cpumux;
 	struct clk *clk;
@@ -67,7 +80,11 @@ mtk_clk_register_cpumux(const struct mtk_composite *mux,
 
 	init.name = mux->name;
 	init.ops = &clk_cpumux_ops;
+#if WORKAROUND_318_WARNING
+	init.parent_names = (const char **)mux->parent_names;
+#else
 	init.parent_names = mux->parent_names;
+#endif
 	init.num_parents = mux->num_parents;
 	init.flags = mux->flags;
 
@@ -85,8 +102,8 @@ mtk_clk_register_cpumux(const struct mtk_composite *mux,
 }
 
 int __init mtk_clk_register_cpumuxes(struct device_node *node,
-				     const struct mtk_composite *clks, int num,
-				     struct clk_onecell_data *clk_data)
+			      const struct mtk_composite *clks, int num,
+			      struct clk_onecell_data *clk_data)
 {
 	int i;
 	struct clk *clk;
@@ -94,7 +111,7 @@ int __init mtk_clk_register_cpumuxes(struct device_node *node,
 
 	regmap = syscon_node_to_regmap(node);
 	if (IS_ERR(regmap)) {
-		pr_err("Cannot find regmap for %pOF: %ld\n", node,
+		pr_err("Cannot find regmap for %s: %ld\n", node->full_name,
 		       PTR_ERR(regmap));
 		return PTR_ERR(regmap);
 	}

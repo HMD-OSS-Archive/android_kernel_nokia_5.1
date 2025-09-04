@@ -21,6 +21,8 @@
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
+#include "xfs_sb.h"
+#include "xfs_ag.h"
 #include "xfs_mount.h"
 #include "xfs_da_format.h"
 #include "xfs_da_btree.h"
@@ -33,7 +35,6 @@
 #include "xfs_trans.h"
 #include "xfs_buf_item.h"
 #include "xfs_cksum.h"
-#include "xfs_log.h"
 
 /*
  * Local function declarations.
@@ -145,7 +146,7 @@ xfs_dir3_leaf_check_int(
 static bool
 xfs_dir3_leaf_verify(
 	struct xfs_buf		*bp,
-	uint16_t		magic)
+	__uint16_t		magic)
 {
 	struct xfs_mount	*mp = bp->b_target->bt_mount;
 	struct xfs_dir2_leaf	*leaf = bp->b_addr;
@@ -154,18 +155,16 @@ xfs_dir3_leaf_verify(
 
 	if (xfs_sb_version_hascrc(&mp->m_sb)) {
 		struct xfs_dir3_leaf_hdr *leaf3 = bp->b_addr;
-		uint16_t		magic3;
+		__uint16_t		magic3;
 
 		magic3 = (magic == XFS_DIR2_LEAF1_MAGIC) ? XFS_DIR3_LEAF1_MAGIC
 							 : XFS_DIR3_LEAFN_MAGIC;
 
 		if (leaf3->info.hdr.magic != cpu_to_be16(magic3))
 			return false;
-		if (!uuid_equal(&leaf3->info.uuid, &mp->m_sb.sb_meta_uuid))
+		if (!uuid_equal(&leaf3->info.uuid, &mp->m_sb.sb_uuid))
 			return false;
 		if (be64_to_cpu(leaf3->info.blkno) != bp->b_bn)
-			return false;
-		if (!xfs_log_check_lsn(mp, be64_to_cpu(leaf3->info.lsn)))
 			return false;
 	} else {
 		if (leaf->hdr.info.magic != cpu_to_be16(magic))
@@ -178,7 +177,7 @@ xfs_dir3_leaf_verify(
 static void
 __read_verify(
 	struct xfs_buf  *bp,
-	uint16_t	magic)
+	__uint16_t	magic)
 {
 	struct xfs_mount	*mp = bp->b_target->bt_mount;
 
@@ -195,7 +194,7 @@ __read_verify(
 static void
 __write_verify(
 	struct xfs_buf  *bp,
-	uint16_t	magic)
+	__uint16_t	magic)
 {
 	struct xfs_mount	*mp = bp->b_target->bt_mount;
 	struct xfs_buf_log_item	*bip = bp->b_fspriv;
@@ -256,7 +255,7 @@ const struct xfs_buf_ops xfs_dir3_leafn_buf_ops = {
 	.verify_write = xfs_dir3_leafn_write_verify,
 };
 
-int
+static int
 xfs_dir3_leaf_read(
 	struct xfs_trans	*tp,
 	struct xfs_inode	*dp,
@@ -268,7 +267,7 @@ xfs_dir3_leaf_read(
 
 	err = xfs_da_read_buf(tp, dp, fbno, mappedbno, bpp,
 				XFS_DATA_FORK, &xfs_dir3_leaf1_buf_ops);
-	if (!err && tp && *bpp)
+	if (!err && tp)
 		xfs_trans_buf_set_type(tp, *bpp, XFS_BLFT_DIR_LEAF1_BUF);
 	return err;
 }
@@ -285,7 +284,7 @@ xfs_dir3_leafn_read(
 
 	err = xfs_da_read_buf(tp, dp, fbno, mappedbno, bpp,
 				XFS_DATA_FORK, &xfs_dir3_leafn_buf_ops);
-	if (!err && tp && *bpp)
+	if (!err && tp)
 		xfs_trans_buf_set_type(tp, *bpp, XFS_BLFT_DIR_LEAFN_BUF);
 	return err;
 }
@@ -299,7 +298,7 @@ xfs_dir3_leaf_init(
 	struct xfs_trans	*tp,
 	struct xfs_buf		*bp,
 	xfs_ino_t		owner,
-	uint16_t		type)
+	__uint16_t		type)
 {
 	struct xfs_dir2_leaf	*leaf = bp->b_addr;
 
@@ -315,7 +314,7 @@ xfs_dir3_leaf_init(
 					 : cpu_to_be16(XFS_DIR3_LEAFN_MAGIC);
 		leaf3->info.blkno = cpu_to_be64(bp->b_bn);
 		leaf3->info.owner = cpu_to_be64(owner);
-		uuid_copy(&leaf3->info.uuid, &mp->m_sb.sb_meta_uuid);
+		uuid_copy(&leaf3->info.uuid, &mp->m_sb.sb_uuid);
 	} else {
 		memset(leaf, 0, sizeof(*leaf));
 		leaf->hdr.info.magic = cpu_to_be16(type);
@@ -343,7 +342,7 @@ xfs_dir3_leaf_get_buf(
 	xfs_da_args_t		*args,
 	xfs_dir2_db_t		bno,
 	struct xfs_buf		**bpp,
-	uint16_t		magic)
+	__uint16_t		magic)
 {
 	struct xfs_inode	*dp = args->dp;
 	struct xfs_trans	*tp = args->trans;
@@ -387,6 +386,7 @@ xfs_dir2_block_to_leaf(
 	xfs_dir2_db_t		ldb;		/* leaf block's bno */
 	xfs_dir2_leaf_t		*leaf;		/* leaf structure */
 	xfs_dir2_leaf_tail_t	*ltp;		/* leaf's tail */
+	xfs_mount_t		*mp;		/* filesystem mount point */
 	int			needlog;	/* need to log block header */
 	int			needscan;	/* need to rescan bestfree */
 	xfs_trans_t		*tp;		/* transaction pointer */
@@ -397,6 +397,7 @@ xfs_dir2_block_to_leaf(
 	trace_xfs_dir2_block_to_leaf(args);
 
 	dp = args->dp;
+	mp = dp->i_mount;
 	tp = args->trans;
 	/*
 	 * Add the leaf block to the inode.
@@ -627,6 +628,7 @@ xfs_dir2_leaf_addname(
 	int			lfloghigh;	/* high leaf logging index */
 	int			lowstale;	/* index of prev stale leaf */
 	xfs_dir2_leaf_tail_t	*ltp;		/* leaf tail pointer */
+	xfs_mount_t		*mp;		/* filesystem mount point */
 	int			needbytes;	/* leaf block bytes needed */
 	int			needlog;	/* need to log data header */
 	int			needscan;	/* need to rescan data free */
@@ -641,6 +643,7 @@ xfs_dir2_leaf_addname(
 
 	dp = args->dp;
 	tp = args->trans;
+	mp = dp->i_mount;
 
 	error = xfs_dir3_leaf_read(tp, dp, args->geo->leafblk, -1, &lbp);
 	if (error)
@@ -1355,9 +1358,11 @@ xfs_dir2_leaf_removename(
 	xfs_dir2_leaf_t		*leaf;		/* leaf structure */
 	xfs_dir2_leaf_entry_t	*lep;		/* leaf entry */
 	xfs_dir2_leaf_tail_t	*ltp;		/* leaf tail structure */
+	xfs_mount_t		*mp;		/* filesystem mount point */
 	int			needlog;	/* need to log data header */
 	int			needscan;	/* need to rescan data frees */
 	xfs_dir2_data_off_t	oldbest;	/* old value of best free */
+	xfs_trans_t		*tp;		/* transaction pointer */
 	struct xfs_dir2_data_free *bf;		/* bestfree table */
 	struct xfs_dir2_leaf_entry *ents;
 	struct xfs_dir3_icleaf_hdr leafhdr;
@@ -1371,6 +1376,8 @@ xfs_dir2_leaf_removename(
 		return error;
 	}
 	dp = args->dp;
+	tp = args->trans;
+	mp = dp->i_mount;
 	leaf = lbp->b_addr;
 	hdr = dbp->b_addr;
 	xfs_dir3_data_check(dp, dbp);
@@ -1602,9 +1609,11 @@ xfs_dir2_leaf_trim_data(
 	int			error;		/* error return value */
 	xfs_dir2_leaf_t		*leaf;		/* leaf structure */
 	xfs_dir2_leaf_tail_t	*ltp;		/* leaf tail structure */
+	xfs_mount_t		*mp;		/* filesystem mount point */
 	xfs_trans_t		*tp;		/* transaction pointer */
 
 	dp = args->dp;
+	mp = dp->i_mount;
 	tp = args->trans;
 	/*
 	 * Read the offending data block.  We need its buffer.

@@ -81,10 +81,10 @@ int mt_irq_mask_all(struct mtk_irq_mask *mask)
 
 	if (mask) {
 		/*
-		 * #if defined(CONFIG_FIQ_GLUE)
-		 * local_fiq_disable();
-		 * #endif
-		 */
+	#if defined(CONFIG_FIQ_GLUE)
+			local_fiq_disable();
+	#endif
+		*/
 
 		mask->mask0 = readl((dist_base + GIC_DIST_ENABLE_SET));
 		mask->mask1 = readl((dist_base + GIC_DIST_ENABLE_SET + 0x4));
@@ -105,15 +105,13 @@ int mt_irq_mask_all(struct mtk_irq_mask *mask)
 		writel(0xFFFFFFFF, (dist_base + GIC_DIST_ENABLE_CLEAR + 0x18));
 		writel(0xFFFFFFFF, (dist_base + GIC_DIST_ENABLE_CLEAR + 0x1C));
 		writel(0xFFFFFFFF, (dist_base + GIC_DIST_ENABLE_CLEAR + 0x20));
-
-		/* add memory barrier */
 		mb();
 
 		/*
-		 * #if defined(CONFIG_FIQ_GLUE)
-		 * local_fiq_enable();
-		 * #endif
-		 */
+	#if defined(CONFIG_FIQ_GLUE)
+		local_fiq_enable();
+	#endif
+		*/
 		mask->header = IRQ_MASK_HEADER;
 		mask->footer = IRQ_MASK_FOOTER;
 
@@ -143,10 +141,10 @@ int mt_irq_mask_restore(struct mtk_irq_mask *mask)
 		return -1;
 
 	/*
-	 * #if defined(CONFIG_FIQ_GLUE)
-	 * local_fiq_disable();
-	 * #endif
-	 */
+#if defined(CONFIG_FIQ_GLUE)
+		  local_fiq_disable();
+#endif
+	*/
 
 	writel(mask->mask0, (dist_base + GIC_DIST_ENABLE_SET));
 	writel(mask->mask1, (dist_base + GIC_DIST_ENABLE_SET + 0x4));
@@ -157,22 +155,19 @@ int mt_irq_mask_restore(struct mtk_irq_mask *mask)
 	writel(mask->mask6, (dist_base + GIC_DIST_ENABLE_SET + 0x18));
 	writel(mask->mask7, (dist_base + GIC_DIST_ENABLE_SET + 0x1C));
 	writel(mask->mask8, (dist_base + GIC_DIST_ENABLE_SET + 0x20));
-
-	/* add memory barrier */
 	mb();
 
 
 	/*
-	 * #if defined(CONFIG_FIQ_GLUE)
-	 * local_fiq_enable();
-	 * #endif
-	 */
+#if defined(CONFIG_FIQ_GLUE)
+		  local_fiq_enable();
+#endif
+	*/
 	return 0;
 }
 
 /*
- * mt_irq_set_pending_for_sleep: pending an interrupt for the sleep
- * manager's use
+ * mt_irq_set_pending_for_sleep: pending an interrupt for the sleep manager's use
  * @irq: interrupt id
  * (THIS IS ONLY FOR SLEEP FUNCTION USE. DO NOT USE IT YOURSELF!)
  */
@@ -184,81 +179,33 @@ void mt_irq_set_pending_for_sleep(unsigned int irq)
 	dist_base = GIC_DIST_BASE;
 
 	if (irq < 16) {
-		pr_info("Fail to set a pending on interrupt %d\n", irq);
+		pr_err("Fail to set a pending on interrupt %d\n", irq);
 		return;
 	}
 
 	writel(mask, dist_base + GIC_DIST_PENDING_SET + irq / 32 * 4);
 	pr_debug("irq:%d, 0x%p=0x%x\n", irq,
 		  dist_base + GIC_DIST_PENDING_SET + irq / 32 * 4, mask);
-
-	/* add memory barrier */
 	mb();
 }
 
-u32 mt_irq_get_pending_hw(unsigned int irq)
+u32 mt_irq_get_pending(unsigned int irq)
 {
 	void __iomem *dist_base;
 	u32 bit = 1 << (irq % 32);
 
 	dist_base = GIC_DIST_BASE;
 
-	return (readl_relaxed(dist_base + GIC_DIST_PENDING_SET + irq / 32 * 4)
-				& bit) ? 1 : 0;
+	return (readl_relaxed(dist_base + GIC_DIST_PENDING_SET + irq / 32 * 4) & bit) ? 1 : 0;
 }
 
-void mt_irq_set_pending_hw(unsigned int irq)
+void mt_irq_set_pending(unsigned int irq)
 {
 	void __iomem *dist_base;
 	u32 bit = 1 << (irq % 32);
 
 	dist_base = GIC_DIST_BASE;
 	writel(bit, dist_base + GIC_DIST_PENDING_SET + irq / 32 * 4);
-}
-
-u32 mt_irq_get_pol_hw(u32 hwirq)
-{
-	u32 reg;
-	void __iomem *base = INT_POL_CTL0;
-
-	if (hwirq < 32) {
-		pr_info("Fail to set polarity of interrupt %d\n", hwirq);
-		return 0;
-	}
-
-	reg = ((hwirq - 32)/32);
-
-	return readl_relaxed(base + reg*4);
-}
-
-u32 mt_irq_get_pending_vec(u32 start_irq)
-{
-	void __iomem *base = 0;
-	u32 pending_vec = 0;
-	u32 reg = start_irq/32;
-	u32 LSB_num, MSB_num;
-	u32 LSB_vec, MSB_vec;
-
-	if (start_irq >= 32)
-		base = GIC_DIST_BASE;
-	else
-		return -EINVAL;
-
-	/* if start_irq is not aligned 32, do some assembling */
-	MSB_num = start_irq%32;
-	if (MSB_num != 0) {
-		LSB_num = 32 - MSB_num;
-		LSB_vec = readl_relaxed(base + GIC_DIST_PENDING_SET + reg*4)
-					>>MSB_num;
-		MSB_vec = readl_relaxed(base + GIC_DIST_PENDING_SET + (reg+1)*4)
-					<<LSB_num;
-		pending_vec = MSB_vec | LSB_vec;
-	} else {
-		pending_vec = readl_relaxed(base + GIC_DIST_PENDING_SET +
-					    reg*4);
-	}
-
-	return pending_vec;
 }
 
 /*
@@ -279,13 +226,11 @@ void mt_irq_unmask_for_sleep(unsigned int virq)
 	dist_base = GIC_DIST_BASE;
 
 	if (irq < 16) {
-		pr_info("Fail to enable interrupt %d\n", irq);
+		pr_err("Fail to enable interrupt %d\n", irq);
 		return;
 	}
 
 	writel(mask, dist_base + GIC_DIST_ENABLE_SET + irq / 32 * 4);
-
-	/* add memory barrier */
 	mb();
 }
 
@@ -307,13 +252,11 @@ void mt_irq_mask_for_sleep(unsigned int virq)
 	dist_base = GIC_DIST_BASE;
 
 	if (irq < 16) {
-		pr_info("Fail to enable interrupt %d\n", irq);
+		pr_err("Fail to enable interrupt %d\n", irq);
 		return;
 	}
 
 	writel(mask, dist_base + GIC_DIST_ENABLE_CLEAR + irq / 32 * 4);
-
-	/* add memory barrier */
 	mb();
 }
 #if defined(CONFIG_FIQ_GLUE)
@@ -345,8 +288,7 @@ struct fiq_isr_log {
 	int smp_call_cnt;
 };
 
-#define line_fiq(no)		(is_fiq_set[(no)/32] & (1<<((no)&31)))
-#define line_is_fiq(no)		((no) < NR_IRQS && line_fiq(no))
+#define line_is_fiq(no)		((no) < NR_IRQS && (is_fiq_set[(no)/32] & (1<<((no)&31))))
 #define line_set_fiq(no)	\
 	do {			\
 		if ((no) < NR_IRQS) \
@@ -374,14 +316,13 @@ static void mt_irq_mask(struct irq_data *data)
 	u32 mask = 1 << (irq % 32);
 
 	if (irq < NR_GIC_SGI) {
-		/*Note: workaround for false alarm*/
+		/*Note: workaround for false alarm:"Fail to disable interrupt 14"*/
 		if (irq != FIQ_DBG_SGI)
-			pr_info("Fail to disable interrupt %d\n", irq);
+			pr_crit("Fail to disable interrupt %d\n", irq);
 		return;
 	}
 
-	writel(mask, (void *)(GIC_DIST_BASE + GIC_DIST_ENABLE_CLEAR
-	       + irq / 32 * 4));
+	writel(mask, (void *)(GIC_DIST_BASE + GIC_DIST_ENABLE_CLEAR + irq / 32 * 4));
 	dsb();
 }
 
@@ -395,14 +336,13 @@ static void mt_irq_unmask(struct irq_data *data)
 	u32 mask = 1 << (irq % 32);
 
 	if (irq < NR_GIC_SGI) {
-		/*Note: workaround for false alarm:*/
+		/*Note: workaround for false alarm:"Fail to enable interrupt 14"*/
 		if (irq != FIQ_DBG_SGI)
-			pr_info("Fail to enable interrupt %d\n", irq);
+			pr_crit("Fail to enable interrupt %d\n", irq);
 		return;
 	}
 
-	writel(mask, (void *)(GIC_DIST_BASE + GIC_DIST_ENABLE_SET
-	       + irq / 32 * 4));
+	writel(mask, (void *)(GIC_DIST_BASE + GIC_DIST_ENABLE_SET + irq / 32 * 4));
 	dsb();
 }
 
@@ -417,24 +357,20 @@ static void mt_irq_set_sens(unsigned int irq, unsigned int sens)
 	u32 config;
 
 	if (irq < (NR_GIC_SGI + NR_GIC_PPI)) {
-		pr_info("Fail to set sensitivity of interrupt %d\n", irq);
+		pr_crit("Fail to set sensitivity of interrupt %d\n", irq);
 		return;
 	}
 
 	spin_lock_irqsave(&irq_lock, flags);
 
 	if (sens == MT_EDGE_SENSITIVE) {
-		config = readl((void *)(GIC_DIST_BASE + GIC_DIST_CONFIG
-				+ (irq / 16) * 4));
+		config = readl((void *)(GIC_DIST_BASE + GIC_DIST_CONFIG + (irq / 16) * 4));
 		config |= (0x2 << (irq % 16) * 2);
-		writel(config, (void *)(GIC_DIST_BASE + GIC_DIST_CONFIG
-			+ (irq / 16) * 4));
+		writel(config, (void *)(GIC_DIST_BASE + GIC_DIST_CONFIG + (irq / 16) * 4));
 	} else {
-		config = readl((void *)(GIC_DIST_BASE + GIC_DIST_CONFIG
-				+ (irq / 16) * 4));
+		config = readl((void *)(GIC_DIST_BASE + GIC_DIST_CONFIG + (irq / 16) * 4));
 		config &= ~(0x2 << (irq % 16) * 2);
-		writel(config, (void *)(GIC_DIST_BASE + GIC_DIST_CONFIG
-			+ (irq / 16) * 4));
+		writel(config, (void *)(GIC_DIST_BASE + GIC_DIST_CONFIG + (irq / 16) * 4));
 	}
 
 	spin_unlock_irqrestore(&irq_lock, flags);
@@ -453,7 +389,7 @@ static void mt_irq_set_polarity(unsigned int irq, unsigned int polarity)
 	u32 offset, reg_index, value;
 
 	if (irq < (NR_GIC_SGI + NR_GIC_PPI)) {
-		pr_info("Fail to set polarity of interrupt %d\n", irq);
+		pr_crit("Fail to set polarity of interrupt %d\n", irq);
 		return;
 	}
 
@@ -489,13 +425,11 @@ static int mt_irq_set_type(struct irq_data *data, unsigned int flow_type)
 
 	if (flow_type & (IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING)) {
 		mt_irq_set_sens(irq, MT_EDGE_SENSITIVE);
-		mt_irq_set_polarity(irq, (flow_type & IRQF_TRIGGER_FALLING)
-					? 0 : 1);
+		mt_irq_set_polarity(irq, (flow_type & IRQF_TRIGGER_FALLING) ? 0 : 1);
 		__irq_set_handler_locked(irq, handle_edge_irq);
 	} else if (flow_type & (IRQF_TRIGGER_HIGH | IRQF_TRIGGER_LOW)) {
 		mt_irq_set_sens(irq, MT_LEVEL_SENSITIVE);
-		mt_irq_set_polarity(irq, (flow_type & IRQF_TRIGGER_LOW)
-					? 0 : 1);
+		mt_irq_set_polarity(irq, (flow_type & IRQF_TRIGGER_LOW) ? 0 : 1);
 		__irq_set_handler_locked(irq, handle_level_irq);
 	}
 
@@ -564,8 +498,7 @@ static int irq_raise_softfiq(const struct cpumask *mask, unsigned int irq)
 	return 1;
 }
 
-static int restore_for_fiq(struct notifier_block *nfb, unsigned long action,
-				void *hcpu)
+static int restore_for_fiq(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
 	/* Do nothing. TEE should recover GIC by itself */
 	return NOTIFY_OK;
@@ -647,8 +580,7 @@ static void __raise_priority(int irq)
 	spin_unlock_irqrestore(&irq_lock, flags);
 }
 
-static int restore_for_fiq(struct notifier_block *nfb, unsigned long action,
-				void *hcpu)
+static int restore_for_fiq(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
 	int i;
 
@@ -679,8 +611,7 @@ static int restore_for_fiq(struct notifier_block *nfb, unsigned long action,
 void trigger_sw_irq(int irq)
 {
 	if (irq < NR_GIC_SGI)
-		writel((0x18000 | irq), (void *)(GIC_DIST_BASE
-			+ GIC_DIST_SOFTINT));
+		writel((0x18000 | irq), (void *)(GIC_DIST_BASE + GIC_DIST_SOFTINT));
 }
 
 /*
@@ -763,18 +694,16 @@ static void fiq_isr(struct fiq_glue_handler *h, void *regs, void *svc_sp)
 		if (irqs_to_fiq[i].irq == irq) {
 			if (irqs_to_fiq[i].handler) {
 				irqs_to_fiq[i].count++;
-				(irqs_to_fiq[i].handler) (irqs_to_fiq[i].arg,
-								regs, svc_sp);
+				(irqs_to_fiq[i].handler) (irqs_to_fiq[i].arg, regs, svc_sp);
 			} else {
-				pr_info("Unexpected interrupt %d received!\n",
+				pr_err("Interrupt %d triggers FIQ but no handler is registered\n",
 				       irq);
 			}
 			break;
 		}
 	}
 	if (i == ARRAY_SIZE(irqs_to_fiq))
-		pr_info("Interrupt %d triggers FIQ but it is not registered\n",
-		       irq);
+		pr_err("Interrupt %d triggers FIQ but it is not registered\n", irq);
 
 	mt_fiq_eoi(iar);
 }
@@ -821,7 +750,7 @@ static int __init_fiq(void)
 
 	ret = fiq_glue_register_handler(&fiq_handler);
 	if (ret)
-		pr_info("fail to register fiq_glue_handler\n");
+		pr_err("fail to register fiq_glue_handler\n");
 	else
 		fiq_glued = 1;
 
@@ -836,8 +765,7 @@ static int __init_fiq(void)
  * @arg: argument to the FIQ handler
  * Return error code.
  */
-int request_fiq(int irq, fiq_isr_handler handler, unsigned long irq_flags,
-		void *arg)
+int request_fiq(int irq, fiq_isr_handler handler, unsigned long irq_flags, void *arg)
 {
 	int i;
 	unsigned long flags;
@@ -856,8 +784,6 @@ int request_fiq(int irq, fiq_isr_handler handler, unsigned long irq_flags,
 			spin_unlock_irqrestore(&irq_lock, flags);
 			if (mt_irq_set_fiq(irq, irq_flags))
 				break;
-
-			/* add memory barrier */
 			mb();
 			__mt_enable_fiq(irq);
 			return 0;
@@ -876,9 +802,9 @@ void irq_raise_softirq(const struct cpumask *mask, unsigned int irq)
 
 	satt = 1 << 15;
 	/*
-	 * NoteXXX: CPU1 SGI is configured as secure as default.
-	 *          Need to use the secure SGI 1 which is for waking up cpu1.
-	 */
+	* NoteXXX: CPU1 SGI is configured as secure as default.
+	*          Need to use the secure SGI 1 which is for waking up cpu1.
+	*/
 	if (irq == CPU_BRINGUP_SGI) {
 		if (irq_total_secondary_cpus) {
 			--irq_total_secondary_cpus;
@@ -896,9 +822,9 @@ void irq_raise_softirq(const struct cpumask *mask, unsigned int irq)
 
 #if defined(SPM_MCDI_FUNC)
 	/*
-	 * Processors cannot receive interrupts during power-down.
-	 * Wait until the SPM checks status and returns.
-	 */
+	* Processors cannot receive interrupts during power-down.
+	* Wait until the SPM checks status and returns.
+	*/
 	for_each_cpu(cpu, mask) {
 		cpu_bmask |= 1 << cpu;
 	}
@@ -907,12 +833,11 @@ void irq_raise_softirq(const struct cpumask *mask, unsigned int irq)
 
 	if (irq_raise_softfiq(mask, irq) == 0) {
 		/*
-		 * Ensure that stores to Normal memory are visible to the
-		 * other CPUs before issuing the IPI.
-		 */
+		* Ensure that stores to Normal memory are visible to the
+		* other CPUs before issuing the IPI.
+		*/
 		dsb();
-		writel(((map << 16) | satt | irq), (void *)(GIC_DIST_BASE
-		       + GIC_DIST_SOFTINT));
+		writel(((map << 16) | satt | irq), (void *)(GIC_DIST_BASE + GIC_DIST_SOFTINT));
 		dsb();
 	}
 
@@ -942,8 +867,7 @@ int get_fiq_isr_log(int cpu, unsigned int *log, unsigned int *len)
 	return -ENODEV;
 }
 
-int request_fiq(int irq, fiq_isr_handler handler, unsigned long irq_flags,
-		void *arg)
+int request_fiq(int irq, fiq_isr_handler handler, unsigned long irq_flags, void *arg)
 {
 	return -ENODEV;
 }
@@ -958,7 +882,7 @@ static int __init mtk_gic_ext_init(void)
 	if (!node) {
 		node = of_find_compatible_node(NULL, NULL, "arm,cortex-a7-gic");
 		if (!node) {
-			pr_info("[gic_ext] find arm,gic node failed\n");
+			pr_err("[gic_ext] find arm,gic node failed\n");
 			return -EINVAL;
 		}
 	}
@@ -972,7 +896,7 @@ static int __init mtk_gic_ext_init(void)
 		return -EINVAL;
 	node = of_find_compatible_node(NULL, NULL, "mediatek,mt6577-sysirq");
 	if (!node) {
-		pr_info("[gic_ext] find mediatek,mt6577-sysirq node failed\n");
+		pr_err("[gic_ext] find mediatek,mt6577-sysirq node failed\n");
 		return -EINVAL;
 	}
 

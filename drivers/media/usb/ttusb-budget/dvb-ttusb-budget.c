@@ -111,8 +111,8 @@ struct ttusb {
 	int last_filter;
 
 	u8 c;			/* transaction counter, wraps around...  */
-	enum fe_sec_tone_mode tone;
-	enum fe_sec_voltage voltage;
+	fe_sec_tone_mode_t tone;
+	fe_sec_voltage_t voltage;
 
 	int mux_state;		// 0..2 - MuxSyncWord, 3 - nMuxPacks,    4 - muxpack
 	u8 mux_npacks;
@@ -511,8 +511,7 @@ static int ttusb_update_lnb(struct ttusb *ttusb)
 	return err;
 }
 
-static int ttusb_set_voltage(struct dvb_frontend *fe,
-			     enum fe_sec_voltage voltage)
+static int ttusb_set_voltage(struct dvb_frontend* fe, fe_sec_voltage_t voltage)
 {
 	struct ttusb* ttusb = (struct ttusb*) fe->dvb->priv;
 
@@ -521,7 +520,7 @@ static int ttusb_set_voltage(struct dvb_frontend *fe,
 }
 
 #ifdef TTUSB_TONE
-static int ttusb_set_tone(struct dvb_frontend *fe, enum fe_sec_tone_mode tone)
+static int ttusb_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 {
 	struct ttusb* ttusb = (struct ttusb*) fe->dvb->priv;
 
@@ -767,7 +766,8 @@ static void ttusb_iso_irq(struct urb *urb)
 		for (i = 0; i < urb->number_of_packets; ++i) {
 			numpkt++;
 			if (time_after_eq(jiffies, lastj + HZ)) {
-				dprintk("frames/s: %lu (ts: %d, stuff %d, sec: %d, invalid: %d, all: %d)\n",
+				dprintk("frames/s: %lu (ts: %d, stuff %d, "
+					"sec: %d, invalid: %d, all: %d)\n",
 					numpkt * HZ / (jiffies - lastj),
 					numts, numstuff, numsec, numinvalid,
 					numts + numstuff + numsec + numinvalid);
@@ -1640,7 +1640,7 @@ static void frontend_init(struct ttusb* ttusb)
 
 
 
-static const struct i2c_algorithm ttusb_dec_algo = {
+static struct i2c_algorithm ttusb_dec_algo = {
 	.master_xfer	= master_xfer,
 	.functionality	= functionality,
 };
@@ -1795,7 +1795,7 @@ static void ttusb_disconnect(struct usb_interface *intf)
 	dprintk("%s: TTUSB DVB disconnected\n", __func__);
 }
 
-static const struct usb_device_id ttusb_table[] = {
+static struct usb_device_id ttusb_table[] = {
 	{USB_DEVICE(0xb48, 0x1003)},
 	{USB_DEVICE(0xb48, 0x1004)},
 	{USB_DEVICE(0xb48, 0x1005)},

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 MediaTek Inc.
+ * Copyright (c) 2015 MediaTek Inc.
  * Author: PC Chen <pc.chen@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -23,19 +23,22 @@ struct vdec_common_if {
 	/**
 	 * (*init)() - initialize decode driver
 	 * @ctx     : [in] mtk v4l2 context
+	 * @bs      : [in] input bitstream
 	 * @h_vdec  : [out] driver handle
+	 * @pic     : [out] width and height of bitstream
 	 */
-	int (*init)(struct mtk_vcodec_ctx *ctx, unsigned long *h_vdec);
+	int (*init)(struct mtk_vcodec_ctx *ctx, struct mtk_vcodec_mem *bs,
+		    unsigned long *h_vdec, struct vdec_pic_info *pic);
 
 	/**
 	 * (*decode)() - trigger decode
 	 * @h_vdec  : [in] driver handle
 	 * @bs      : [in] input bitstream
 	 * @fb      : [in] frame buffer to store decoded frame
-	 * @src_chg : [out] some changed flags
+	 * @res_chg : [out] resolution change happen
 	 */
 	int (*decode)(unsigned long h_vdec, struct mtk_vcodec_mem *bs,
-				  struct vdec_fb *fb, unsigned int *src_chg);
+		      struct vdec_fb *fb, bool *res_chg);
 
 	/**
 	 * (*get_param)() - get driver's parameter
@@ -44,21 +47,14 @@ struct vdec_common_if {
 	 * @out    : [out] buffer to store query result
 	 */
 	int (*get_param)(unsigned long h_vdec, enum vdec_get_param_type type,
-					 void *out);
+			 void *out);
 
-	/**
-	 * (*set_param)() - set driver's parameter
-	 * @h_vdec : [in] driver handle
-	 * @type   : [in] input parameter type
-	 * @in     : [in] buffer to store query
-	 */
-	int (*set_param)(unsigned long h_vdec, enum vdec_set_param_type type,
-					 void *in);
 	/**
 	 * (*deinit)() - deinitialize driver.
 	 * @h_vdec : [in] driver handle to be deinit
 	 */
-	void (*deinit)(unsigned long h_vdec);
+	int (*deinit)(unsigned long h_vdec);
 };
+
 
 #endif

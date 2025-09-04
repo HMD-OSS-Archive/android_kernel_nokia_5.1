@@ -61,7 +61,7 @@ struct replay_entry {
 	struct list_head list;
 	union ubifs_key key;
 	union {
-		struct fscrypt_name nm;
+		struct qstr nm;
 		struct {
 			loff_t old_size;
 			loff_t new_size;
@@ -152,6 +152,41 @@ static int set_bud_lprops(struct ubifs_info *c, struct bud_entry *b)
 		goto out;
 	}
 
+	/*MTK start*/
+	if (c->need_recovery && b->free > 0) {
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+		if (mutex_trylock(&ubifs_sbuf_mutex) == 0) {
+			atomic_long_inc(&ubifs_sbuf_lock_count);
+			ubifs_err("trylock fail count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
+			mutex_lock(&ubifs_sbuf_mutex);
+			ubifs_err("locked count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
+		}
+#endif
+		err = ubifs_leb_read(c, b->bud->lnum, c->sbuf, 0, c->leb_size - b->free, 0);
+		if (err) {
+			switch (err) {
+			case -EUCLEAN:
+				/* shouldn't see this error, UBI will take care this*/
+				goto skip_move;
+			case -EBADMSG:
+				/* copy if error == -EBADMSG */
+				break;
+			default:
+				ubifs_err("cannot read %d bytes from LEB %d:%d, error %d",
+					c->leb_size - b->free, b->bud->lnum, 0, err);
+				goto out;
+			}
+		}
+		dbg_mnt("ubifs_leb_change LEB %d:%d\n",  b->bud->lnum, c->leb_size - b->free);
+		err = ubifs_leb_change(c, b->bud->lnum, c->sbuf, c->leb_size - b->free);
+		if (err)
+			ubifs_err("ubifs_leb_change LEB %d:%d fail\n",  b->bud->lnum, c->leb_size - b->free);
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+		mutex_unlock(&ubifs_sbuf_mutex);
+#endif
+	}
+skip_move:
+/*MTK end*/
 	/* Make sure the journal head points to the latest bud */
 	err = ubifs_wbuf_seek_nolock(&c->jheads[b->bud->jhead].wbuf,
 				     b->bud->lnum, c->leb_size - b->free);
@@ -210,38 +245,6 @@ static int trun_remove_range(struct ubifs_info *c, struct replay_entry *r)
 }
 
 /**
- * inode_still_linked - check whether inode in question will be re-linked.
- * @c: UBIFS file-system description object
- * @rino: replay entry to test
- *
- * O_TMPFILE files can be re-linked, this means link count goes from 0 to 1.
- * This case needs special care, otherwise all references to the inode will
- * be removed upon the first replay entry of an inode with link count 0
- * is found.
- */
-static bool inode_still_linked(struct ubifs_info *c, struct replay_entry *rino)
-{
-	struct replay_entry *r;
-
-	ubifs_assert(rino->deletion);
-	ubifs_assert(key_type(c, &rino->key) == UBIFS_INO_KEY);
-
-	/*
-	 * Find the most recent entry for the inode behind @rino and check
-	 * whether it is a deletion.
-	 */
-	list_for_each_entry_reverse(r, &c->replay_list, list) {
-		ubifs_assert(r->sqnum >= rino->sqnum);
-		if (key_inum(c, &r->key) == key_inum(c, &rino->key))
-			return r->deletion == 0;
-
-	}
-
-	ubifs_assert(0);
-	return false;
-}
-
-/**
  * apply_replay_entry - apply a replay entry to the TNC.
  * @c: UBIFS file-system description object
  * @r: replay entry to apply
@@ -271,11 +274,6 @@ static int apply_replay_entry(struct ubifs_info *c, struct replay_entry *r)
 			{
 				ino_t inum = key_inum(c, &r->key);
 
-				if (inode_still_linked(c, r)) {
-					err = 0;
-					break;
-				}
-
 				err = ubifs_tnc_remove_ino(c, inum);
 				break;
 			}
@@ -304,7 +302,7 @@ static int apply_replay_entry(struct ubifs_info *c, struct replay_entry *r)
  * replay_entries_cmp - compare 2 replay entries.
  * @priv: UBIFS file-system description object
  * @a: first replay entry
- * @b: second replay entry
+ * @a: second replay entry
  *
  * This is a comparios function for 'list_sort()' which compares 2 replay
  * entries @a and @b by comparing their sequence numer.  Returns %1 if @a has
@@ -364,7 +362,7 @@ static void destroy_replay_list(struct ubifs_info *c)
 
 	list_for_each_entry_safe(r, tmp, &c->replay_list, list) {
 		if (is_hash_key(c, &r->key))
-			kfree(fname_name(&r->nm));
+			kfree(r->nm.name);
 		list_del(&r->list);
 		kfree(r);
 	}
@@ -467,10 +465,10 @@ static int insert_dent(struct ubifs_info *c, int lnum, int offs, int len,
 	r->deletion = !!deletion;
 	r->sqnum = sqnum;
 	key_copy(c, key, &r->key);
-	fname_len(&r->nm) = nlen;
+	r->nm.len = nlen;
 	memcpy(nbuf, name, nlen);
 	nbuf[nlen] = '\0';
-	fname_name(&r->nm) = nbuf;
+	r->nm.name = nbuf;
 
 	list_add_tail(&r->list, &c->replay_list);
 	return 0;
@@ -493,15 +491,15 @@ int ubifs_validate_entry(struct ubifs_info *c,
 	if (le32_to_cpu(dent->ch.len) != nlen + UBIFS_DENT_NODE_SZ + 1 ||
 	    dent->type >= UBIFS_ITYPES_CNT ||
 	    nlen > UBIFS_MAX_NLEN || dent->name[nlen] != 0 ||
-	    (key_type == UBIFS_XENT_KEY && strnlen(dent->name, nlen) != nlen) ||
+	    strnlen(dent->name, nlen) != nlen ||
 	    le64_to_cpu(dent->inum) > MAX_INUM) {
-		ubifs_err(c, "bad %s node", key_type == UBIFS_DENT_KEY ?
+		ubifs_err("bad %s node", key_type == UBIFS_DENT_KEY ?
 			  "directory entry" : "extended attribute entry");
 		return -EINVAL;
 	}
 
 	if (key_type != UBIFS_DENT_KEY && key_type != UBIFS_XENT_KEY) {
-		ubifs_err(c, "bad key type %d", key_type);
+		ubifs_err("bad key type %d", key_type);
 		return -EINVAL;
 	}
 
@@ -585,6 +583,14 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 	dbg_mnt("replay bud LEB %d, head %d, offs %d, is_last %d",
 		lnum, b->bud->jhead, offs, is_last);
 
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+	if (mutex_trylock(&ubifs_sbuf_mutex) == 0) {
+		atomic_long_inc(&ubifs_sbuf_lock_count);
+		ubifs_err("trylock fail count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
+		mutex_lock(&ubifs_sbuf_mutex);
+		ubifs_err("locked count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
+	}
+#endif
 	if (c->need_recovery && is_last)
 		/*
 		 * Recover only last LEBs in the journal heads, because power
@@ -595,8 +601,12 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 		sleb = ubifs_recover_leb(c, lnum, offs, c->sbuf, b->bud->jhead);
 	else
 		sleb = ubifs_scan(c, lnum, offs, c->sbuf, 0);
-	if (IS_ERR(sleb))
+	if (IS_ERR(sleb)) {
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+		mutex_unlock(&ubifs_sbuf_mutex);
+#endif
 		return PTR_ERR(sleb);
+	}
 
 	/*
 	 * The bud does not have to start from offset zero - the beginning of
@@ -626,7 +636,7 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 		cond_resched();
 
 		if (snod->sqnum >= SQNUM_WATERMARK) {
-			ubifs_err(c, "file system's life ended");
+			ubifs_err("file system's life ended");
 			goto out_dump;
 		}
 
@@ -684,7 +694,7 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 			if (old_size < 0 || old_size > c->max_inode_sz ||
 			    new_size < 0 || new_size > c->max_inode_sz ||
 			    old_size <= new_size) {
-				ubifs_err(c, "bad truncation node");
+				ubifs_err("bad truncation node");
 				goto out_dump;
 			}
 
@@ -699,7 +709,7 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 			break;
 		}
 		default:
-			ubifs_err(c, "unexpected node type %d in bud LEB %d:%d",
+			ubifs_err("unexpected node type %d in bud LEB %d:%d",
 				  snod->type, lnum, snod->offs);
 			err = -EINVAL;
 			goto out_dump;
@@ -719,12 +729,18 @@ static int replay_bud(struct ubifs_info *c, struct bud_entry *b)
 
 out:
 	ubifs_scan_destroy(sleb);
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+	mutex_unlock(&ubifs_sbuf_mutex);
+#endif
 	return err;
 
 out_dump:
-	ubifs_err(c, "bad node is at LEB %d:%d", lnum, snod->offs);
+	ubifs_err("bad node is at LEB %d:%d", lnum, snod->offs);
 	ubifs_dump_node(c, snod->node);
 	ubifs_scan_destroy(sleb);
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+	mutex_unlock(&ubifs_sbuf_mutex);
+#endif
 	return -EINVAL;
 }
 
@@ -842,7 +858,7 @@ static int validate_ref(struct ubifs_info *c, const struct ubifs_ref_node *ref)
 	if (bud) {
 		if (bud->jhead == jhead && bud->start <= offs)
 			return 1;
-		ubifs_err(c, "bud at LEB %d:%d was already referred", lnum, offs);
+		ubifs_err("bud at LEB %d:%d was already referred", lnum, offs);
 		return -EINVAL;
 	}
 
@@ -887,8 +903,23 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 		goto out;
 	}
 
+#ifdef CONFIG_UBIFS_FS_FULL_USE_LOG_BACKWARD
+	/* Search the last cs node whose cmt_no is recorded in master node*/
+	list_for_each_entry_reverse(snod, &sleb->nodes, list) {
+		if (snod->type == UBIFS_CS_NODE) {
+			if (c->cs_sqnum == 0) {
+				node = snod->node;
+				if (le64_to_cpu(node->cmt_no) == c->cmt_no)
+					break;
+			} else
+				break;
+		}
+	}
+	node = snod->node;
+#else
 	node = sleb->buf;
 	snod = list_entry(sleb->nodes.next, struct ubifs_scan_node, list);
+#endif
 	if (c->cs_sqnum == 0) {
 		/*
 		 * This is the first log LEB we are looking at, make sure that
@@ -898,12 +929,12 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 		 * numbers.
 		 */
 		if (snod->type != UBIFS_CS_NODE) {
-			ubifs_err(c, "first log node at LEB %d:%d is not CS node",
+			ubifs_err("first log node at LEB %d:%d is not CS node",
 				  lnum, offs);
 			goto out_dump;
 		}
 		if (le64_to_cpu(node->cmt_no) != c->cmt_no) {
-			ubifs_err(c, "first CS node at LEB %d:%d has wrong commit number %llu expected %llu",
+			ubifs_err("first CS node at LEB %d:%d has wrong commit number %llu expected %llu",
 				  lnum, offs,
 				  (unsigned long long)le64_to_cpu(node->cmt_no),
 				  c->cmt_no);
@@ -926,24 +957,34 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 		goto out;
 	}
 
+#ifndef CONFIG_UBIFS_FS_FULL_USE_LOG_BACKWARD
 	/* Make sure the first node sits at offset zero of the LEB */
 	if (snod->offs != 0) {
-		ubifs_err(c, "first node is not at zero offset");
+		ubifs_err("first node is not at zero offset");
 		goto out_dump;
 	}
+#endif
 
 	list_for_each_entry(snod, &sleb->nodes, list) {
 		cond_resched();
 
 		if (snod->sqnum >= SQNUM_WATERMARK) {
-			ubifs_err(c, "file system's life ended");
+			ubifs_err("file system's life ended");
 			goto out_dump;
 		}
 
 		if (snod->sqnum < c->cs_sqnum) {
-			ubifs_err(c, "bad sqnum %llu, commit sqnum %llu",
+#ifdef CONFIG_UBIFS_FS_FULL_USE_LOG_BACKWARD
+			/*
+			 * Node with sqnum less than that of current cs already handled
+			 * skip current snod from adding.
+			 */
+			continue;
+#else
+			ubifs_err("bad sqnum %llu, commit sqnum %llu",
 				  snod->sqnum, c->cs_sqnum);
 			goto out_dump;
+#endif
 		}
 
 		if (snod->sqnum > c->max_sqnum)
@@ -969,14 +1010,18 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 			break;
 		}
 		case UBIFS_CS_NODE:
+#ifdef CONFIG_UBIFS_FS_FULL_USE_LOG_BACKWARD
+			continue;
+#else
 			/* Make sure it sits at the beginning of LEB */
 			if (snod->offs != 0) {
-				ubifs_err(c, "unexpected node in log");
+				ubifs_err("unexpected node in log");
 				goto out_dump;
 			}
+#endif
 			break;
 		default:
-			ubifs_err(c, "unexpected node in log");
+			ubifs_err("unexpected node in log");
 			goto out_dump;
 		}
 	}
@@ -992,7 +1037,7 @@ out:
 	return err;
 
 out_dump:
-	ubifs_err(c, "log error detected while replaying the log at LEB %d:%d",
+	ubifs_err("log error detected while replaying the log at LEB %d:%d",
 		  lnum, offs + snod->offs);
 	ubifs_dump_node(c, snod->node);
 	ubifs_scan_destroy(sleb);
@@ -1054,7 +1099,7 @@ int ubifs_replay_journal(struct ubifs_info *c)
 		return free; /* Error code */
 
 	if (c->ihead_offs != c->leb_size - free) {
-		ubifs_err(c, "bad index head LEB %d:%d", c->ihead_lnum,
+		ubifs_err("bad index head LEB %d:%d", c->ihead_lnum,
 			  c->ihead_offs);
 		return -EINVAL;
 	}
@@ -1064,23 +1109,21 @@ int ubifs_replay_journal(struct ubifs_info *c)
 	lnum = c->ltail_lnum = c->lhead_lnum;
 
 	do {
-		err = replay_log_leb(c, lnum, 0, c->sbuf);
-		if (err == 1) {
-			if (lnum != c->lhead_lnum)
-				/* We hit the end of the log */
-				break;
-
-			/*
-			 * The head of the log must always start with the
-			 * "commit start" node on a properly formatted UBIFS.
-			 * But we found no nodes at all, which means that
-			 * someting went wrong and we cannot proceed mounting
-			 * the file-system.
-			 */
-			ubifs_err(c, "no UBIFS nodes found at the log head LEB %d:%d, possibly corrupted",
-				  lnum, 0);
-			err = -EINVAL;
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+		if (mutex_trylock(&ubifs_sbuf_mutex) == 0) {
+			atomic_long_inc(&ubifs_sbuf_lock_count);
+			ubifs_err("trylock fail count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
+			mutex_lock(&ubifs_sbuf_mutex);
+			ubifs_err("locked count %ld\n", atomic_long_read(&ubifs_sbuf_lock_count));
 		}
+#endif
+		err = replay_log_leb(c, lnum, 0, c->sbuf);
+#ifdef CONFIG_UBIFS_SHARE_BUFFER
+		mutex_unlock(&ubifs_sbuf_mutex);
+#endif
+		if (err == 1)
+			/* We hit the end of the log */
+			break;
 		if (err)
 			goto out;
 		lnum = ubifs_next_log_lnum(c, lnum);

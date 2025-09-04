@@ -40,7 +40,8 @@
 #include "usbatm.h"
 
 #define DRIVER_AUTHOR	"Johan Verrept, Duncan Sands <duncan.sands@free.fr>"
-#define DRIVER_DESC	"Alcatel SpeedTouch USB driver"
+#define DRIVER_VERSION	"1.10"
+#define DRIVER_DESC	"Alcatel SpeedTouch USB driver version " DRIVER_VERSION
 
 static const char speedtch_driver_name[] = "speedtch";
 
@@ -254,8 +255,7 @@ static int speedtch_upload_firmware(struct speedtch_instance_data *instance,
 
 	usb_dbg(usbatm, "%s entered\n", __func__);
 
-	buffer = (unsigned char *)__get_free_page(GFP_KERNEL);
-	if (!buffer) {
+	if (!(buffer = (unsigned char *)__get_free_page(GFP_KERNEL))) {
 		ret = -ENOMEM;
 		usb_dbg(usbatm, "%s: no memory for buffer!\n", __func__);
 		goto out;
@@ -638,8 +638,7 @@ static void speedtch_handle_int(struct urb *int_urb)
 		goto fail;
 	}
 
-	int_urb = instance->int_urb;
-	if (int_urb) {
+	if ((int_urb = instance->int_urb)) {
 		ret = usb_submit_urb(int_urb, GFP_ATOMIC);
 		schedule_work(&instance->status_check_work);
 		if (ret < 0) {
@@ -651,8 +650,7 @@ static void speedtch_handle_int(struct urb *int_urb)
 	return;
 
 fail:
-	int_urb = instance->int_urb;
-	if (int_urb)
+	if ((int_urb = instance->int_urb))
 		mod_timer(&instance->resubmit_timer, jiffies + msecs_to_jiffies(RESUBMIT_DELAY));
 }
 
@@ -737,7 +735,7 @@ static int speedtch_post_reset(struct usb_interface *intf)
 **  USB  **
 **********/
 
-static const struct usb_device_id speedtch_usb_ids[] = {
+static struct usb_device_id speedtch_usb_ids[] = {
 	{USB_DEVICE(0x06b9, 0x4061)},
 	{}
 };
@@ -761,13 +759,11 @@ static void speedtch_release_interfaces(struct usb_device *usb_dev,
 	struct usb_interface *cur_intf;
 	int i;
 
-	for (i = 0; i < num_interfaces; i++) {
-		cur_intf = usb_ifnum_to_if(usb_dev, i);
-		if (cur_intf) {
+	for (i = 0; i < num_interfaces; i++)
+		if ((cur_intf = usb_ifnum_to_if(usb_dev, i))) {
 			usb_set_intfdata(cur_intf, NULL);
 			usb_driver_release_interface(&speedtch_usb_driver, cur_intf);
 		}
-	}
 }
 
 static int speedtch_bind(struct usbatm_data *usbatm,
@@ -791,8 +787,7 @@ static int speedtch_bind(struct usbatm_data *usbatm,
 		return -ENODEV;
 	}
 
-	data_intf = usb_ifnum_to_if(usb_dev, INTERFACE_DATA);
-	if (!data_intf) {
+	if (!(data_intf = usb_ifnum_to_if(usb_dev, INTERFACE_DATA))) {
 		usb_err(usbatm, "%s: data interface not found!\n", __func__);
 		return -ENODEV;
 	}
@@ -816,6 +811,7 @@ static int speedtch_bind(struct usbatm_data *usbatm,
 	instance = kzalloc(sizeof(*instance), GFP_KERNEL);
 
 	if (!instance) {
+		usb_err(usbatm, "%s: no memory for instance data!\n", __func__);
 		ret = -ENOMEM;
 		goto fail_release;
 	}
@@ -961,3 +957,4 @@ module_usb_driver(speedtch_usb_driver);
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
+MODULE_VERSION(DRIVER_VERSION);

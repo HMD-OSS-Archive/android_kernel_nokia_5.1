@@ -18,18 +18,23 @@
 #include <linux/kthread.h>
 #include <linux/vmalloc.h>
 #include <linux/interrupt.h>
+#include <linux/irq_work.h>
 
 /* TIMER_SOFTIRQ duration warning test */
 
-static struct timer_list timer;
 static void delayed_timer(unsigned long arg)
 {
 	mdelay(600);
 }
+
 void sched_mon_test_TIMER_SOFTIRQ(void)
 {
+	struct timer_list timer;
+
 	setup_timer(&timer, delayed_timer, 0);
-	mod_timer(&timer, jiffies + msecs_to_jiffies(100));
+	timer.expires = jiffies + msecs_to_jiffies(10);
+	add_timer(&timer);
+	mdelay(3000);
 }
 
 /* TASKLET_SOFTIRQ duration warning test */
@@ -66,7 +71,7 @@ void sched_mon_test_RCU_SOFTIRQ(void)
 		return;
 	sched_mon_rcu->val = 100;
 
-	RCU_INIT_POINTER(sched_mon_rcu_g, sched_mon_rcu);
+	rcu_assign_pointer(sched_mon_rcu_g, sched_mon_rcu);
 	call_rcu(&sched_mon_rcu_head, delayed_rcu_callback);
 }
 
@@ -90,7 +95,7 @@ void sched_mon_test_irq_disable(void)
 	unsigned long flags;
 
 	local_irq_save(flags);
-	mdelay(600);
+	mdelay(300);
 	local_irq_restore(flags);
 
 	/* The test will trigger KernelAPI Dump */
@@ -137,9 +142,9 @@ static const struct file_operations proc_sched_monitor_test_fops = {
 	.write = sched_mon_test_write,
 };
 
-void mt_sched_monitor_test_init(struct proc_dir_entry *dir)
+void mt_sched_monitor_test_init(void)
 {
-	proc_create("sched_mon_test", 0220, dir,
+	proc_create("mtmon/sched_mon_test", 0220, NULL,
 		&proc_sched_monitor_test_fops);
 }
 

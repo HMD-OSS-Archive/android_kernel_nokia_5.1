@@ -445,6 +445,9 @@ static void palmas_power_off(void)
 				ret);
 	}
 
+	if (!palmas_dev)
+		return;
+
 	slave = PALMAS_BASE_TO_SLAVE(PALMAS_PMU_CONTROL_BASE);
 	addr = PALMAS_BASE_TO_REG(PALMAS_PMU_CONTROL_BASE, PALMAS_DEV_CTRL);
 
@@ -581,7 +584,7 @@ static int palmas_i2c_probe(struct i2c_client *i2c,
 			PALMAS_POLARITY_CTRL, PALMAS_POLARITY_CTRL_INT_POLARITY,
 			reg);
 	if (ret < 0) {
-		dev_err(palmas->dev, "POLARITY_CTRL update failed: %d\n", ret);
+		dev_err(palmas->dev, "POLARITY_CTRL updat failed: %d\n", ret);
 		goto err_i2c;
 	}
 
@@ -676,7 +679,7 @@ no_irq:
 	 * otherwise continue and add devices using mfd helpers.
 	 */
 	if (node) {
-		ret = devm_of_platform_populate(&i2c->dev);
+		ret = of_platform_populate(node, NULL, NULL, &i2c->dev);
 		if (ret < 0) {
 			goto err_irq;
 		} else if (pdata->pm_off && !pm_power_off) {
@@ -730,6 +733,7 @@ static struct i2c_driver palmas_i2c_driver = {
 	.driver = {
 		   .name = "palmas",
 		   .of_match_table = of_palmas_match_tbl,
+		   .owner = THIS_MODULE,
 	},
 	.probe = palmas_i2c_probe,
 	.remove = palmas_i2c_remove,

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_ARM_FUTEX_H
 #define _ASM_ARM_FUTEX_H
 
@@ -14,7 +13,7 @@
 	"	.align	3\n"					\
 	"	.long	1b, 4f, 2b, 4f\n"			\
 	"	.popsection\n"					\
-	"	.pushsection .text.fixup,\"ax\"\n"		\
+	"	.pushsection .fixup,\"ax\"\n"			\
 	"	.align	2\n"					\
 	"4:	mov	%0, " err_reg "\n"			\
 	"	b	3b\n"					\
@@ -28,6 +27,7 @@
 	smp_mb();						\
 	prefetchw(uaddr);					\
 	__ua_flags = uaccess_save_and_enable();			\
+	errata_855872_dmb();					\
 	__asm__ __volatile__(					\
 	"1:	ldrex	%1, [%3]\n"				\
 	"	" insn "\n"					\
@@ -57,6 +57,7 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	/* Prefetching cannot fault */
 	prefetchw(uaddr);
 	__ua_flags = uaccess_save_and_enable();
+	errata_855872_dmb();
 	__asm__ __volatile__("@futex_atomic_cmpxchg_inatomic\n"
 	"1:	ldrex	%1, [%4]\n"
 	"	teq	%1, %2\n"
@@ -107,8 +108,6 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(u32)))
 		return -EFAULT;
 
-	preempt_disable();
-	__ua_flags = uaccess_save_and_enable();
 	__asm__ __volatile__("@futex_atomic_cmpxchg_inatomic\n"
 	"1:	" TUSER(ldr) "	%1, [%4]\n"
 	"	teq	%1, %2\n"
@@ -121,22 +120,27 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	uaccess_restore(__ua_flags);
 
 	*uval = val;
-	preempt_enable();
-
 	return ret;
 }
 
 #endif /* !SMP */
 
 static inline int
-arch_futex_atomic_op_inuser(int op, int oparg, int *oval, u32 __user *uaddr)
+futex_atomic_op_inuser (int encoded_op, u32 __user *uaddr)
 {
+	int op = (encoded_op >> 28) & 7;
+	int cmp = (encoded_op >> 24) & 15;
+	int oparg = (encoded_op << 8) >> 20;
+	int cmparg = (encoded_op << 20) >> 20;
 	int oldval = 0, ret, tmp;
 
-#ifndef CONFIG_SMP
-	preempt_disable();
-#endif
-	pagefault_disable();
+	if (encoded_op & (FUTEX_OP_OPARG_SHIFT << 28))
+		oparg = 1 << oparg;
+
+	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(u32)))
+		return -EFAULT;
+
+	pagefault_disable();	/* implies preempt_disable() */
 
 	switch (op) {
 	case FUTEX_OP_SET:
@@ -158,14 +162,19 @@ arch_futex_atomic_op_inuser(int op, int oparg, int *oval, u32 __user *uaddr)
 		ret = -ENOSYS;
 	}
 
-	pagefault_enable();
-#ifndef CONFIG_SMP
-	preempt_enable();
-#endif
+	pagefault_enable();	/* subsumes preempt_enable() */
 
-	if (!ret)
-		*oval = oldval;
-
+	if (!ret) {
+		switch (cmp) {
+		case FUTEX_OP_CMP_EQ: ret = (oldval == cmparg); break;
+		case FUTEX_OP_CMP_NE: ret = (oldval != cmparg); break;
+		case FUTEX_OP_CMP_LT: ret = (oldval < cmparg); break;
+		case FUTEX_OP_CMP_GE: ret = (oldval >= cmparg); break;
+		case FUTEX_OP_CMP_LE: ret = (oldval <= cmparg); break;
+		case FUTEX_OP_CMP_GT: ret = (oldval > cmparg); break;
+		default: ret = -ENOSYS;
+		}
+	}
 	return ret;
 }
 

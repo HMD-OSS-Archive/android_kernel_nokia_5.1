@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_UTSNAME_H
 #define _LINUX_UTSNAME_H
 
@@ -6,7 +5,6 @@
 #include <linux/sched.h>
 #include <linux/kref.h>
 #include <linux/nsproxy.h>
-#include <linux/ns_common.h>
 #include <linux/err.h>
 #include <uapi/linux/utsname.h>
 
@@ -25,9 +23,8 @@ struct uts_namespace {
 	struct kref kref;
 	struct new_utsname name;
 	struct user_namespace *user_ns;
-	struct ucounts *ucounts;
-	struct ns_common ns;
-} __randomize_layout;
+	unsigned int proc_inum;
+};
 extern struct uts_namespace init_uts_ns;
 
 #ifdef CONFIG_UTS_NS

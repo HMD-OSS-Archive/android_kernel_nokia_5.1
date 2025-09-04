@@ -22,7 +22,6 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
-#include <linux/sched/clock.h>
 
 #include "mtk_pp.h"
 

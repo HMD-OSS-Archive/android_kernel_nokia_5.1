@@ -6,6 +6,8 @@
 #include <linux/vmalloc.h>
 #include <linux/reboot.h>
 
+#include <mt-plat/mtk_ram_console.h>
+
 /*
  *	Notifier list for kernel code which wants to be called
  *	at shutdown. This is used to stop any idling DMA operations
@@ -78,6 +80,13 @@ static int notifier_call_chain(struct notifier_block **nl,
 	int ret = NOTIFY_DONE;
 	struct notifier_block *nb, *next_nb;
 
+#if defined(CONFIG_SMP)
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_1) || \
+	defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_2)
+	int index = 0;
+#endif
+#endif /* CONFIG_SMP */
+
 	nb = rcu_dereference_raw(*nl);
 
 	while (nb && nr_to_call) {
@@ -90,16 +99,63 @@ static int notifier_call_chain(struct notifier_block **nl,
 			continue;
 		}
 #endif
+
+#if defined(CONFIG_SMP)
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_1) || \
+	defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_2) || \
+	defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_3)
+
+		if (nl == &cpu_chain.head) {
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_1)
+			pr_debug("[cpu_ntf] %02lx_%02d, %p\n",
+				val, index, nb->notifier_call);
+#endif
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_2)
+			aee_rr_rec_hotplug_cpu_event(val & 0xff);
+			aee_rr_rec_hotplug_cb_index(index & 0xff);
+			aee_rr_rec_hotplug_cb_fp((unsigned long)nb->notifier_call);
+#endif
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_3)
+			TIMESTAMP_REC(hotplug_ts_rec, TIMESTAMP_FILTER, (long)v, val & 0xff, index & 0xff,
+			(unsigned long)nb->notifier_call);
+#endif
+			++index;
+		}
+#endif
+#endif /* CONFIG_SMP */
+
 		ret = nb->notifier_call(nb, val, v);
 
 		if (nr_calls)
 			(*nr_calls)++;
 
-		if (ret & NOTIFY_STOP_MASK)
+		if ((ret & NOTIFY_STOP_MASK) == NOTIFY_STOP_MASK)
 			break;
 		nb = next_nb;
 		nr_to_call--;
 	}
+
+#if defined(CONFIG_SMP)
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_1) || \
+	defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_2) || \
+	defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_3)
+
+	if (nl == &cpu_chain.head) {
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_1)
+		pr_debug("[cpu_ntf] %02lx_%02d, %p\n", val, index, 0);
+#endif
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_2)
+		aee_rr_rec_hotplug_cpu_event(val & 0xff);
+		aee_rr_rec_hotplug_cb_index(index & 0xff);
+		aee_rr_rec_hotplug_cb_fp(0);
+#endif
+#if defined(CONFIG_MTK_CPU_HOTPLUG_DEBUG_3)
+		TIMESTAMP_REC(hotplug_ts_rec, TIMESTAMP_FILTER, (long)v, val & 0xff, index & 0xff, 0);
+#endif
+	}
+#endif
+#endif /* CONFIG_SMP */
+
 	return ret;
 }
 NOKPROBE_SYMBOL(notifier_call_chain);
@@ -402,7 +458,6 @@ int raw_notifier_call_chain(struct raw_notifier_head *nh,
 }
 EXPORT_SYMBOL_GPL(raw_notifier_call_chain);
 
-#ifdef CONFIG_SRCU
 /*
  *	SRCU notifier chain routines.    Registration and unregistration
  *	use a mutex, and call_chain is synchronized by SRCU (no locks).
@@ -529,8 +584,6 @@ void srcu_init_notifier_head(struct srcu_notifier_head *nh)
 }
 EXPORT_SYMBOL_GPL(srcu_init_notifier_head);
 
-#endif /* CONFIG_SRCU */
-
 static ATOMIC_NOTIFIER_HEAD(die_chain);
 
 int notrace notify_die(enum die_val val, const char *str,
@@ -544,8 +597,6 @@ int notrace notify_die(enum die_val val, const char *str,
 		.signr	= sig,
 
 	};
-	RCU_LOCKDEP_WARN(!rcu_is_watching(),
-			   "notify_die called but RCU thinks we're quiescent");
 	return atomic_notifier_call_chain(&die_chain, val, &args);
 }
 NOKPROBE_SYMBOL(notify_die);

@@ -1,8 +1,8 @@
  /*
  * Copyright (C) 2010 - 2017 Novatek, Inc.
  *
- * $Revision: 22432 $
- * $Date: 2018-01-30 20:14:05 +0800 (?��?, 30 一??2018) $
+ * $Revision: 15504 $
+ * $Date: 2017-11-16 17:42:51 +0800 (週四, 16 十一月 2017) $
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +21,6 @@
 #include <linux/i2c.h>
 #include <linux/input.h>
 
-#include "nt36xxx_mem_map.h"
-
 #define NVT_DEBUG 1
 
 #define NVT_GPIO_AS_INT(pin) tpd_gpio_as_int(pin)
@@ -39,12 +37,8 @@
 #define I2C_FW_Address 0x01
 #define I2C_HW_Address 0x62
 
-#if NVT_DEBUG
-#define NVT_LOG(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_I2C_NAME, __func__, __LINE__, ##args)
-#else
 #define NVT_LOG(fmt, args...)    pr_info("[%s] %s %d: " fmt, NVT_I2C_NAME, __func__, __LINE__, ##args)
-#endif
-#define NVT_ERR(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_I2C_NAME, __func__, __LINE__, ##args)
+#define NVT_ERR(fmt, args...)    pr_info("[%s] %s %d: " fmt, NVT_I2C_NAME, __func__, __LINE__, ##args)
 
 //---Input device info.---
 #define NVT_TS_NAME "NVTCapacitiveTouchScreen"
@@ -59,9 +53,6 @@ extern const uint16_t touch_key_array[TOUCH_KEY_NUM];
 #endif
 #define TOUCH_FORCE_NUM 1000
 
-/* Enable only when module have tp reset pin and connected to host */
-#define NVT_TOUCH_SUPPORT_HW_RST 0
-
 //---Customerized func.---
 #define NVT_TOUCH_PROC 1
 #define NVT_TOUCH_EXT_PROC 1
@@ -72,17 +63,8 @@ extern const uint16_t touch_key_array[TOUCH_KEY_NUM];
 extern const uint16_t gesture_key_array[];
 #endif
 
-#define BOOT_UPDATE_FIRMWARE 1
-#define BOOT_UPDATE_FIRMWARE_NAME_tianma "novatek_ts_fw_tianma.bin"
-#define BOOT_UPDATE_FIRMWARE_NAME_truly "novatek_ts_fw_truly.bin"
-
-//---ESD Protect.---
-#define NVT_TOUCH_ESD_PROTECT 0
-#define NVT_TOUCH_ESD_CHECK_PERIOD 1500	/* ms */
-
-// for charging flag work -------------------------------------- st.
-#define NVT_TOUCH_USB_CHECK_PERIOD 300	/* ms */
-// for charging flag work -------------------------------------- ed.
+#define BOOT_UPDATE_FIRMWARE 0
+#define BOOT_UPDATE_FIRMWARE_NAME "novatek_ts_fw.bin"
 
 //--I2C DMA info.---
 #define I2C_DMA_SUPPORT 1
@@ -91,8 +73,31 @@ extern const uint16_t gesture_key_array[];
 #define MAX_TRANSACTION_LENGTH            8
 #define MAX_I2C_TRANSFER_SIZE            (MAX_TRANSACTION_LENGTH - 1)
 
-#define	USB_PLUGOUT (0)
-#define	USB_PLUGIN	(1)
+struct nvt_ts_mem_map {
+	uint32_t EVENT_BUF_ADDR;
+	uint32_t RAW_PIPE0_ADDR;
+	uint32_t RAW_PIPE0_Q_ADDR;
+	uint32_t RAW_PIPE1_ADDR;
+	uint32_t RAW_PIPE1_Q_ADDR;
+	uint32_t BASELINE_ADDR;
+	uint32_t BASELINE_Q_ADDR;
+	uint32_t BASELINE_BTN_ADDR;
+	uint32_t BASELINE_BTN_Q_ADDR;
+	uint32_t DIFF_PIPE0_ADDR;
+	uint32_t DIFF_PIPE0_Q_ADDR;
+	uint32_t DIFF_PIPE1_ADDR;
+	uint32_t DIFF_PIPE1_Q_ADDR;
+	uint32_t RAW_BTN_PIPE0_ADDR;
+	uint32_t RAW_BTN_PIPE0_Q_ADDR;
+	uint32_t RAW_BTN_PIPE1_ADDR;
+	uint32_t RAW_BTN_PIPE1_Q_ADDR;
+	uint32_t DIFF_BTN_PIPE0_ADDR;
+	uint32_t DIFF_BTN_PIPE0_Q_ADDR;
+	uint32_t DIFF_BTN_PIPE1_ADDR;
+	uint32_t DIFF_BTN_PIPE1_Q_ADDR;
+	uint32_t READ_FLASH_CHECKSUM_ADDR;
+	uint32_t RW_FLASH_DATA_ADDR;
+};
 
 struct nvt_ts_data {
 	struct i2c_client *client;
@@ -117,8 +122,6 @@ struct nvt_ts_data {
 	const struct nvt_ts_mem_map *mmap;
 	uint8_t carrier_system;
 	uint16_t nvt_pid;
-	bool irq_enabled;		//[20181105]Add
-	spinlock_t irq_lock;	//[20181105]Add
 };
 
 #if NVT_TOUCH_PROC
@@ -156,11 +159,5 @@ extern int32_t nvt_check_fw_reset_state(RST_COMPLETE_STATE check_reset_state);
 extern int32_t nvt_get_fw_info(void);
 extern int32_t nvt_clear_fw_status(void);
 extern int32_t nvt_check_fw_status(void);
-#if NVT_TOUCH_ESD_PROTECT
-extern void nvt_esd_check_enable(uint8_t enable);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
-extern void nvt_stop_crc_reboot(void);
-extern int tpd_usb_plugin(int plugin);
-extern int tpd_usb_plugin_nomutex(int plugin);
 
 #endif /* _LINUX_NVT_TOUCH_H */

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
@@ -11,10 +10,10 @@
 
 int _braille_console_setup(char **str, char **brl_options)
 {
-	if (!strncmp(*str, "brl,", 4)) {
+	if (!memcmp(*str, "brl,", 4)) {
 		*brl_options = "";
 		*str += 4;
-	} else if (!strncmp(*str, "brl=", 4)) {
+	} else if (!memcmp(str, "brl=", 4)) {
 		*brl_options = *str + 4;
 		*str = strchr(*brl_options, ',');
 		if (!*str) {

@@ -412,10 +412,13 @@ void unload_uart401(struct address_info *hw_config)
 
 	if (!devc->share_irq)
 		free_irq(devc->irq, devc);
-	kfree(midi_devs[devc->my_dev]->converter);
-	kfree(midi_devs[devc->my_dev]);
-	kfree(devc);
-
+	if (devc)
+	{
+		kfree(midi_devs[devc->my_dev]->converter);
+		kfree(midi_devs[devc->my_dev]);
+		kfree(devc);
+		devc = NULL;
+	}
 	/* This kills midi_devs[x] */
 	sound_unload_mididev(hw_config->slots[4]);
 }
@@ -429,8 +432,8 @@ static struct address_info cfg_mpu;
 static int io = -1;
 static int irq = -1;
 
-module_param_hw(io, int, ioport, 0444);
-module_param_hw(irq, int, irq, 0444);
+module_param(io, int, 0444);
+module_param(irq, int, 0444);
 
 
 static int __init init_uart401(void)

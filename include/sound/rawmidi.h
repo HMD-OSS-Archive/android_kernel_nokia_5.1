@@ -28,9 +28,8 @@
 #include <linux/wait.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
-#include <linux/device.h>
 
-#if IS_ENABLED(CONFIG_SND_SEQUENCER)
+#if defined(CONFIG_SND_SEQUENCER) || defined(CONFIG_SND_SEQUENCER_MODULE)
 #include <sound/seq_device.h>
 #endif
 
@@ -78,6 +77,7 @@ struct snd_rawmidi_runtime {
 	size_t xruns;		/* over/underruns counter */
 	/* misc */
 	spinlock_t lock;
+	struct mutex realloc_mutex;
 	wait_queue_head_t sleep;
 	/* event handler (new bytes, input only) */
 	void (*event)(struct snd_rawmidi_substream *substream);
@@ -103,7 +103,7 @@ struct snd_rawmidi_substream {
 	struct snd_rawmidi_runtime *runtime;
 	struct pid *pid;
 	/* hardware layer */
-	const struct snd_rawmidi_ops *ops;
+	struct snd_rawmidi_ops *ops;
 };
 
 struct snd_rawmidi_file {
@@ -130,7 +130,7 @@ struct snd_rawmidi {
 	int ossreg;
 #endif
 
-	const struct snd_rawmidi_global_ops *ops;
+	struct snd_rawmidi_global_ops *ops;
 
 	struct snd_rawmidi_str streams[2];
 
@@ -140,11 +140,10 @@ struct snd_rawmidi {
 	struct mutex open_mutex;
 	wait_queue_head_t open_wait;
 
-	struct device dev;
-
+	struct snd_info_entry *dev;
 	struct snd_info_entry *proc_entry;
 
-#if IS_ENABLED(CONFIG_SND_SEQUENCER)
+#if defined(CONFIG_SND_SEQUENCER) || defined(CONFIG_SND_SEQUENCER_MODULE)
 	struct snd_seq_device *seq_dev;
 #endif
 };
@@ -155,7 +154,7 @@ int snd_rawmidi_new(struct snd_card *card, char *id, int device,
 		    int output_count, int input_count,
 		    struct snd_rawmidi **rmidi);
 void snd_rawmidi_set_ops(struct snd_rawmidi *rmidi, int stream,
-			 const struct snd_rawmidi_ops *ops);
+			 struct snd_rawmidi_ops *ops);
 
 /* callbacks */
 

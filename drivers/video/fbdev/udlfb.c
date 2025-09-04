@@ -54,7 +54,7 @@ static const u32 udlfb_info_flags = FBINFO_DEFAULT | FBINFO_READS_FAST |
  * which is compatible with all known USB 2.0 era graphics chips and firmware,
  * but allows DisplayLink to increment those for any future incompatible chips
  */
-static const struct usb_device_id id_table[] = {
+static struct usb_device_id id_table[] = {
 	{.idVendor = 0x17e9,
 	 .bInterfaceClass = 0xff,
 	 .bInterfaceSubClass = 0x00,
@@ -279,7 +279,7 @@ static int dlfb_set_video_mode(struct dlfb_data *dev,
 {
 	char *buf;
 	char *wrptr;
-	int retval;
+	int retval = 0;
 	int writesize;
 	struct urb *urb;
 
@@ -922,7 +922,8 @@ static void dlfb_free(struct kref *kref)
 {
 	struct dlfb_data *dev = container_of(kref, struct dlfb_data, kref);
 
-	vfree(dev->backing_buffer);
+	if (dev->backing_buffer)
+		vfree(dev->backing_buffer);
 
 	kfree(dev->edid);
 
@@ -952,7 +953,8 @@ static void dlfb_free_framebuffer(struct dlfb_data *dev)
 			fb_dealloc_cmap(&info->cmap);
 		if (info->monspecs.modedb)
 			fb_destroy_modedb(info->monspecs.modedb);
-		vfree(info->screen_base);
+		if (info->screen_base)
+			vfree(info->screen_base);
 
 		fb_destroy_modelist(&info->modelist);
 
@@ -1105,8 +1107,8 @@ static int dlfb_ops_blank(int blank_mode, struct fb_info *info)
 	char *bufptr;
 	struct urb *urb;
 
-	pr_debug("/dev/fb%d FB_BLANK mode %d --> %d\n",
-		 info->node, dev->blank_mode, blank_mode);
+	pr_info("/dev/fb%d FB_BLANK mode %d --> %d\n",
+		info->node, dev->blank_mode, blank_mode);
 
 	if ((dev->blank_mode == FB_BLANK_POWERDOWN) &&
 	    (blank_mode != FB_BLANK_POWERDOWN)) {
@@ -1201,7 +1203,8 @@ static int dlfb_realloc_framebuffer(struct dlfb_data *dev, struct fb_info *info)
 		if (!new_back)
 			pr_info("No shadow/backing buffer allocated\n");
 		else {
-			vfree(dev->backing_buffer);
+			if (dev->backing_buffer)
+				vfree(dev->backing_buffer);
 			dev->backing_buffer = new_back;
 		}
 	}
@@ -1465,7 +1468,7 @@ static ssize_t metrics_reset_store(struct device *fbdev,
 	return count;
 }
 
-static const struct bin_attribute edid_attr = {
+static struct bin_attribute edid_attr = {
 	.attr.name = "edid",
 	.attr.mode = 0666,
 	.size = EDID_LENGTH,
@@ -1515,7 +1518,8 @@ static int dlfb_parse_vendor_descriptor(struct dlfb_data *dev,
 	char *desc;
 	char *buf;
 	char *desc_end;
-	int total_len;
+
+	int total_len = 0;
 
 	buf = kzalloc(MAX_VENDOR_DESCRIPTOR_SIZE, GFP_KERNEL);
 	if (!buf)
@@ -1591,7 +1595,7 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 			const struct usb_device_id *id)
 {
 	struct usb_device *usbdev;
-	struct dlfb_data *dev;
+	struct dlfb_data *dev = NULL;
 	int retval = -ENOMEM;
 
 	/* usb initialization */
@@ -1613,9 +1617,8 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 	pr_info("%s %s - serial #%s\n",
 		usbdev->manufacturer, usbdev->product, usbdev->serial);
 	pr_info("vid_%04x&pid_%04x&rev_%04x driver's dlfb_data struct at %p\n",
-		le16_to_cpu(usbdev->descriptor.idVendor),
-		le16_to_cpu(usbdev->descriptor.idProduct),
-		le16_to_cpu(usbdev->descriptor.bcdDevice), dev);
+		usbdev->descriptor.idVendor, usbdev->descriptor.idProduct,
+		usbdev->descriptor.bcdDevice, dev);
 	pr_info("console enable=%d\n", console);
 	pr_info("fb_defio enable=%d\n", fb_defio);
 	pr_info("shadow enable=%d\n", shadow);
@@ -1655,6 +1658,7 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 error:
 	if (dev) {
 
+		kref_put(&dev->kref, dlfb_free); /* ref for framebuffer */
 		kref_put(&dev->kref, dlfb_free); /* last ref from kref_init */
 
 		/* dev has been deallocated. Do not dereference */
@@ -1674,6 +1678,7 @@ static void dlfb_init_framebuffer_work(struct work_struct *work)
 	/* allocates framebuffer driver structure, not framebuffer memory */
 	info = framebuffer_alloc(0, dev->gdev);
 	if (!info) {
+		retval = -ENOMEM;
 		pr_err("framebuffer_alloc failed\n");
 		goto error;
 	}
@@ -1920,7 +1925,7 @@ static int dlfb_alloc_urb_list(struct dlfb_data *dev, int count, size_t size)
 
 static struct urb *dlfb_get_urb(struct dlfb_data *dev)
 {
-	int ret;
+	int ret = 0;
 	struct list_head *entry;
 	struct urb_node *unode;
 	struct urb *urb = NULL;

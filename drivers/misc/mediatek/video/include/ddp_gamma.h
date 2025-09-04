@@ -14,33 +14,41 @@
 #ifndef __DDP_GAMMA_H__
 #define __DDP_GAMMA_H__
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
-enum disp_gamma_id_t {
+
+typedef enum {
 	DISP_GAMMA0 = 0,
-	DISP_GAMMA1,
 	DISP_GAMMA_TOTAL
-};
+} disp_gamma_id_t;
 
+
+typedef unsigned int gamma_entry;
 #define GAMMA_ENTRY(r10, g10, b10) (((r10) << 20) | ((g10) << 10) | (b10))
 
 #define DISP_GAMMA_LUT_SIZE 512
 
-struct DISP_GAMMA_LUT_T {
-	enum disp_gamma_id_t hw_id;
-	unsigned int lut[DISP_GAMMA_LUT_SIZE];
-};
+typedef struct {
+	disp_gamma_id_t hw_id;
+	gamma_entry lut[DISP_GAMMA_LUT_SIZE];
+} DISP_GAMMA_LUT_T;
 
-enum disp_ccorr_id_t {
+typedef struct {
+	unsigned cmd;
+	unsigned char count;
+	unsigned char para_list[64];
+}LCM_setting_table ;
+
+
+typedef enum {
 	DISP_CCORR0 = 0,
-	DISP_CCORR1,
 	DISP_CCORR_TOTAL
-};
+} disp_ccorr_id_t;
 
-struct DISP_CCORR_COEF_T {
-	enum disp_ccorr_id_t hw_id;
+typedef struct {
+	disp_ccorr_id_t hw_id;
 	unsigned int coef[3][3];
-};
+} DISP_CCORR_COEF_T;
 
 extern int corr_dbg_en;
 
@@ -49,10 +57,7 @@ int ccorr_interface_for_color(unsigned int ccorr_idx,
 	unsigned int ccorr_coef[3][3], void *handle);
 void disp_ccorr_on_end_of_frame(void);
 void disp_pq_notify_backlight_changed(int bl_1024);
-int disp_ccorr_set_color_matrix(void *cmdq,
-	int32_t matrix[16], int32_t hint);
-int disp_ccorr_set_RGB_Gain(int r, int g, int b);
-
+int disp_ccorr_set_color_matrix(void *cmdq, int32_t matrix[16], int32_t hint);
 
 #endif
 

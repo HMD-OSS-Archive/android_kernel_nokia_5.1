@@ -185,7 +185,7 @@ static int pcxhr_analog_vol_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_analog_level = {
+static struct snd_kcontrol_new pcxhr_control_analog_level = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
 			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
@@ -235,7 +235,7 @@ static int pcxhr_audio_sw_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_output_switch = {
+static struct snd_kcontrol_new pcxhr_control_output_switch = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =		"Master Playback Switch",
 	.info =		pcxhr_sw_info,		/* shared */
@@ -409,7 +409,7 @@ static int pcxhr_pcm_vol_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new snd_pcxhr_pcm_vol =
+static struct snd_kcontrol_new snd_pcxhr_pcm_vol =
 {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
@@ -460,7 +460,7 @@ static int pcxhr_pcm_sw_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_pcm_switch = {
+static struct snd_kcontrol_new pcxhr_control_pcm_switch = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =		"PCM Playback Switch",
 	.count =	PCXHR_PLAYBACK_STREAMS,
@@ -509,7 +509,7 @@ static int pcxhr_monitor_vol_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_monitor_vol = {
+static struct snd_kcontrol_new pcxhr_control_monitor_vol = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
 			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
@@ -562,7 +562,7 @@ static int pcxhr_monitor_sw_put(struct snd_kcontrol *kcontrol,
 	return (changed != 0);
 }
 
-static const struct snd_kcontrol_new pcxhr_control_monitor_sw = {
+static struct snd_kcontrol_new pcxhr_control_monitor_sw = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =         "Monitoring Playback Switch",
 	.info =         pcxhr_sw_info,		/* shared */
@@ -660,7 +660,14 @@ static int pcxhr_audio_src_info(struct snd_kcontrol *kcontrol,
 		if (chip->mgr->board_has_mic)
 			i = 5;	/* Mic and MicroMix available */
 	}
-	return snd_ctl_enum_info(uinfo, 1, i, texts);
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = i;
+	if (uinfo->value.enumerated.item > (i-1))
+		uinfo->value.enumerated.item = i-1;
+	strcpy(uinfo->value.enumerated.name,
+		texts[uinfo->value.enumerated.item]);
+	return 0;
 }
 
 static int pcxhr_audio_src_get(struct snd_kcontrol *kcontrol,
@@ -697,7 +704,7 @@ static int pcxhr_audio_src_put(struct snd_kcontrol *kcontrol,
 	return ret;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_audio_src = {
+static struct snd_kcontrol_new pcxhr_control_audio_src = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =		"Capture Source",
 	.info =		pcxhr_audio_src_info,
@@ -749,7 +756,14 @@ static int pcxhr_clock_type_info(struct snd_kcontrol *kcontrol,
 		texts = textsPCXHR;
 		snd_BUG_ON(clock_items > (PCXHR_CLOCK_TYPE_MAX+1));
 	}
-	return snd_ctl_enum_info(uinfo, 1, clock_items, texts);
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = clock_items;
+	if (uinfo->value.enumerated.item >= clock_items)
+		uinfo->value.enumerated.item = clock_items-1;
+	strcpy(uinfo->value.enumerated.name,
+		texts[uinfo->value.enumerated.item]);
+	return 0;
 }
 
 static int pcxhr_clock_type_get(struct snd_kcontrol *kcontrol,
@@ -798,7 +812,7 @@ static int pcxhr_clock_type_put(struct snd_kcontrol *kcontrol,
 	return ret;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_clock_type = {
+static struct snd_kcontrol_new pcxhr_control_clock_type = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =		"Clock Mode",
 	.info =		pcxhr_clock_type_info,
@@ -842,7 +856,7 @@ static int pcxhr_clock_rate_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_clock_rate = {
+static struct snd_kcontrol_new pcxhr_control_clock_rate = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_CARD,
 	.name =		"Clock Rates",
@@ -1017,14 +1031,14 @@ static int pcxhr_iec958_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new pcxhr_control_playback_iec958_mask = {
+static struct snd_kcontrol_new pcxhr_control_playback_iec958_mask = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,MASK),
 	.info =		pcxhr_iec958_info,
 	.get =		pcxhr_iec958_mask_get
 };
-static const struct snd_kcontrol_new pcxhr_control_playback_iec958 = {
+static struct snd_kcontrol_new pcxhr_control_playback_iec958 = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),
 	.info =         pcxhr_iec958_info,
@@ -1033,14 +1047,14 @@ static const struct snd_kcontrol_new pcxhr_control_playback_iec958 = {
 	.private_value = 0 /* playback */
 };
 
-static const struct snd_kcontrol_new pcxhr_control_capture_iec958_mask = {
+static struct snd_kcontrol_new pcxhr_control_capture_iec958_mask = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",CAPTURE,MASK),
 	.info =		pcxhr_iec958_info,
 	.get =		pcxhr_iec958_mask_get
 };
-static const struct snd_kcontrol_new pcxhr_control_capture_iec958 = {
+static struct snd_kcontrol_new pcxhr_control_capture_iec958 = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",CAPTURE,DEFAULT),

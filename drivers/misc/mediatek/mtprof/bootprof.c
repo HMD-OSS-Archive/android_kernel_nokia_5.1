@@ -17,25 +17,30 @@
 #include <linux/utsname.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/printk.h>
 #include <linux/platform_device.h>
-#include <linux/slab.h>
 #include <log_store_kernel.h>
-
+#ifdef CONFIG_MT_BOOT_TIME_CPU_BOOST
+#include <mt_cpufreq.h>
+#endif
 #include "internal.h"
-#include "mtk_sched_mon.h"
-
+#ifdef CONFIG_MT_BOOT_TIME_CPU_BOOST
+#include "mt_hotplug_strategy_internal.h"
+#endif
 #define BOOT_STR_SIZE 256
 #define BUF_COUNT 12
 #define LOGS_PER_BUF 80
+#define TRACK_TASK_COMM
 
 struct log_t {
 	/* task cmdline for first 16 bytes
 	 * and boot event for the rest
-	 */
+	 * if TRACK_TASK_COMM is on */
 	char *comm_event;
+#ifdef TRACK_TASK_COMM
 	pid_t pid;
+#endif
 	u64 timestamp;
 };
 
@@ -45,79 +50,75 @@ static DEFINE_MUTEX(bootprof_lock);
 static bool enabled;
 static int bootprof_lk_t, bootprof_pl_t, bootprof_logo_t;
 static u64 timestamp_on, timestamp_off;
-bool boot_finish;
+int boot_finish = 0;
 
-module_param_named(pl_t, bootprof_pl_t, int, 0644);
-module_param_named(lk_t, bootprof_lk_t, int, 0644);
-module_param_named(logo_t, bootprof_logo_t, int, 0644);
+module_param_named(pl_t, bootprof_pl_t, int, S_IRUGO | S_IWUSR);
+module_param_named(lk_t, bootprof_lk_t, int, S_IRUGO | S_IWUSR);
+module_param_named(logo_t, bootprof_logo_t, int, S_IRUGO | S_IWUSR);
 
 #define MSG_SIZE 128
-
-#ifdef CONFIG_BOOTPROF_THRESHOLD_MS
-#define BOOTPROF_THRESHOLD (CONFIG_BOOTPROF_THRESHOLD_MS*1000000)
-#else
-#define BOOTPROF_THRESHOLD 15000000
-#endif
 
 void log_boot(char *str)
 {
 	unsigned long long ts;
 	struct log_t *p = NULL;
-	size_t n;
-
-	if (!str) {
-		pr_info("[BOOTPROF] Null buffer. Skip log.\n");
-		return;
-	}
+	size_t n = strlen(str) + 1;
 
 	if (!enabled)
 		return;
-	n = strlen(str) + 1;
-
 	ts = sched_clock();
-	pr_info("BOOTPROF:%10lld.%06ld:%s\n", msec_high(ts), msec_low(ts), str);
+	pr_err("BOOTPROF:%10Ld.%06ld:%s\n", nsec_high(ts), nsec_low(ts), str);
 
 	mutex_lock(&bootprof_lock);
 	if (log_count >= (LOGS_PER_BUF * BUF_COUNT)) {
-		pr_info("[BOOTPROF] not enuough bootprof buffer\n");
+		pr_err("[BOOTPROF] not enuough bootprof buffer\n");
 		goto out;
 	} else if (log_count && !(log_count % LOGS_PER_BUF)) {
 		bootprof[log_count / LOGS_PER_BUF] =
-			kcalloc(LOGS_PER_BUF, sizeof(struct log_t),
+			kzalloc(sizeof(struct log_t) * LOGS_PER_BUF,
 				GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN);
 	}
 	if (!bootprof[log_count / LOGS_PER_BUF]) {
-		pr_info("no memory for bootprof\n");
+		pr_err("no memory for bootprof\n");
 		goto out;
 	}
 	p = &bootprof[log_count / LOGS_PER_BUF][log_count % LOGS_PER_BUF];
 
 	p->timestamp = ts;
+#ifdef TRACK_TASK_COMM
 	p->pid = current->pid;
 	n += TASK_COMM_LEN;
+#endif
 	p->comm_event = kzalloc(n, GFP_ATOMIC | __GFP_NORETRY |
 			  __GFP_NOWARN);
 	if (!p->comm_event) {
 		enabled = false;
 		goto out;
 	}
-
+#ifdef TRACK_TASK_COMM
 	memcpy(p->comm_event, current->comm, TASK_COMM_LEN);
 	memcpy(p->comm_event + TASK_COMM_LEN, str, n - TASK_COMM_LEN);
+#else
+	memcpy(p->comm_event, str, n);
+#endif
 	log_count++;
 out:
 	mutex_unlock(&bootprof_lock);
 }
+#ifdef CONFIG_MICROTRUST_TEE_SUPPORT
+EXPORT_SYMBOL(log_boot);
+#endif
 
 void bootprof_initcall(initcall_t fn, unsigned long long ts)
 {
-	/* log more than threshold initcalls */
+#define INITCALL_THRESHOLD 15000000
+	/* log more than 15ms initcalls */
 	unsigned long msec_rem;
 	char msgbuf[MSG_SIZE];
 
-	if (ts > BOOTPROF_THRESHOLD) {
+	if (ts > INITCALL_THRESHOLD) {
 		msec_rem = do_div(ts, NSEC_PER_MSEC);
-		snprintf(msgbuf, sizeof(msgbuf), "initcall: %ps %5llu.%06lums",
+		snprintf(msgbuf, MSG_SIZE, "initcall: %pf %5llu.%06lums",
 			 fn, ts, msec_rem);
 		log_boot(msgbuf);
 	}
@@ -126,41 +127,40 @@ void bootprof_initcall(initcall_t fn, unsigned long long ts)
 void bootprof_probe(unsigned long long ts, struct device *dev,
 			   struct device_driver *drv, unsigned long probe)
 {
-	/* log more than threshold probes*/
+#define PROBE_THRESHOLD 15000000
+	/* log more than 15ms probes*/
 	unsigned long msec_rem;
 	char msgbuf[MSG_SIZE];
-	int pos;
+	int pos = 0;
 
-	if (ts <= BOOTPROF_THRESHOLD)
+	if (ts <= PROBE_THRESHOLD)
 		return;
 	msec_rem = do_div(ts, NSEC_PER_MSEC);
 
-	pos = snprintf(msgbuf, sizeof(msgbuf), "probe: probe=%ps",
-					(void *)probe);
+	pos += snprintf(msgbuf, MSG_SIZE, "probe: probe=%pf", (void *)probe);
 	if (drv)
-		pos += snprintf(msgbuf + pos, sizeof(msgbuf) - pos,
-				" drv=%s(%ps)", drv->name ? drv->name : "",
+		pos += snprintf(msgbuf + pos, MSG_SIZE - pos, " drv=%s(%p)",
+				drv->name ? drv->name : "",
 				(void *)drv);
-
 	if (dev && dev->init_name)
-		pos += snprintf(msgbuf + pos, sizeof(msgbuf) - pos,
-				" dev=%s(%ps)", dev->init_name, (void *)dev);
-
-	pos += snprintf(msgbuf + pos, sizeof(msgbuf) - pos,
-				" %5llu.%06lums", ts, msec_rem);
+		pos += snprintf(msgbuf + pos, MSG_SIZE - pos, " dev=%s(%p)",
+				dev->init_name, (void *)dev);
+	pos += snprintf(msgbuf + pos, MSG_SIZE - pos, " %5llu.%06lums",
+			ts, msec_rem);
 	log_boot(msgbuf);
 }
 
 void bootprof_pdev_register(unsigned long long ts, struct platform_device *pdev)
 {
-	/* log more than threshold register*/
+#define PROBE_THRESHOLD 15000000
+	/* log more than 15ms probes*/
 	unsigned long msec_rem;
 	char msgbuf[MSG_SIZE];
 
-	if (ts <= BOOTPROF_THRESHOLD || !pdev)
+	if (ts <= PROBE_THRESHOLD || !pdev)
 		return;
 	msec_rem = do_div(ts, NSEC_PER_MSEC);
-	snprintf(msgbuf, sizeof(msgbuf), "probe: pdev=%s(%ps) %5llu.%06lums",
+	snprintf(msgbuf, MSG_SIZE, "probe: pdev=%s(%p) %5llu.%06lums",
 		 pdev->name, (void *)pdev, ts, msec_rem);
 	log_boot(msgbuf);
 }
@@ -168,11 +168,20 @@ void bootprof_pdev_register(unsigned long long ts, struct platform_device *pdev)
 static void bootup_finish(void)
 {
 	initcall_debug = 0;
-#ifdef CONFIG_MTK_PRINTK_UART_CONSOLE
+
+#ifdef CONFIG_MT_BOOT_TIME_CPU_BOOST
+	hps_ctxt.little_num_base_perf_serv = 1;
+#endif
+
+
+#ifdef CONFIG_MT_PRINTK_UART_CONSOLE
 	mt_disable_uart();
 #endif
-#ifdef CONFIG_MTK_SCHED_MON_DEFAULT_ENABLE
+#ifdef CONFIG_MT_SCHED_MON_DEFAULT_ENABLE
 	mt_sched_monitor_switch(1);
+#endif
+#ifdef CONFIG_MT_BOOT_TIME_CPU_BOOST
+	mt_cpufreq_set_min_freq(MT_CPU_DVFS_LITTLE, 0);
 #endif
 	set_logtoomuch_enable(1);
 }
@@ -183,8 +192,8 @@ static void mt_bootprof_switch(int on)
 	if (enabled ^ on) {
 		unsigned long long ts = sched_clock();
 
-		pr_info("BOOTPROF:%10lld.%06ld: %s\n",
-		       msec_high(ts), msec_low(ts), on ? "ON" : "OFF");
+		pr_err("BOOTPROF:%10Ld.%06ld: %s\n",
+		       nsec_high(ts), nsec_low(ts), on ? "ON" : "OFF");
 
 		if (on) {
 			enabled = 1;
@@ -193,7 +202,7 @@ static void mt_bootprof_switch(int on)
 			/* boot up complete */
 			enabled = 0;
 			timestamp_off = ts;
-			boot_finish = true;
+			boot_finish = 1;
 			log_store_bootup();
 			bootup_finish();
 		}
@@ -233,47 +242,49 @@ static int mt_bootprof_show(struct seq_file *m, void *v)
 	int i;
 	struct log_t *p;
 
-	if (m == NULL) {
-		pr_info("seq_file is Null.\n");
-		return 0;
-	}
-
-	seq_puts(m, "----------------------------------------\n");
-	seq_printf(m, "%d	    BOOT PROF (unit:msec)\n", enabled);
-	seq_puts(m, "----------------------------------------\n");
+	SEQ_printf(m, "----------------------------------------\n");
+	SEQ_printf(m, "%d	    BOOT PROF (unit:msec)\n", enabled);
+	SEQ_printf(m, "----------------------------------------\n");
 
 	if (bootprof_pl_t > 0 && bootprof_lk_t > 0) {
-		seq_printf(m, "%10d        : %s\n", bootprof_pl_t, "preloader");
+		SEQ_printf(m, "%10d        : %s\n", bootprof_pl_t, "preloader");
 		if (bootprof_logo_t > 0) {
-			seq_printf(m, "%10d        : %s (%s: %d)\n",
-			bootprof_lk_t, "lk", "Start->Show logo",
-			bootprof_logo_t);
+			SEQ_printf(m, "%10d        : %s (%s: %d)\n",
+			bootprof_lk_t, "lk", "Start->Show logo", bootprof_logo_t);
 		} else {
-			seq_printf(m, "%10d        : %s\n",
-			bootprof_lk_t, "lk");
+			SEQ_printf(m, "%10d        : %s\n", bootprof_lk_t, "lk");
 		}
-		seq_puts(m, "----------------------------------------\n");
+		/* SEQ_printf(m, "%10d        : %s\n",
+		 * gpt_boot_time() - bootprof_pl_t - bootprof_lk_t, "lk->Kernel");
+		 */
+		SEQ_printf(m, "----------------------------------------\n");
 	}
 
-	seq_printf(m, "%10lld.%06ld : ON (THR:%10lld ms)\n",
-		   msec_high(timestamp_on), msec_low(timestamp_on),
-		   msec_high(BOOTPROF_THRESHOLD));
+	SEQ_printf(m, "%10Ld.%06ld : ON\n",
+		   nsec_high(timestamp_on), nsec_low(timestamp_on));
 
 	for (i = 0; i < log_count; i++) {
 		p = &bootprof[i / LOGS_PER_BUF][i % LOGS_PER_BUF];
 		if (!p->comm_event)
 			continue;
-
-		seq_printf(m, "%10llu.%06lu :%5d-%-16s: %s\n",
-			   msec_high(p->timestamp),
-			   msec_low(p->timestamp),
-			   p->pid, p->comm_event,
-			   p->comm_event + TASK_COMM_LEN);
+#ifdef TRACK_TASK_COMM
+#define FMT "%10Ld.%06ld :%5d-%-16s: %s\n"
+#else
+#define FMT "%10Ld.%06ld : %s\n"
+#endif
+		SEQ_printf(m, FMT, nsec_high(p->timestamp),
+			   nsec_low(p->timestamp),
+#ifdef TRACK_TASK_COMM
+			   p->pid, p->comm_event, p->comm_event + TASK_COMM_LEN
+#else
+			   p->comm_event
+#endif
+			   );
 	}
 
-	seq_printf(m, "%10lld.%06ld : OFF\n",
-		   msec_high(timestamp_off), msec_low(timestamp_off));
-	seq_puts(m, "----------------------------------------\n");
+	SEQ_printf(m, "%10Ld.%06ld : OFF\n",
+		   nsec_high(timestamp_off), nsec_low(timestamp_off));
+	SEQ_printf(m, "----------------------------------------\n");
 	return 0;
 }
 
@@ -304,11 +315,12 @@ static int __init init_boot_prof(void)
 static int __init init_bootprof_buf(void)
 {
 	memset(bootprof, 0, sizeof(struct log_t *) * BUF_COUNT);
-	bootprof[0] = kcalloc(LOGS_PER_BUF, sizeof(struct log_t),
+	bootprof[0] = kzalloc(sizeof(struct log_t) * LOGS_PER_BUF,
 			      GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN);
 	if (!bootprof[0])
 		goto fail;
 	mt_bootprof_switch(1);
+
 fail:
 	return 0;
 }

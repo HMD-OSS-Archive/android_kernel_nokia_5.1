@@ -6,8 +6,6 @@
  * device tree nodes.
  */
 
-#define pr_fmt(fmt)	"OF: " fmt
-
 #include <linux/of.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
@@ -79,132 +77,18 @@ int of_reconfig_notifier_unregister(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(of_reconfig_notifier_unregister);
 
-#ifdef DEBUG
-const char *action_names[] = {
-	[OF_RECONFIG_ATTACH_NODE] = "ATTACH_NODE",
-	[OF_RECONFIG_DETACH_NODE] = "DETACH_NODE",
-	[OF_RECONFIG_ADD_PROPERTY] = "ADD_PROPERTY",
-	[OF_RECONFIG_REMOVE_PROPERTY] = "REMOVE_PROPERTY",
-	[OF_RECONFIG_UPDATE_PROPERTY] = "UPDATE_PROPERTY",
-};
-#endif
-
-int of_reconfig_notify(unsigned long action, struct of_reconfig_data *p)
+int of_reconfig_notify(unsigned long action, void *p)
 {
 	int rc;
-#ifdef DEBUG
-	struct of_reconfig_data *pr = p;
 
-	switch (action) {
-	case OF_RECONFIG_ATTACH_NODE:
-	case OF_RECONFIG_DETACH_NODE:
-		pr_debug("notify %-15s %pOF\n", action_names[action],
-			pr->dn);
-		break;
-	case OF_RECONFIG_ADD_PROPERTY:
-	case OF_RECONFIG_REMOVE_PROPERTY:
-	case OF_RECONFIG_UPDATE_PROPERTY:
-		pr_debug("notify %-15s %pOF:%s\n", action_names[action],
-			pr->dn, pr->prop->name);
-		break;
-
-	}
-#endif
 	rc = blocking_notifier_call_chain(&of_reconfig_chain, action, p);
 	return notifier_to_errno(rc);
 }
 
-/*
- * of_reconfig_get_state_change()	- Returns new state of device
- * @action	- action of the of notifier
- * @arg		- argument of the of notifier
- *
- * Returns the new state of a device based on the notifier used.
- * Returns 0 on device going from enabled to disabled, 1 on device
- * going from disabled to enabled and -1 on no change.
- */
-int of_reconfig_get_state_change(unsigned long action, struct of_reconfig_data *pr)
-{
-	struct property *prop, *old_prop = NULL;
-	int is_status, status_state, old_status_state, prev_state, new_state;
-
-	/* figure out if a device should be created or destroyed */
-	switch (action) {
-	case OF_RECONFIG_ATTACH_NODE:
-	case OF_RECONFIG_DETACH_NODE:
-		prop = of_find_property(pr->dn, "status", NULL);
-		break;
-	case OF_RECONFIG_ADD_PROPERTY:
-	case OF_RECONFIG_REMOVE_PROPERTY:
-		prop = pr->prop;
-		break;
-	case OF_RECONFIG_UPDATE_PROPERTY:
-		prop = pr->prop;
-		old_prop = pr->old_prop;
-		break;
-	default:
-		return OF_RECONFIG_NO_CHANGE;
-	}
-
-	is_status = 0;
-	status_state = -1;
-	old_status_state = -1;
-	prev_state = -1;
-	new_state = -1;
-
-	if (prop && !strcmp(prop->name, "status")) {
-		is_status = 1;
-		status_state = !strcmp(prop->value, "okay") ||
-			       !strcmp(prop->value, "ok");
-		if (old_prop)
-			old_status_state = !strcmp(old_prop->value, "okay") ||
-					   !strcmp(old_prop->value, "ok");
-	}
-
-	switch (action) {
-	case OF_RECONFIG_ATTACH_NODE:
-		prev_state = 0;
-		/* -1 & 0 status either missing or okay */
-		new_state = status_state != 0;
-		break;
-	case OF_RECONFIG_DETACH_NODE:
-		/* -1 & 0 status either missing or okay */
-		prev_state = status_state != 0;
-		new_state = 0;
-		break;
-	case OF_RECONFIG_ADD_PROPERTY:
-		if (is_status) {
-			/* no status property -> enabled (legacy) */
-			prev_state = 1;
-			new_state = status_state;
-		}
-		break;
-	case OF_RECONFIG_REMOVE_PROPERTY:
-		if (is_status) {
-			prev_state = status_state;
-			/* no status property -> enabled (legacy) */
-			new_state = 1;
-		}
-		break;
-	case OF_RECONFIG_UPDATE_PROPERTY:
-		if (is_status) {
-			prev_state = old_status_state != 0;
-			new_state = status_state != 0;
-		}
-		break;
-	}
-
-	if (prev_state == new_state)
-		return OF_RECONFIG_NO_CHANGE;
-
-	return new_state ? OF_RECONFIG_CHANGE_ADD : OF_RECONFIG_CHANGE_REMOVE;
-}
-EXPORT_SYMBOL_GPL(of_reconfig_get_state_change);
-
 int of_property_notify(int action, struct device_node *np,
 		       struct property *prop, struct property *oldprop)
 {
-	struct of_reconfig_data pr;
+	struct of_prop_reconfig pr;
 
 	/* only call notifiers if the node is attached */
 	if (!of_node_is_attached(np))
@@ -216,7 +100,7 @@ int of_property_notify(int action, struct device_node *np,
 	return of_reconfig_notify(action, &pr);
 }
 
-static void __of_attach_node(struct device_node *np)
+void __of_attach_node(struct device_node *np)
 {
 	const __be32 *phandle;
 	int sz;
@@ -227,12 +111,14 @@ static void __of_attach_node(struct device_node *np)
 	phandle = __of_get_property(np, "phandle", &sz);
 	if (!phandle)
 		phandle = __of_get_property(np, "linux,phandle", &sz);
-	if (IS_ENABLED(CONFIG_PPC_PSERIES) && !phandle)
+	if (IS_ENABLED(PPC_PSERIES) && !phandle)
 		phandle = __of_get_property(np, "ibm,phandle", &sz);
 	np->phandle = (phandle && (sz >= 4)) ? be32_to_cpup(phandle) : 0;
 
 	np->child = NULL;
 	np->sibling = np->parent->child;
+	np->allnext = np->parent->allnext;
+	np->parent->allnext = np;
 	np->parent->child = np;
 	of_node_clear_flag(np, OF_DETACHED);
 }
@@ -242,11 +128,7 @@ static void __of_attach_node(struct device_node *np)
  */
 int of_attach_node(struct device_node *np)
 {
-	struct of_reconfig_data rd;
 	unsigned long flags;
-
-	memset(&rd, 0, sizeof(rd));
-	rd.dn = np;
 
 	mutex_lock(&of_mutex);
 	raw_spin_lock_irqsave(&devtree_lock, flags);
@@ -256,7 +138,7 @@ int of_attach_node(struct device_node *np)
 	__of_attach_node_sysfs(np);
 	mutex_unlock(&of_mutex);
 
-	of_reconfig_notify(OF_RECONFIG_ATTACH_NODE, &rd);
+	of_reconfig_notify(OF_RECONFIG_ATTACH_NODE, np);
 
 	return 0;
 }
@@ -271,6 +153,17 @@ void __of_detach_node(struct device_node *np)
 	parent = np->parent;
 	if (WARN_ON(!parent))
 		return;
+
+	if (of_allnodes == np)
+		of_allnodes = np->allnext;
+	else {
+		struct device_node *prev;
+		for (prev = of_allnodes;
+		     prev->allnext != np;
+		     prev = prev->allnext)
+			;
+		prev->allnext = np->allnext;
+	}
 
 	if (parent->child == np)
 		parent->child = np->sibling;
@@ -294,12 +187,8 @@ void __of_detach_node(struct device_node *np)
  */
 int of_detach_node(struct device_node *np)
 {
-	struct of_reconfig_data rd;
 	unsigned long flags;
 	int rc = 0;
-
-	memset(&rd, 0, sizeof(rd));
-	rd.dn = np;
 
 	mutex_lock(&of_mutex);
 	raw_spin_lock_irqsave(&devtree_lock, flags);
@@ -309,11 +198,10 @@ int of_detach_node(struct device_node *np)
 	__of_detach_node_sysfs(np);
 	mutex_unlock(&of_mutex);
 
-	of_reconfig_notify(OF_RECONFIG_DETACH_NODE, &rd);
+	of_reconfig_notify(OF_RECONFIG_DETACH_NODE, np);
 
 	return rc;
 }
-EXPORT_SYMBOL_GPL(of_detach_node);
 
 /**
  * of_node_release() - release a dynamically allocated node
@@ -328,10 +216,11 @@ void of_node_release(struct kobject *kobj)
 
 	/* We should never be releasing nodes that haven't been detached. */
 	if (!of_node_check_flag(node, OF_DETACHED)) {
-		pr_err("ERROR: Bad of_node_put() on %pOF\n", node);
+		pr_err("ERROR: Bad of_node_put() on %s\n", node->full_name);
 		dump_stack();
 		return;
 	}
+
 	if (!of_node_check_flag(node, OF_DYNAMIC))
 		return;
 
@@ -459,15 +348,27 @@ static void __of_changeset_entry_dump(struct of_changeset_entry *ce)
 {
 	switch (ce->action) {
 	case OF_RECONFIG_ADD_PROPERTY:
+		pr_debug("%p: %s %s/%s\n",
+			ce, "ADD_PROPERTY   ", ce->np->full_name,
+			ce->prop->name);
+		break;
 	case OF_RECONFIG_REMOVE_PROPERTY:
+		pr_debug("%p: %s %s/%s\n",
+			ce, "REMOVE_PROPERTY", ce->np->full_name,
+			ce->prop->name);
+		break;
 	case OF_RECONFIG_UPDATE_PROPERTY:
-		pr_debug("cset<%p> %-15s %pOF/%s\n", ce, action_names[ce->action],
-			ce->np, ce->prop->name);
+		pr_debug("%p: %s %s/%s\n",
+			ce, "UPDATE_PROPERTY", ce->np->full_name,
+			ce->prop->name);
 		break;
 	case OF_RECONFIG_ATTACH_NODE:
+		pr_debug("%p: %s %s\n",
+			ce, "ATTACH_NODE    ", ce->np->full_name);
+		break;
 	case OF_RECONFIG_DETACH_NODE:
-		pr_debug("cset<%p> %-15s %pOF\n", ce, action_names[ce->action],
-			ce->np);
+		pr_debug("%p: %s %s\n",
+			ce, "DETACH_NODE    ", ce->np->full_name);
 		break;
 	}
 }
@@ -499,18 +400,12 @@ static void __of_changeset_entry_invert(struct of_changeset_entry *ce,
 	case OF_RECONFIG_UPDATE_PROPERTY:
 		rce->old_prop = ce->prop;
 		rce->prop = ce->old_prop;
-		/* update was used but original property did not exist */
-		if (!rce->prop) {
-			rce->action = OF_RECONFIG_REMOVE_PROPERTY;
-			rce->prop = ce->prop;
-		}
 		break;
 	}
 }
 
 static void __of_changeset_entry_notify(struct of_changeset_entry *ce, bool revert)
 {
-	struct of_reconfig_data rd;
 	struct of_changeset_entry ce_inverted;
 	int ret;
 
@@ -522,9 +417,7 @@ static void __of_changeset_entry_notify(struct of_changeset_entry *ce, bool reve
 	switch (ce->action) {
 	case OF_RECONFIG_ATTACH_NODE:
 	case OF_RECONFIG_DETACH_NODE:
-		memset(&rd, 0, sizeof(rd));
-		rd.dn = ce->np;
-		ret = of_reconfig_notify(ce->action, &rd);
+		ret = of_reconfig_notify(ce->action, ce->np);
 		break;
 	case OF_RECONFIG_ADD_PROPERTY:
 	case OF_RECONFIG_REMOVE_PROPERTY:
@@ -532,13 +425,13 @@ static void __of_changeset_entry_notify(struct of_changeset_entry *ce, bool reve
 		ret = of_property_notify(ce->action, ce->np, ce->prop, ce->old_prop);
 		break;
 	default:
-		pr_err("invalid devicetree changeset action: %i\n",
+		pr_err("%s: invalid devicetree changeset action: %i\n", __func__,
 			(int)ce->action);
 		return;
 	}
 
 	if (ret)
-		pr_err("changeset notifier error @%pOF\n", ce->np);
+		pr_err("%s: notifier error @%s\n", __func__, ce->np->full_name);
 }
 
 static int __of_changeset_entry_apply(struct of_changeset_entry *ce)
@@ -569,8 +462,8 @@ static int __of_changeset_entry_apply(struct of_changeset_entry *ce)
 
 		ret = __of_add_property(ce->np, ce->prop);
 		if (ret) {
-			pr_err("changeset: add_property failed @%pOF/%s\n",
-				ce->np,
+			pr_err("%s: add_property failed @%s/%s\n",
+				__func__, ce->np->full_name,
 				ce->prop->name);
 			break;
 		}
@@ -578,8 +471,8 @@ static int __of_changeset_entry_apply(struct of_changeset_entry *ce)
 	case OF_RECONFIG_REMOVE_PROPERTY:
 		ret = __of_remove_property(ce->np, ce->prop);
 		if (ret) {
-			pr_err("changeset: remove_property failed @%pOF/%s\n",
-				ce->np,
+			pr_err("%s: remove_property failed @%s/%s\n",
+				__func__, ce->np->full_name,
 				ce->prop->name);
 			break;
 		}
@@ -597,8 +490,8 @@ static int __of_changeset_entry_apply(struct of_changeset_entry *ce)
 
 		ret = __of_update_property(ce->np, ce->prop, &old_prop);
 		if (ret) {
-			pr_err("changeset: update_property failed @%pOF/%s\n",
-				ce->np,
+			pr_err("%s: update_property failed @%s/%s\n",
+				__func__, ce->np->full_name,
 				ce->prop->name);
 			break;
 		}
@@ -653,7 +546,6 @@ void of_changeset_init(struct of_changeset *ocs)
 	memset(ocs, 0, sizeof(*ocs));
 	INIT_LIST_HEAD(&ocs->entries);
 }
-EXPORT_SYMBOL_GPL(of_changeset_init);
 
 /**
  * of_changeset_destroy - Destroy a changeset
@@ -670,35 +562,6 @@ void of_changeset_destroy(struct of_changeset *ocs)
 	list_for_each_entry_safe_reverse(ce, cen, &ocs->entries, node)
 		__of_changeset_entry_destroy(ce);
 }
-EXPORT_SYMBOL_GPL(of_changeset_destroy);
-
-int __of_changeset_apply(struct of_changeset *ocs)
-{
-	struct of_changeset_entry *ce;
-	int ret;
-
-	/* perform the rest of the work */
-	pr_debug("changeset: applying...\n");
-	list_for_each_entry(ce, &ocs->entries, node) {
-		ret = __of_changeset_entry_apply(ce);
-		if (ret) {
-			pr_err("Error applying changeset (%d)\n", ret);
-			list_for_each_entry_continue_reverse(ce, &ocs->entries, node)
-				__of_changeset_entry_revert(ce);
-			return ret;
-		}
-	}
-	pr_debug("changeset: applied, emitting notifiers.\n");
-
-	/* drop the global lock while emitting notifiers */
-	mutex_unlock(&of_mutex);
-	list_for_each_entry(ce, &ocs->entries, node)
-		__of_changeset_entry_notify(ce, 0);
-	mutex_lock(&of_mutex);
-	pr_debug("changeset: notifiers sent.\n");
-
-	return 0;
-}
 
 /**
  * of_changeset_apply - Applies a changeset
@@ -707,46 +570,35 @@ int __of_changeset_apply(struct of_changeset *ocs)
  *
  * Applies a changeset to the live tree.
  * Any side-effects of live tree state changes are applied here on
- * success, like creation/destruction of devices and side-effects
+ * sucess, like creation/destruction of devices and side-effects
  * like creation of sysfs properties and directories.
  * Returns 0 on success, a negative error value in case of an error.
  * On error the partially applied effects are reverted.
  */
 int of_changeset_apply(struct of_changeset *ocs)
 {
-	int ret;
-
-	mutex_lock(&of_mutex);
-	ret = __of_changeset_apply(ocs);
-	mutex_unlock(&of_mutex);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(of_changeset_apply);
-
-int __of_changeset_revert(struct of_changeset *ocs)
-{
 	struct of_changeset_entry *ce;
 	int ret;
 
-	pr_debug("changeset: reverting...\n");
-	list_for_each_entry_reverse(ce, &ocs->entries, node) {
-		ret = __of_changeset_entry_revert(ce);
+	/* perform the rest of the work */
+	pr_debug("of_changeset: applying...\n");
+	list_for_each_entry(ce, &ocs->entries, node) {
+		ret = __of_changeset_entry_apply(ce);
 		if (ret) {
-			pr_err("Error reverting changeset (%d)\n", ret);
-			list_for_each_entry_continue(ce, &ocs->entries, node)
-				__of_changeset_entry_apply(ce);
+			pr_err("%s: Error applying changeset (%d)\n", __func__, ret);
+			list_for_each_entry_continue_reverse(ce, &ocs->entries, node)
+				__of_changeset_entry_revert(ce);
 			return ret;
 		}
 	}
-	pr_debug("changeset: reverted, emitting notifiers.\n");
+	pr_debug("of_changeset: applied, emitting notifiers.\n");
 
 	/* drop the global lock while emitting notifiers */
 	mutex_unlock(&of_mutex);
-	list_for_each_entry_reverse(ce, &ocs->entries, node)
-		__of_changeset_entry_notify(ce, 1);
+	list_for_each_entry(ce, &ocs->entries, node)
+		__of_changeset_entry_notify(ce, 0);
 	mutex_lock(&of_mutex);
-	pr_debug("changeset: notifiers sent.\n");
+	pr_debug("of_changeset: notifiers sent.\n");
 
 	return 0;
 }
@@ -764,15 +616,30 @@ int __of_changeset_revert(struct of_changeset *ocs)
  */
 int of_changeset_revert(struct of_changeset *ocs)
 {
+	struct of_changeset_entry *ce;
 	int ret;
 
-	mutex_lock(&of_mutex);
-	ret = __of_changeset_revert(ocs);
-	mutex_unlock(&of_mutex);
+	pr_debug("of_changeset: reverting...\n");
+	list_for_each_entry_reverse(ce, &ocs->entries, node) {
+		ret = __of_changeset_entry_revert(ce);
+		if (ret) {
+			pr_err("%s: Error reverting changeset (%d)\n", __func__, ret);
+			list_for_each_entry_continue(ce, &ocs->entries, node)
+				__of_changeset_entry_apply(ce);
+			return ret;
+		}
+	}
+	pr_debug("of_changeset: reverted, emitting notifiers.\n");
 
-	return ret;
+	/* drop the global lock while emitting notifiers */
+	mutex_unlock(&of_mutex);
+	list_for_each_entry_reverse(ce, &ocs->entries, node)
+		__of_changeset_entry_notify(ce, 1);
+	mutex_lock(&of_mutex);
+	pr_debug("of_changeset: notifiers sent.\n");
+
+	return 0;
 }
-EXPORT_SYMBOL_GPL(of_changeset_revert);
 
 /**
  * of_changeset_action - Perform a changeset action
@@ -796,9 +663,10 @@ int of_changeset_action(struct of_changeset *ocs, unsigned long action,
 	struct of_changeset_entry *ce;
 
 	ce = kzalloc(sizeof(*ce), GFP_KERNEL);
-	if (!ce)
+	if (!ce) {
+		pr_err("%s: Failed to allocate\n", __func__);
 		return -ENOMEM;
-
+	}
 	/* get a reference to the node */
 	ce->action = action;
 	ce->np = of_node_get(np);
@@ -811,4 +679,3 @@ int of_changeset_action(struct of_changeset *ocs, unsigned long action,
 	list_add_tail(&ce->node, &ocs->entries);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(of_changeset_action);

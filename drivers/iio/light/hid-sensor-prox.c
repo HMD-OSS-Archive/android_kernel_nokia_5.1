@@ -73,7 +73,7 @@ static int prox_read_raw(struct iio_dev *indio_dev,
 	int report_id = -1;
 	u32 address;
 	int ret_type;
-	s32 min;
+	s32 poll_value;
 
 	*val = 0;
 	*val2 = 0;
@@ -82,22 +82,28 @@ static int prox_read_raw(struct iio_dev *indio_dev,
 		switch (chan->scan_index) {
 		case  CHANNEL_SCAN_INDEX_PRESENCE:
 			report_id = prox_state->prox_attr.report_id;
-			min = prox_state->prox_attr.logical_minimum;
-			address = HID_USAGE_SENSOR_HUMAN_PRESENCE;
+			address =
+			HID_USAGE_SENSOR_HUMAN_PRESENCE;
 			break;
 		default:
 			report_id = -1;
 			break;
 		}
 		if (report_id >= 0) {
+			poll_value = hid_sensor_read_poll_value(
+					&prox_state->common_attributes);
+			if (poll_value < 0)
+				return -EINVAL;
+
 			hid_sensor_power_state(&prox_state->common_attributes,
 						true);
+
+			msleep_interruptible(poll_value * 2);
+
 			*val = sensor_hub_input_attr_get_raw_value(
 				prox_state->common_attributes.hsdev,
 				HID_USAGE_SENSOR_PROX, address,
-				report_id,
-				SENSOR_HUB_SYNC,
-				min < 0);
+				report_id);
 			hid_sensor_power_state(&prox_state->common_attributes,
 						false);
 		} else {
@@ -242,13 +248,6 @@ static int prox_parse_report(struct platform_device *pdev,
 			st->common_attributes.sensitivity.index,
 			st->common_attributes.sensitivity.report_id);
 	}
-	if (st->common_attributes.sensitivity.index < 0)
-		sensor_hub_input_get_attribute_info(hsdev,
-			HID_FEATURE_REPORT, usage_id,
-			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
-			HID_USAGE_SENSOR_HUMAN_PRESENCE,
-			&st->common_attributes.sensitivity);
-
 	return ret;
 }
 
@@ -260,6 +259,7 @@ static int hid_prox_probe(struct platform_device *pdev)
 	struct iio_dev *indio_dev;
 	struct prox_state *prox_state;
 	struct hid_sensor_hub_device *hsdev = pdev->dev.platform_data;
+	struct iio_chan_spec *channels;
 
 	indio_dev = devm_iio_device_alloc(&pdev->dev,
 				sizeof(struct prox_state));
@@ -278,22 +278,22 @@ static int hid_prox_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	indio_dev->channels = kmemdup(prox_channels, sizeof(prox_channels),
-				      GFP_KERNEL);
-	if (!indio_dev->channels) {
+	channels = kmemdup(prox_channels, sizeof(prox_channels), GFP_KERNEL);
+	if (!channels) {
 		dev_err(&pdev->dev, "failed to duplicate channels\n");
 		return -ENOMEM;
 	}
 
-	ret = prox_parse_report(pdev, hsdev,
-				(struct iio_chan_spec *)indio_dev->channels,
+	ret = prox_parse_report(pdev, hsdev, channels,
 				HID_USAGE_SENSOR_PROX, prox_state);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to setup attributes\n");
 		goto error_free_dev_mem;
 	}
 
-	indio_dev->num_channels = ARRAY_SIZE(prox_channels);
+	indio_dev->channels = channels;
+	indio_dev->num_channels =
+				ARRAY_SIZE(prox_channels);
 	indio_dev->dev.parent = &pdev->dev;
 	indio_dev->info = &prox_info;
 	indio_dev->name = name;
@@ -358,7 +358,7 @@ static int hid_prox_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct platform_device_id hid_prox_ids[] = {
+static struct platform_device_id hid_prox_ids[] = {
 	{
 		/* Format: HID-SENSOR-usage_id_in_hex_lowercase */
 		.name = "HID-SENSOR-200011",
@@ -371,7 +371,6 @@ static struct platform_driver hid_prox_platform_driver = {
 	.id_table = hid_prox_ids,
 	.driver = {
 		.name	= KBUILD_MODNAME,
-		.pm	= &hid_sensor_pm_ops,
 	},
 	.probe		= hid_prox_probe,
 	.remove		= hid_prox_remove,

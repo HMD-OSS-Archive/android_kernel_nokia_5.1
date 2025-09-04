@@ -328,16 +328,16 @@ static int mc13783_set_tdm_slot_dac(struct snd_soc_dai *dai,
 	}
 
 	switch (rx_mask) {
-	case 0x03:
+	case 0xfffffffc:
 		val |= SSI_NETWORK_DAC_RXSLOT_0_1;
 		break;
-	case 0x0c:
+	case 0xfffffff3:
 		val |= SSI_NETWORK_DAC_RXSLOT_2_3;
 		break;
-	case 0x30:
+	case 0xffffffcf:
 		val |= SSI_NETWORK_DAC_RXSLOT_4_5;
 		break;
-	case 0xc0:
+	case 0xffffff3f:
 		val |= SSI_NETWORK_DAC_RXSLOT_6_7;
 		break;
 	default:
@@ -360,7 +360,7 @@ static int mc13783_set_tdm_slot_codec(struct snd_soc_dai *dai,
 	if (slots != 4)
 		return -EINVAL;
 
-	if (tx_mask != 0x3)
+	if (tx_mask != 0xfffffffc)
 		return -EINVAL;
 
 	val |= (0x00 << 2);	/* primary timeslot RX/TX(?) is 0 */
@@ -650,14 +650,14 @@ static int mc13783_remove(struct snd_soc_codec *codec)
 #define MC13783_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
 	SNDRV_PCM_FMTBIT_S24_LE)
 
-static const struct snd_soc_dai_ops mc13783_ops_dac = {
+static struct snd_soc_dai_ops mc13783_ops_dac = {
 	.hw_params	= mc13783_pcm_hw_params_dac,
 	.set_fmt	= mc13783_set_fmt_async,
 	.set_sysclk	= mc13783_set_sysclk_dac,
 	.set_tdm_slot	= mc13783_set_tdm_slot_dac,
 };
 
-static const struct snd_soc_dai_ops mc13783_ops_codec = {
+static struct snd_soc_dai_ops mc13783_ops_codec = {
 	.hw_params	= mc13783_pcm_hw_params_codec,
 	.set_fmt	= mc13783_set_fmt_async,
 	.set_sysclk	= mc13783_set_sysclk_codec,
@@ -698,7 +698,7 @@ static struct snd_soc_dai_driver mc13783_dai_async[] = {
 	},
 };
 
-static const struct snd_soc_dai_ops mc13783_ops_sync = {
+static struct snd_soc_dai_ops mc13783_ops_sync = {
 	.hw_params	= mc13783_pcm_hw_params_sync,
 	.set_fmt	= mc13783_set_fmt_sync,
 	.set_sysclk	= mc13783_set_sysclk_sync,
@@ -733,18 +733,16 @@ static struct regmap *mc13783_get_regmap(struct device *dev)
 	return dev_get_regmap(dev->parent, NULL);
 }
 
-static const struct snd_soc_codec_driver soc_codec_dev_mc13783 = {
+static struct snd_soc_codec_driver soc_codec_dev_mc13783 = {
 	.probe		= mc13783_probe,
 	.remove		= mc13783_remove,
 	.get_regmap	= mc13783_get_regmap,
-	.component_driver = {
-		.controls		= mc13783_control_list,
-		.num_controls		= ARRAY_SIZE(mc13783_control_list),
-		.dapm_widgets		= mc13783_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(mc13783_dapm_widgets),
-		.dapm_routes		= mc13783_routes,
-		.num_dapm_routes	= ARRAY_SIZE(mc13783_routes),
-	},
+	.controls	= mc13783_control_list,
+	.num_controls	= ARRAY_SIZE(mc13783_control_list),
+	.dapm_widgets	= mc13783_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(mc13783_dapm_widgets),
+	.dapm_routes	= mc13783_routes,
+	.num_dapm_routes = ARRAY_SIZE(mc13783_routes),
 };
 
 static int __init mc13783_codec_probe(struct platform_device *pdev)
@@ -804,6 +802,7 @@ static int mc13783_codec_remove(struct platform_device *pdev)
 static struct platform_driver mc13783_codec_driver = {
 	.driver = {
 		.name	= "mc13783-codec",
+		.owner	= THIS_MODULE,
 	},
 	.remove = mc13783_codec_remove,
 };

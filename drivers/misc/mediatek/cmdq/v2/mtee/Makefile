@@ -19,6 +19,11 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2 \
 # Enable MET
 ccflags-y += -DMET_USER_EVENT_SUPPORT
 
+# Common Clock Framework
+ifneq ($(CONFIG_MTK_CLKMGR),y)
+ccflags-y += -DCMDQ_USE_CCF
+endif
+
 ifeq ($(CONFIG_MTK_CMDQ_TAB), y)
 ccflags-y += -DCMDQ_USE_LEGACY
 endif
@@ -33,6 +38,8 @@ endif
 	ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/inc/cmdq_sec_dr \
              	 -I$(srctree)/drivers/misc/mediatek/cmdq/v2/inc/cmdq_sec_tl \
 	             -I$(srctree)/drivers/misc/mediatek/mach/$(MTK_PLATFORM)/include \
-                 -I$(srctree)/drivers/misc/mediatek/include/mt-plat/trustzone
+	             -I$(srctree)/include/trustzone
+
 
 obj-y += cmdq_sec.o
+

@@ -31,7 +31,7 @@
 #include <linux/console.h>
 #include <linux/io.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/div64.h>
 
 #ifdef CONFIG_PM
@@ -46,7 +46,7 @@
 static char *fb_mode = "640x480-16@60";
 static unsigned long default_bpp = 16;
 
-static const struct fb_videomode sm501_default_mode = {
+static struct fb_videomode sm501_default_mode = {
 	.refresh	= 60,
 	.xres		= 640,
 	.yres		= 480,
@@ -1607,7 +1607,7 @@ static int sm501fb_start(struct sm501fb_info *info,
 	info->fbmem_len = resource_size(res);
 
 	/* clear framebuffer memory - avoids garbage data on unused fb */
-	memset_io(info->fbmem, 0, info->fbmem_len);
+	memset(info->fbmem, 0, info->fbmem_len);
 
 	/* clear palette ram - undefined at power on */
 	for (k = 0; k < (256 * 3); k++)
@@ -1989,7 +1989,6 @@ static int sm501fb_probe(struct platform_device *pdev)
 	if (info->fb[HEAD_PANEL] == NULL &&
 	    info->fb[HEAD_CRT] == NULL) {
 		dev_err(dev, "no framebuffers found\n");
-		ret = -ENODEV;
 		goto err_alloc;
 	}
 
@@ -2226,6 +2225,7 @@ static struct platform_driver sm501fb_driver = {
 	.resume		= sm501fb_resume,
 	.driver		= {
 		.name	= "sm501-fb",
+		.owner	= THIS_MODULE,
 	},
 };
 

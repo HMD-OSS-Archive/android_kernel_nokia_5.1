@@ -63,7 +63,7 @@ static struct musb_fifo_cfg jz4740_musb_fifo_cfg[] = {
 { .hw_ep_num = 2, .style = FIFO_TX, .maxpacket = 64, },
 };
 
-static const struct musb_hdrc_config jz4740_musb_config = {
+static struct musb_hdrc_config jz4740_musb_config = {
 	/* Silicon does not implement USB OTG. */
 	.multipoint = 0,
 	/* Max EPs scanned, driver will decide which EP can be used. */
@@ -83,9 +83,9 @@ static int jz4740_musb_init(struct musb *musb)
 {
 	usb_phy_generic_register();
 	musb->xceiv = usb_get_phy(USB_PHY_TYPE_USB2);
-	if (IS_ERR(musb->xceiv)) {
+	if (!musb->xceiv) {
 		pr_err("HS UDC: no transceiver configured\n");
-		return PTR_ERR(musb->xceiv);
+		return -ENODEV;
 	}
 
 	/* Silicon does not implement ConfigData register.
@@ -105,13 +105,7 @@ static int jz4740_musb_exit(struct musb *musb)
 	return 0;
 }
 
-/*
- * DMA has not been confirmed to work with CONFIG_USB_INVENTRA_DMA,
- * so let's not set up the dma function pointers yet.
- */
 static const struct musb_platform_ops jz4740_musb_ops = {
-	.quirks		= MUSB_DMA_INVENTRA | MUSB_INDEXED_EP,
-	.fifo_mode	= 2,
 	.init		= jz4740_musb_init,
 	.exit		= jz4740_musb_exit,
 };

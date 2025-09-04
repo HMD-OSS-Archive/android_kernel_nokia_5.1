@@ -95,10 +95,12 @@ static int fnic_slave_alloc(struct scsi_device *sdev)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(sdev));
 
+	sdev->tagged_supported = 1;
+
 	if (!rport || fc_remote_port_chkready(rport))
 		return -ENXIO;
 
-	scsi_change_queue_depth(sdev, fnic_max_qdepth);
+	scsi_activate_tcq(sdev, fnic_max_qdepth);
 	return 0;
 }
 
@@ -106,12 +108,12 @@ static struct scsi_host_template fnic_host_template = {
 	.module = THIS_MODULE,
 	.name = DRV_NAME,
 	.queuecommand = fnic_queuecommand,
-	.eh_timed_out = fc_eh_timed_out,
 	.eh_abort_handler = fnic_abort_cmd,
 	.eh_device_reset_handler = fnic_device_reset,
 	.eh_host_reset_handler = fnic_host_reset,
 	.slave_alloc = fnic_slave_alloc,
-	.change_queue_depth = scsi_change_queue_depth,
+	.change_queue_depth = fc_change_queue_depth,
+	.change_queue_type = fc_change_queue_type,
 	.this_id = -1,
 	.cmd_per_lun = 3,
 	.can_queue = FNIC_DFLT_IO_REQ,
@@ -119,7 +121,6 @@ static struct scsi_host_template fnic_host_template = {
 	.sg_tablesize = FNIC_MAX_SG_DESC_CNT,
 	.max_sectors = 0xffff,
 	.shost_attrs = fnic_attrs,
-	.track_queue_depth = 1,
 };
 
 static void
@@ -176,21 +177,11 @@ static void fnic_get_host_speed(struct Scsi_Host *shost)
 
 	/* Add in other values as they get defined in fw */
 	switch (port_speed) {
-	case DCEM_PORTSPEED_10G:
+	case 10000:
 		fc_host_speed(shost) = FC_PORTSPEED_10GBIT;
 		break;
-	case DCEM_PORTSPEED_25G:
-		fc_host_speed(shost) = FC_PORTSPEED_25GBIT;
-		break;
-	case DCEM_PORTSPEED_40G:
-	case DCEM_PORTSPEED_4x10G:
-		fc_host_speed(shost) = FC_PORTSPEED_40GBIT;
-		break;
-	case DCEM_PORTSPEED_100G:
-		fc_host_speed(shost) = FC_PORTSPEED_100GBIT;
-		break;
 	default:
-		fc_host_speed(shost) = FC_PORTSPEED_UNKNOWN;
+		fc_host_speed(shost) = FC_PORTSPEED_10GBIT;
 		break;
 	}
 }
@@ -447,30 +438,21 @@ static int fnic_dev_wait(struct vnic_dev *vdev,
 	unsigned long time;
 	int done;
 	int err;
-	int count;
-
-	count = 0;
 
 	err = start(vdev, arg);
 	if (err)
 		return err;
 
-	/* Wait for func to complete.
-	* Sometime schedule_timeout_uninterruptible take long time
-	* to wake up so we do not retry as we are only waiting for
-	* 2 seconds in while loop. By adding count, we make sure
-	* we try atleast three times before returning -ETIMEDOUT
-	*/
+	/* Wait for func to complete...2 seconds max */
 	time = jiffies + (HZ * 2);
 	do {
 		err = finished(vdev, &done);
-		count++;
 		if (err)
 			return err;
 		if (done)
 			return 0;
 		schedule_timeout_uninterruptible(HZ / 10);
-	} while (time_after(time, jiffies) || (count < 3));
+	} while (time_after(time, jiffies));
 
 	return -ETIMEDOUT;
 }
@@ -706,6 +688,13 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 					fnic->config.io_throttle_count));
 	}
 	fnic->fnic_max_tag_id = host->can_queue;
+
+	err = scsi_init_shared_tag_map(host, fnic->fnic_max_tag_id);
+	if (err) {
+		shost_printk(KERN_ERR, fnic->lport->host,
+			  "Unable to alloc shared tag map\n");
+		goto err_out_dev_close;
+	}
 
 	host->max_lun = fnic->config.luns_per_tgt;
 	host->max_id = FNIC_MAX_FCP_TARGET;

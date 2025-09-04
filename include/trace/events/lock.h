@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM lock
 
@@ -8,6 +7,60 @@
 #include <linux/lockdep.h>
 #include <linux/tracepoint.h>
 
+#ifdef CONFIG_DEBUG_MUTEXES
+TRACE_EVENT(mutex_contended,
+
+	TP_PROTO(struct mutex *lock, unsigned long ip),
+
+	TP_ARGS(lock, ip),
+
+	TP_STRUCT__entry(
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+		__string(name, lock->dep_map.name)
+#endif
+		__field(void *, lockdep_addr)
+	),
+
+	TP_fast_assign(
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+		__assign_str(name, lock->dep_map.name);
+#endif
+		__entry->lockdep_addr = lock;
+	),
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	TP_printk("%p %s",  __entry->lockdep_addr, __get_str(name))
+#else
+	TP_printk("%p",  __entry->lockdep_addr)
+#endif
+
+);
+
+TRACE_EVENT(mutex_acquired,
+
+	TP_PROTO(struct mutex *lock, unsigned long ip),
+
+	TP_ARGS(lock, ip),
+
+	TP_STRUCT__entry(
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+		__string(name, lock->dep_map.name);
+#endif
+		__field(void *, lockdep_addr)
+	),
+
+	TP_fast_assign(
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+		__assign_str(name, lock->dep_map.name);
+#endif
+		__entry->lockdep_addr = lock;
+	),
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	TP_printk("%p %s",  __entry->lockdep_addr, __get_str(name))
+#else
+	TP_printk("%p",  __entry->lockdep_addr)
+#endif
+);
+#endif
 #ifdef CONFIG_LOCKDEP
 
 TRACE_EVENT(lock_acquire,
@@ -79,41 +132,6 @@ DEFINE_EVENT(lock, lock_acquired,
 );
 
 #endif
-
-TRACE_EVENT(lock_dbg,
-
-	TP_PROTO(const char *buf),
-
-	TP_ARGS(buf),
-
-	TP_STRUCT__entry(
-		__string(mbuf, buf)
-	),
-
-	TP_fast_assign(
-		__assign_str(mbuf, buf);
-	),
-
-	TP_printk("%s", __get_str(mbuf))
-);
-
-TRACE_EVENT(lock_monitor_msg,
-
-	TP_PROTO(const char *buf),
-
-	TP_ARGS(buf),
-
-	TP_STRUCT__entry(
-		__string(mbuf, buf)
-	),
-
-	TP_fast_assign(
-		__assign_str(mbuf, buf);
-	),
-
-	TP_printk("%s", __get_str(mbuf))
-);
-
 #endif
 
 #endif /* _TRACE_LOCK_H */

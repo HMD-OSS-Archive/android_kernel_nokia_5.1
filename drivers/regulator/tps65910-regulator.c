@@ -17,7 +17,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/err.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
@@ -1107,20 +1106,12 @@ static int tps65910_probe(struct platform_device *pdev)
 
 	switch (tps65910_chip_id(tps65910)) {
 	case TPS65910:
-		BUILD_BUG_ON(TPS65910_NUM_REGS < ARRAY_SIZE(tps65910_regs));
 		pmic->get_ctrl_reg = &tps65910_get_ctrl_register;
 		pmic->num_regulators = ARRAY_SIZE(tps65910_regs);
 		pmic->ext_sleep_control = tps65910_ext_sleep_control;
 		info = tps65910_regs;
-		/* Work around silicon erratum SWCZ010: output programmed
-		 * voltage level can go higher than expected or crash
-		 * Workaround: use no synchronization of DCDC clocks
-		 */
-		tps65910_reg_clear_bits(pmic->mfd, TPS65910_DCDCCTRL,
-					DCDCCTRL_DCDCCKSYNC_MASK);
 		break;
 	case TPS65911:
-		BUILD_BUG_ON(TPS65910_NUM_REGS < ARRAY_SIZE(tps65911_regs));
 		pmic->get_ctrl_reg = &tps65911_get_ctrl_register;
 		pmic->num_regulators = ARRAY_SIZE(tps65911_regs);
 		pmic->ext_sleep_control = tps65911_ext_sleep_control;
@@ -1146,7 +1137,8 @@ static int tps65910_probe(struct platform_device *pdev)
 	if (!pmic->rdev)
 		return -ENOMEM;
 
-	for (i = 0; i < pmic->num_regulators; i++, info++) {
+	for (i = 0; i < pmic->num_regulators && i < TPS65910_NUM_REGS;
+			i++, info++) {
 		/* Register the regulators */
 		pmic->info[i] = info;
 
@@ -1253,6 +1245,7 @@ static void tps65910_shutdown(struct platform_device *pdev)
 static struct platform_driver tps65910_driver = {
 	.driver = {
 		.name = "tps65910-pmic",
+		.owner = THIS_MODULE,
 	},
 	.probe = tps65910_probe,
 	.shutdown = tps65910_shutdown,

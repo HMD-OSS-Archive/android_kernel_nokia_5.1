@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Definitions and wrapper functions for kernel decompressor
  *
@@ -7,9 +6,8 @@
  * Author(s): Martin Schwidefsky <schwidefsky@de.ibm.com>
  */
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/page.h>
-#include <asm/sclp.h>
 #include <asm/ipl.h>
 #include "sizes.h"
 
@@ -65,9 +63,11 @@ static unsigned long free_mem_end_ptr;
 #include "../../../../lib/decompress_unxz.c"
 #endif
 
+extern _sclp_print_early(const char *);
+
 static int puts(const char *s)
 {
-	sclp_early_printk(s);
+	_sclp_print_early(s);
 	return 0;
 }
 
@@ -171,7 +171,7 @@ unsigned long decompress_kernel(void)
 	free_mem_end_ptr = free_mem_ptr + HEAP_SIZE;
 
 	puts("Uncompressing Linux... ");
-	__decompress(input_data, input_len, NULL, NULL, output, 0, NULL, error);
+	decompress(input_data, input_len, NULL, NULL, output, NULL, error);
 	puts("Ok, booting the kernel.\n");
 	return (unsigned long) output;
 }

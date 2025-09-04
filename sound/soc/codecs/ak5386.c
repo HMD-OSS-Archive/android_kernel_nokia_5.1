@@ -69,17 +69,15 @@ static int ak5386_soc_resume(struct snd_soc_codec *codec)
 #define ak5386_soc_resume	NULL
 #endif /* CONFIG_PM */
 
-static const struct snd_soc_codec_driver soc_codec_ak5386 = {
+static struct snd_soc_codec_driver soc_codec_ak5386 = {
 	.probe = ak5386_soc_probe,
 	.remove = ak5386_soc_remove,
 	.suspend = ak5386_soc_suspend,
 	.resume = ak5386_soc_resume,
-	.component_driver = {
-		.dapm_widgets		= ak5386_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(ak5386_dapm_widgets),
-		.dapm_routes		= ak5386_dapm_routes,
-		.num_dapm_routes	= ARRAY_SIZE(ak5386_dapm_routes),
-	},
+	.dapm_widgets = ak5386_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(ak5386_dapm_widgets),
+	.dapm_routes = ak5386_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(ak5386_dapm_routes),
 };
 
 static int ak5386_set_dai_fmt(struct snd_soc_dai *codec_dai,
@@ -207,6 +205,7 @@ static struct platform_driver ak5386_driver = {
 	.remove		= ak5386_remove,
 	.driver		= {
 		.name	= "ak5386",
+		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(ak5386_dt_ids),
 	},
 };

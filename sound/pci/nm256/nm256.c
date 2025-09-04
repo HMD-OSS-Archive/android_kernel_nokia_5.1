@@ -24,7 +24,7 @@
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
   
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
@@ -398,10 +398,10 @@ snd_nm256_load_coefficient(struct nm256 *chip, int stream, int number)
 
 
 /* The actual rates supported by the card. */
-static const unsigned int samplerates[8] = {
+static unsigned int samplerates[8] = {
 	8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000,
 };
-static const struct snd_pcm_hw_constraint_list constraints_rates = {
+static struct snd_pcm_hw_constraint_list constraints_rates = {
 	.count = ARRAY_SIZE(samplerates), 
 	.list = samplerates,
 	.mask = 0,
@@ -695,37 +695,31 @@ snd_nm256_capture_pointer(struct snd_pcm_substream *substream)
  */
 static int
 snd_nm256_playback_silence(struct snd_pcm_substream *substream,
-			   int channel, unsigned long pos, unsigned long count)
+			   int channel, /* not used (interleaved data) */
+			   snd_pcm_uframes_t pos,
+			   snd_pcm_uframes_t count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct nm256_stream *s = runtime->private_data;
-
+	count = frames_to_bytes(runtime, count);
+	pos = frames_to_bytes(runtime, pos);
 	memset_io(s->bufptr + pos, 0, count);
 	return 0;
 }
 
 static int
 snd_nm256_playback_copy(struct snd_pcm_substream *substream,
-			int channel, unsigned long pos,
-			void __user *src, unsigned long count)
+			int channel, /* not used (interleaved data) */
+			snd_pcm_uframes_t pos,
+			void __user *src,
+			snd_pcm_uframes_t count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct nm256_stream *s = runtime->private_data;
-
+	count = frames_to_bytes(runtime, count);
+	pos = frames_to_bytes(runtime, pos);
 	if (copy_from_user_toio(s->bufptr + pos, src, count))
 		return -EFAULT;
-	return 0;
-}
-
-static int
-snd_nm256_playback_copy_kernel(struct snd_pcm_substream *substream,
-			       int channel, unsigned long pos,
-			       void *src, unsigned long count)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct nm256_stream *s = runtime->private_data;
-
-	memcpy_toio(s->bufptr + pos, src, count);
 	return 0;
 }
 
@@ -734,26 +728,17 @@ snd_nm256_playback_copy_kernel(struct snd_pcm_substream *substream,
  */
 static int
 snd_nm256_capture_copy(struct snd_pcm_substream *substream,
-		       int channel, unsigned long pos,
-		       void __user *dst, unsigned long count)
+		       int channel, /* not used (interleaved data) */
+		       snd_pcm_uframes_t pos,
+		       void __user *dst,
+		       snd_pcm_uframes_t count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct nm256_stream *s = runtime->private_data;
-
+	count = frames_to_bytes(runtime, count);
+	pos = frames_to_bytes(runtime, pos);
 	if (copy_to_user_fromio(dst, s->bufptr + pos, count))
 		return -EFAULT;
-	return 0;
-}
-
-static int
-snd_nm256_capture_copy_kernel(struct snd_pcm_substream *substream,
-			      int channel, unsigned long pos,
-			      void *dst, unsigned long count)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct nm256_stream *s = runtime->private_data;
-
-	memcpy_fromio(dst, s->bufptr + pos, count);
 	return 0;
 }
 
@@ -917,7 +902,7 @@ snd_nm256_capture_close(struct snd_pcm_substream *substream)
 /*
  * create a pcm instance
  */
-static const struct snd_pcm_ops snd_nm256_playback_ops = {
+static struct snd_pcm_ops snd_nm256_playback_ops = {
 	.open =		snd_nm256_playback_open,
 	.close =	snd_nm256_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -926,14 +911,13 @@ static const struct snd_pcm_ops snd_nm256_playback_ops = {
 	.trigger =	snd_nm256_playback_trigger,
 	.pointer =	snd_nm256_playback_pointer,
 #ifndef __i386__
-	.copy_user =	snd_nm256_playback_copy,
-	.copy_kernel =	snd_nm256_playback_copy_kernel,
-	.fill_silence =	snd_nm256_playback_silence,
+	.copy =		snd_nm256_playback_copy,
+	.silence =	snd_nm256_playback_silence,
 #endif
 	.mmap =		snd_pcm_lib_mmap_iomem,
 };
 
-static const struct snd_pcm_ops snd_nm256_capture_ops = {
+static struct snd_pcm_ops snd_nm256_capture_ops = {
 	.open =		snd_nm256_capture_open,
 	.close =	snd_nm256_capture_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -942,8 +926,7 @@ static const struct snd_pcm_ops snd_nm256_capture_ops = {
 	.trigger =	snd_nm256_capture_trigger,
 	.pointer =	snd_nm256_capture_pointer,
 #ifndef __i386__
-	.copy_user =	snd_nm256_capture_copy,
-	.copy_kernel =	snd_nm256_capture_copy_kernel,
+	.copy =		snd_nm256_capture_copy,
 #endif
 	.mmap =		snd_pcm_lib_mmap_iomem,
 };
@@ -1271,7 +1254,7 @@ snd_nm256_ac97_write(struct snd_ac97 *ac97,
 }
 
 /* static resolution table */
-static const struct snd_ac97_res_table nm256_res_table[] = {
+static struct snd_ac97_res_table nm256_res_table[] = {
 	{ AC97_MASTER, 0x1f1f },
 	{ AC97_HEADPHONE, 0x1f1f },
 	{ AC97_MASTER_MONO, 0x001f },
@@ -1409,6 +1392,7 @@ snd_nm256_peek_for_sig(struct nm256 *chip)
  */
 static int nm256_suspend(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct nm256 *chip = card->private_data;
 
@@ -1416,17 +1400,30 @@ static int nm256_suspend(struct device *dev)
 	snd_pcm_suspend_all(chip->pcm);
 	snd_ac97_suspend(chip->ac97);
 	chip->coeffs_current = 0;
+	pci_disable_device(pci);
+	pci_save_state(pci);
+	pci_set_power_state(pci, PCI_D3hot);
 	return 0;
 }
 
 static int nm256_resume(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct nm256 *chip = card->private_data;
 	int i;
 
 	/* Perform a full reset on the hardware */
 	chip->in_resume = 1;
+
+	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		dev_err(dev, "pci_enable_device failed, disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+	pci_set_master(pci);
 
 	snd_nm256_init_chip(chip);
 
@@ -1463,8 +1460,10 @@ static int snd_nm256_free(struct nm256 *chip)
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
 
-	iounmap(chip->cport);
-	iounmap(chip->buffer);
+	if (chip->cport)
+		iounmap(chip->cport);
+	if (chip->buffer)
+		iounmap(chip->buffer);
 	release_and_free_resource(chip->res_cport);
 	release_and_free_resource(chip->res_buffer);
 

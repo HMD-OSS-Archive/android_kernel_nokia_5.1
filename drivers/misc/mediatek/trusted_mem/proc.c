@@ -35,10 +35,13 @@
 #include "private/tmem_error.h"
 #include "private/tmem_utils.h"
 #include "private/tmem_priv.h"
-#include "private/tmem_entry.h"
+#include "private/ut_entry.h"
+#if defined(CONFIG_MTK_SECURE_MEM_SUPPORT)
+#include "private/secmem_ext.h"
+#endif
 
+#include "private/ut_tests.h"
 #include "private/ut_cmd.h"
-#include "tee_impl/tee_invoke.h"
 
 static int tmem_open(struct inode *inode, struct file *file)
 {
@@ -96,20 +99,6 @@ static unsigned int get_ion_heap_mask_id(enum TRUSTED_MEM_TYPE mem_type)
 	switch (mem_type) {
 	case TRUSTED_MEM_SVP:
 		return ION_HEAP_MULTIMEDIA_SEC_MASK;
-	case TRUSTED_MEM_PROT:
-		return ION_HEAP_MULTIMEDIA_PROT_MASK;
-	case TRUSTED_MEM_WFD:
-		return ION_HEAP_MULTIMEDIA_WFD_MASK;
-	case TRUSTED_MEM_2D_FR:
-		return ION_HEAP_MULTIMEDIA_2D_FR_MASK;
-	case TRUSTED_MEM_HAPP:
-		return ION_HEAP_MULTIMEDIA_HAPP_MASK;
-	case TRUSTED_MEM_HAPP_EXTRA:
-		return ION_HEAP_MULTIMEDIA_HAPP_EXTRA_MASK;
-	case TRUSTED_MEM_SDSP:
-		return ION_HEAP_MULTIMEDIA_SDSP_MASK;
-	case TRUSTED_MEM_SDSP_SHARED:
-		return ION_HEAP_MULTIMEDIA_SDSP_SHARED_MASK;
 	default:
 		return ION_HEAP_MULTIMEDIA_SEC_MASK;
 	}
@@ -266,19 +255,6 @@ static void trusted_mem_manual_cmd_invoke(u64 cmd, u64 param1, u64 param2,
 		secmem_svp_dump_info();
 #endif
 		break;
-	case TMEM_SECMEM_FR_DUMP_INFO:
-		pr_info("TMEM_SECMEM_FR_DUMP_INFO\n");
-#if defined(CONFIG_MTK_SECURE_MEM_SUPPORT)                                     \
-	&& defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
-		secmem_fr_dump_info();
-#endif
-		break;
-	case TMEM_SECMEM_WFD_DUMP_INFO:
-		pr_info("TMEM_SECMEM_WFD_DUMP_INFO\n");
-#if defined(CONFIG_MTK_WFD_SMEM_SUPPORT)
-		wfd_smem_dump_info();
-#endif
-		break;
 	case TMEM_SECMEM_DYNAMIC_DEBUG_ENABLE:
 		pr_info("TMEM_SECMEM_DYNAMIC_DEBUG_ENABLE\n");
 #if defined(CONFIG_MTK_SECURE_MEM_SUPPORT)
@@ -346,13 +322,15 @@ static void trusted_mem_create_proc_entry(void)
 	proc_create("tmem0", 0664, NULL, &tmem_fops);
 }
 
-#ifdef TCORE_UT_TESTS_SUPPORT
-#ifdef CONFIG_MTK_ENG_BUILD
-#define UT_MULTITHREAD_TEST_DEFAULT_WAIT_COMPLETION_TIMEOUT_MS (900000)
+#ifdef TCORE_UT_FWK_SUPPORT
+#ifdef CONFIG_MT_ENG_BUILD
+#define UT_MULTITHREAD_TEST_DEFAULT_WAIT_COMPLETION_TIMEOUT_MS (300000)
+#define UT_SATURATION_STRESS_ROUNDS (1)
 #define UT_SATURATION_STRESS_PMEM_MIN_CHUNK_SIZE (SIZE_8M)
 #else
 #define UT_MULTITHREAD_TEST_DEFAULT_WAIT_COMPLETION_TIMEOUT_MS (5000)
-#define UT_SATURATION_STRESS_PMEM_MIN_CHUNK_SIZE (SIZE_2M)
+#define UT_SATURATION_STRESS_ROUNDS (5)
+#define UT_SATURATION_STRESS_PMEM_MIN_CHUNK_SIZE (SIZE_4K)
 #endif
 
 static unsigned int ut_multithread_wait_completion_timeout_ms =
@@ -366,6 +344,16 @@ module_param_named(wait_comp_ms, ut_multithread_wait_completion_timeout_ms,
 		   uint, 0644);
 MODULE_PARM_DESC(ut_multithread_wait_completion_timeout_ms,
 		 "set wait completion timeout in ms for multithread UT tests");
+
+static unsigned int ut_saturation_stress_rounds = UT_SATURATION_STRESS_ROUNDS;
+int get_saturation_stress_test_rounds(void)
+{
+	return ut_saturation_stress_rounds;
+}
+
+module_param_named(stress_rounds, ut_saturation_stress_rounds, uint, 0644);
+MODULE_PARM_DESC(ut_saturation_stress_rounds,
+		 "set rounds in ms for saturation stress tests");
 
 static unsigned int ut_saturation_stress_pmem_min_chunk_size =
 	UT_SATURATION_STRESS_PMEM_MIN_CHUNK_SIZE;

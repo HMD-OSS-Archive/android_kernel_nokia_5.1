@@ -56,7 +56,7 @@ static int edb93xx_hw_params(struct snd_pcm_substream *substream,
 				      SND_SOC_CLOCK_OUT);
 }
 
-static const struct snd_soc_ops edb93xx_ops = {
+static struct snd_soc_ops edb93xx_ops = {
 	.hw_params	= edb93xx_hw_params,
 };
 
@@ -113,6 +113,7 @@ static int edb93xx_remove(struct platform_device *pdev)
 static struct platform_driver edb93xx_driver = {
 	.driver		= {
 		.name	= "edb93xx-audio",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= edb93xx_probe,
 	.remove		= edb93xx_remove,

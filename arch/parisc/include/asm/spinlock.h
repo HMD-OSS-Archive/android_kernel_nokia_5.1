@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SPINLOCK_H
 #define __ASM_SPINLOCK_H
 
@@ -14,12 +13,15 @@ static inline int arch_spin_is_locked(arch_spinlock_t *x)
 }
 
 #define arch_spin_lock(lock) arch_spin_lock_flags(lock, 0)
+#define arch_spin_unlock_wait(x) \
+		do { cpu_relax(); } while (arch_spin_is_locked(x))
 
 static inline void arch_spin_lock_flags(arch_spinlock_t *x,
 					 unsigned long flags)
 {
 	volatile unsigned int *a;
 
+	mb();
 	a = __ldcw_align(x);
 	while (__ldcw(a) == 0)
 		while (*a == 0)
@@ -29,15 +31,16 @@ static inline void arch_spin_lock_flags(arch_spinlock_t *x,
 				local_irq_disable();
 			} else
 				cpu_relax();
+	mb();
 }
 
 static inline void arch_spin_unlock(arch_spinlock_t *x)
 {
 	volatile unsigned int *a;
-
-	a = __ldcw_align(x);
 	mb();
+	a = __ldcw_align(x);
 	*a = 1;
+	mb();
 }
 
 static inline int arch_spin_trylock(arch_spinlock_t *x)
@@ -45,8 +48,10 @@ static inline int arch_spin_trylock(arch_spinlock_t *x)
 	volatile unsigned int *a;
 	int ret;
 
+	mb();
 	a = __ldcw_align(x);
         ret = __ldcw(a) != 0;
+	mb();
 
 	return ret;
 }

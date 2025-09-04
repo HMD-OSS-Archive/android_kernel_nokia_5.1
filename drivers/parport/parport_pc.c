@@ -44,7 +44,7 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
@@ -902,7 +902,7 @@ static size_t parport_pc_ecp_write_block_pio(struct parport *port,
  *	******************************************
  */
 
-/* GCC is not inlining extern inline function later overwritten to non-inline,
+/* GCC is not inlining extern inline function later overwriten to non-inline,
    so we use outlined_ variants here.  */
 static const struct parport_operations parport_pc_ops = {
 	.write_data	= parport_pc_write_data,
@@ -1083,9 +1083,9 @@ static void show_parconfig_winbond(int io, int key)
 		printk(KERN_INFO "Winbond LPT Config: active=%s, io=0x%02x%02x irq=%d, ",
 		       (cr30 & 0x01) ? "yes" : "no", cr60, cr61, cr70 & 0x0f);
 		if ((cr74 & 0x07) > 3)
-			pr_cont("dma=none\n");
+			printk("dma=none\n");
 		else
-			pr_cont("dma=%d\n", cr74 & 0x07);
+			printk("dma=%d\n", cr74 & 0x07);
 		printk(KERN_INFO
 		    "Winbond LPT Config: irqtype=%s, ECP fifo threshold=%d\n",
 					irqtypes[crf0>>7], (crf0>>3)&0x0f);
@@ -1377,7 +1377,7 @@ static struct superio_struct *find_superio(struct parport *p)
 {
 	int i;
 	for (i = 0; i < NR_SUPERIOS; i++)
-		if (superios[i].io == p->base)
+		if (superios[i].io != p->base)
 			return &superios[i];
 	return NULL;
 }
@@ -1685,14 +1685,14 @@ static int parport_ECP_supported(struct parport *pb)
 			pb->base, config, configb);
 		printk(KERN_DEBUG "0x%lx: ECP settings irq=", pb->base);
 		if ((configb >> 3) & 0x07)
-			pr_cont("%d", intrline[(configb >> 3) & 0x07]);
+			printk("%d", intrline[(configb >> 3) & 0x07]);
 		else
-			pr_cont("<none or set by other means>");
-		pr_cont(" dma=");
+			printk("<none or set by other means>");
+		printk(" dma=");
 		if ((configb & 0x03) == 0x00)
-			pr_cont("<none or set by other means>\n");
+			printk("<none or set by other means>\n");
 		else
-			pr_cont("%d\n", configb & 0x07);
+			printk("%d\n", configb & 0x07);
 	}
 
 	/* Go back to mode 000 */
@@ -2255,7 +2255,7 @@ out5:
 		release_region(base+0x3, 5);
 	release_region(base, 3);
 out4:
-	parport_del_port(p);
+	parport_put_port(p);
 out3:
 	kfree(priv);
 out2:
@@ -2294,7 +2294,7 @@ void parport_pc_unregister_port(struct parport *p)
 				    priv->dma_handle);
 #endif
 	kfree(p->private_data);
-	parport_del_port(p);
+	parport_put_port(p);
 	kfree(ops); /* hope no-one cached it */
 }
 EXPORT_SYMBOL(parport_pc_unregister_port);
@@ -2399,8 +2399,8 @@ static int sio_ite_8872_probe(struct pci_dev *pdev, int autoirq, int autodma,
 			"parport_pc: ITE 8872 parallel port: io=0x%X",
 								ite8872_lpt);
 		if (irq != PARPORT_IRQ_NONE)
-			pr_cont(", irq=%d", irq);
-		pr_cont("\n");
+			printk(", irq=%d", irq);
+		printk("\n");
 		return 1;
 	}
 
@@ -2581,10 +2581,10 @@ static int sio_via_probe(struct pci_dev *pdev, int autoirq, int autodma,
 		printk(KERN_INFO
 			"parport_pc: VIA parallel port: io=0x%X", port1);
 		if (irq != PARPORT_IRQ_NONE)
-			pr_cont(", irq=%d", irq);
+			printk(", irq=%d", irq);
 		if (dma != PARPORT_DMA_NONE)
-			pr_cont(", dma=%d", dma);
-		pr_cont("\n");
+			printk(", dma=%d", dma);
+		printk("\n");
 		return 1;
 	}
 
@@ -3015,6 +3015,7 @@ static int parport_pc_platform_probe(struct platform_device *pdev)
 
 static struct platform_driver parport_pc_platform_driver = {
 	.driver = {
+		.owner	= THIS_MODULE,
 		.name	= "parport_pc",
 	},
 	.probe		= parport_pc_platform_probe,
@@ -3154,13 +3155,13 @@ static char *irq[PARPORT_PC_MAX_PORTS];
 static char *dma[PARPORT_PC_MAX_PORTS];
 
 MODULE_PARM_DESC(io, "Base I/O address (SPP regs)");
-module_param_hw_array(io, int, ioport, NULL, 0);
+module_param_array(io, int, NULL, 0);
 MODULE_PARM_DESC(io_hi, "Base I/O address (ECR)");
-module_param_hw_array(io_hi, int, ioport, NULL, 0);
+module_param_array(io_hi, int, NULL, 0);
 MODULE_PARM_DESC(irq, "IRQ line");
-module_param_hw_array(irq, charp, irq, NULL, 0);
+module_param_array(irq, charp, NULL, 0);
 MODULE_PARM_DESC(dma, "DMA channel");
-module_param_hw_array(dma, charp, dma, NULL, 0);
+module_param_array(dma, charp, NULL, 0);
 #if defined(CONFIG_PARPORT_PC_SUPERIO) || \
        (defined(CONFIG_PARPORT_1284) && defined(CONFIG_PARPORT_PC_FIFO))
 MODULE_PARM_DESC(verbose_probing, "Log chit-chat during initialisation");
@@ -3343,14 +3344,13 @@ static void __exit parport_pc_exit(void)
 	while (!list_empty(&ports_list)) {
 		struct parport_pc_private *priv;
 		struct parport *port;
-		struct device *dev;
 		priv = list_entry(ports_list.next,
 				  struct parport_pc_private, list);
 		port = priv->port;
-		dev = port->dev;
+		if (port->dev && port->dev->bus == &platform_bus_type)
+			platform_device_unregister(
+				to_platform_device(port->dev));
 		parport_pc_unregister_port(port);
-		if (dev && dev->bus == &platform_bus_type)
-			platform_device_unregister(to_platform_device(dev));
 	}
 }
 

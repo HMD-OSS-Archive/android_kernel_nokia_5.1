@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * rtrap.S: Preparing for return from trap on Sparc V9.
  *
@@ -30,7 +29,6 @@ __handle_preemption:
 		 wrpr			%g0, RTRAP_PSTATE_IRQOFF, %pstate
 
 __handle_user_windows:
-		add			%sp, PTREGS_OFF, %o0
 		call			fault_in_user_windows
 		 wrpr			%g0, RTRAP_PSTATE, %pstate
 		ba,pt			%xcc, __handle_preemption_continue
@@ -71,13 +69,7 @@ rtrap_nmi:	ldx			[%sp + PTREGS_OFF + PT_V9_TSTATE], %l1
 		andn			%l1, %l4, %l1
 		srl			%l4, 20, %l4
 		ba,pt			%xcc, rtrap_no_irq_enable
-		nop
-		/* Do not actually set the %pil here.  We will do that
-		 * below after we clear PSTATE_IE in the %pstate register.
-		 * If we re-enable interrupts here, we can recurse down
-		 * the hardirq stack potentially endlessly, causing a
-		 * stack overflow.
-		 */
+		 wrpr			%l4, %pil
 
 		.align			64
 		.globl			rtrap_irq, rtrap, irqsz_patchme, rtrap_xcall
@@ -226,19 +218,10 @@ rt_continue:	ldx			[%sp + PTREGS_OFF + PT_V9_G1], %g1
 		rdpr			%otherwin, %l2
 		srl			%l1, 3, %l1
 
-661:		wrpr			%l2, %g0, %canrestore
-		.section		.fast_win_ctrl_1insn_patch, "ax"
-		.word			661b
-		.word			0x89880000	! normalw
-		.previous
-
+		wrpr			%l2, %g0, %canrestore
 		wrpr			%l1, %g0, %wstate
 		brnz,pt			%l2, user_rtt_restore
-661:		 wrpr			%g0, %g0, %otherwin
-		.section		.fast_win_ctrl_1insn_patch, "ax"
-		.word			661b
-		 nop
-		.previous
+		 wrpr			%g0, %g0, %otherwin
 
 		ldx			[%g6 + TI_FLAGS], %g3
 		wr			%g0, ASI_AIUP, %asi
@@ -248,7 +231,6 @@ rt_continue:	ldx			[%sp + PTREGS_OFF + PT_V9_G1], %g1
 		bne,pt			%xcc, user_rtt_fill_32bit
 		 wrpr			%g1, %cwp
 		ba,a,pt			%xcc, user_rtt_fill_64bit
-		 nop
 
 user_rtt_fill_fixup_dax:
 		ba,pt	%xcc, user_rtt_fill_fixup_common

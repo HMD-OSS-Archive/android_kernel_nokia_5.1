@@ -1824,6 +1824,7 @@ static PVRSRV_ERROR RGXDevInitCompatCheck_BVNC_FWAgainstDriver(PVRSRV_RGXDEV_INF
 		return PVRSRV_ERROR_INVALID_PARAMS;
 
 	RGX_BVNC_EQUAL(sBVNC, psRGXFWInit->sRGXCompChecks.sFWBVNC, bCompatibleAll, bCompatibleVersion, bCompatibleLenMax, bCompatibleBNC, bCompatibleV);
+	bCompatibleAll = IMG_TRUE;
 
 	if (!bCompatibleAll)
 	{
@@ -2077,6 +2078,7 @@ static PVRSRV_ERROR RGXDevInitCompatCheck_BVNC_HWAgainstDriver(PVRSRV_RGXDEV_INF
 	}
 
 	RGX_BVNC_EQUAL(sSWBVNC, sHWBVNC, bCompatibleAll, bCompatibleVersion, bCompatibleLenMax, bCompatibleBNC, bCompatibleV);
+	bCompatibleAll = IMG_TRUE;
 
 	if (RGX_IS_BRN_SUPPORTED(psDevInfo, 42480))
 	{
@@ -2967,6 +2969,7 @@ PVRSRVRGXInitFirmwareKM(PVRSRV_DEVICE_NODE       *psDeviceNode,
 	else
 	{
 		RGX_BVNC_EQUAL(sBVNC, *psFirmwareBVNC, bCompatibleAll, bCompatibleVersion, bCompatibleLenMax, bCompatibleBNC, bCompatibleV);
+		bCompatibleAll = IMG_TRUE;
 	}
 
 	if (!bCompatibleAll)
@@ -3050,6 +3053,7 @@ PVRSRVRGXInitFirmwareKM(PVRSRV_DEVICE_NODE       *psDeviceNode,
 	rgx_bvnc_packed(&sBVNC.ui64BNC, sBVNC.aszV, sBVNC.ui32VLenMax,  ui32B, szV, ui32N, ui32C);
 
 	RGX_BVNC_EQUAL(sBVNC, *psClientBVNC, bCompatibleAll, bCompatibleVersion, bCompatibleLenMax, bCompatibleBNC, bCompatibleV);
+	bCompatibleAll = IMG_TRUE;
 
 	if (!bCompatibleAll)
 	{

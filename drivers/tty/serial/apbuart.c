@@ -325,7 +325,7 @@ static int apbuart_verify_port(struct uart_port *port,
 	return ret;
 }
 
-static const struct uart_ops grlib_apbuart_ops = {
+static struct uart_ops grlib_apbuart_ops = {
 	.tx_empty = apbuart_tx_empty,
 	.set_mctrl = apbuart_set_mctrl,
 	.get_mctrl = apbuart_get_mctrl,
@@ -572,7 +572,7 @@ static int apbuart_probe(struct platform_device *op)
 	return 0;
 }
 
-static const struct of_device_id apbuart_match[] = {
+static struct of_device_id apbuart_match[] = {
 	{
 	 .name = "GAISLER_APBUART",
 	 },
@@ -581,11 +581,11 @@ static const struct of_device_id apbuart_match[] = {
 	 },
 	{},
 };
-MODULE_DEVICE_TABLE(of, apbuart_match);
 
 static struct platform_driver grlib_apbuart_of_driver = {
 	.probe = apbuart_probe,
 	.driver = {
+		.owner = THIS_MODULE,
 		.name = "grlib-apbuart",
 		.of_match_table = apbuart_match,
 	},

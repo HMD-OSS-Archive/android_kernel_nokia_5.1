@@ -250,7 +250,7 @@ static int s3c2410ts_probe(struct platform_device *pdev)
 
 	ts.dev = dev;
 
-	info = dev_get_platdata(dev);
+	info = dev_get_platdata(&pdev->dev);
 	if (!info) {
 		dev_err(dev, "no platform data, cannot attach\n");
 		return -EINVAL;
@@ -264,11 +264,7 @@ static int s3c2410ts_probe(struct platform_device *pdev)
 		return -ENOENT;
 	}
 
-	ret = clk_prepare_enable(ts.clock);
-	if (ret) {
-		dev_err(dev, "Failed! to enabled clocks\n");
-		goto err_clk_get;
-	}
+	clk_prepare_enable(ts.clock);
 	dev_dbg(dev, "got and enabled clocks\n");
 
 	ts.irq_tc = ret = platform_get_irq(pdev, 0);
@@ -357,9 +353,7 @@ static int s3c2410ts_probe(struct platform_device *pdev)
  err_iomap:
 	iounmap(ts.io);
  err_clk:
-	clk_disable_unprepare(ts.clock);
 	del_timer_sync(&touch_timer);
- err_clk_get:
 	clk_put(ts.clock);
 	return ret;
 }
@@ -417,7 +411,7 @@ static const struct dev_pm_ops s3c_ts_pmops = {
 };
 #endif
 
-static const struct platform_device_id s3cts_driver_ids[] = {
+static struct platform_device_id s3cts_driver_ids[] = {
 	{ "s3c2410-ts", 0 },
 	{ "s3c2440-ts", 0 },
 	{ "s3c64xx-ts", FEAT_PEN_IRQ },
@@ -428,6 +422,7 @@ MODULE_DEVICE_TABLE(platform, s3cts_driver_ids);
 static struct platform_driver s3c_ts_driver = {
 	.driver         = {
 		.name   = "samsung-ts",
+		.owner  = THIS_MODULE,
 #ifdef CONFIG_PM
 		.pm	= &s3c_ts_pmops,
 #endif

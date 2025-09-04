@@ -61,7 +61,7 @@ static int vexpress_osc_set_rate(struct clk_hw *hw, unsigned long rate,
 	return regmap_write(osc->reg, 0, rate);
 }
 
-static const struct clk_ops vexpress_osc_ops = {
+static struct clk_ops vexpress_osc_ops = {
 	.recalc_rate = vexpress_osc_recalc_rate,
 	.round_rate = vexpress_osc_round_rate,
 	.set_rate = vexpress_osc_set_rate,
@@ -70,6 +70,7 @@ static const struct clk_ops vexpress_osc_ops = {
 
 static int vexpress_osc_probe(struct platform_device *pdev)
 {
+	struct clk_lookup *cl = pdev->dev.platform_data; /* Non-DT lookup */
 	struct clk_init_data init;
 	struct vexpress_osc *osc;
 	struct clk *clk;
@@ -94,7 +95,7 @@ static int vexpress_osc_probe(struct platform_device *pdev)
 		init.name = dev_name(&pdev->dev);
 
 	init.ops = &vexpress_osc_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_ROOT;
 	init.num_parents = 0;
 
 	osc->hw.init = &init;
@@ -105,12 +106,18 @@ static int vexpress_osc_probe(struct platform_device *pdev)
 
 	of_clk_add_provider(pdev->dev.of_node, of_clk_src_simple_get, clk);
 
+	/* Only happens for non-DT cases */
+	if (cl) {
+		cl->clk = clk;
+		clkdev_add(cl);
+	}
+
 	dev_dbg(&pdev->dev, "Registered clock '%s'\n", init.name);
 
 	return 0;
 }
 
-static const struct of_device_id vexpress_osc_of_match[] = {
+static struct of_device_id vexpress_osc_of_match[] = {
 	{ .compatible = "arm,vexpress-osc", },
 	{}
 };

@@ -118,10 +118,12 @@ static int init_div_table(void)
 	unsigned int tmp, clk_div, ema_div, freq, volt_id;
 	struct dev_pm_opp *opp;
 
+	rcu_read_lock();
 	cpufreq_for_each_entry(pos, freq_tbl) {
 		opp = dev_pm_opp_find_freq_exact(dvfs_info->dev,
 					pos->frequency * 1000, true);
 		if (IS_ERR(opp)) {
+			rcu_read_unlock();
 			dev_err(dvfs_info->dev,
 				"failed to find valid OPP for %u KHZ\n",
 				pos->frequency);
@@ -138,7 +140,6 @@ static int init_div_table(void)
 
 		/* Calculate EMA */
 		volt_id = dev_pm_opp_get_voltage(opp);
-
 		volt_id = (MAX_VOLTAGE - volt_id) / VOLTAGE_STEP;
 		if (volt_id < PMIC_HIGH_VOLT) {
 			ema_div = (CPUEMA_HIGH << P0_7_CPUEMA_SHIFT) |
@@ -156,9 +157,9 @@ static int init_div_table(void)
 
 		__raw_writel(tmp, dvfs_info->base + XMU_PMU_P0_7 + 4 *
 						(pos - freq_tbl));
-		dev_pm_opp_put(opp);
 	}
 
+	rcu_read_unlock();
 	return 0;
 }
 
@@ -173,12 +174,12 @@ static void exynos_enable_dvfs(unsigned int cur_frequency)
 	/* Enable PSTATE Change Event */
 	tmp = __raw_readl(dvfs_info->base + XMU_PMUEVTEN);
 	tmp |= (1 << PSTATE_CHANGED_EVTEN_SHIFT);
-	__raw_writel(tmp, dvfs_info->base + XMU_PMUEVTEN);
+	 __raw_writel(tmp, dvfs_info->base + XMU_PMUEVTEN);
 
 	/* Enable PSTATE Change IRQ */
 	tmp = __raw_readl(dvfs_info->base + XMU_PMUIRQEN);
 	tmp |= (1 << PSTATE_CHANGED_IRQEN_SHIFT);
-	__raw_writel(tmp, dvfs_info->base + XMU_PMUIRQEN);
+	 __raw_writel(tmp, dvfs_info->base + XMU_PMUIRQEN);
 
 	/* Set initial performance index */
 	cpufreq_for_each_entry(pos, freq_table)
@@ -330,7 +331,7 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 	struct resource res;
 	unsigned int cur_frequency;
 
-	np = pdev->dev.of_node;
+	np =  pdev->dev.of_node;
 	if (!np)
 		return -ENODEV;
 
@@ -359,7 +360,7 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 		goto err_put_node;
 	}
 
-	ret = dev_pm_opp_of_add_table(dvfs_info->dev);
+	ret = of_init_opp_table(dvfs_info->dev);
 	if (ret) {
 		dev_err(dvfs_info->dev, "failed to init OPP table: %d\n", ret);
 		goto err_put_node;
@@ -370,7 +371,7 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(dvfs_info->dev,
 			"failed to init cpufreq table: %d\n", ret);
-		goto err_free_opp;
+		goto err_put_node;
 	}
 	dvfs_info->freq_count = dev_pm_opp_get_opp_count(dvfs_info->dev);
 	exynos_sort_descend_freq_table();
@@ -422,8 +423,6 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 
 err_free_table:
 	dev_pm_opp_free_cpufreq_table(dvfs_info->dev, &dvfs_info->freq_table);
-err_free_opp:
-	dev_pm_opp_of_remove_table(dvfs_info->dev);
 err_put_node:
 	of_node_put(np);
 	dev_err(&pdev->dev, "%s: failed initialization\n", __func__);
@@ -434,13 +433,13 @@ static int exynos_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&exynos_driver);
 	dev_pm_opp_free_cpufreq_table(dvfs_info->dev, &dvfs_info->freq_table);
-	dev_pm_opp_of_remove_table(dvfs_info->dev);
 	return 0;
 }
 
 static struct platform_driver exynos_cpufreq_platdrv = {
 	.driver = {
 		.name	= "exynos5440-cpufreq",
+		.owner	= THIS_MODULE,
 		.of_match_table = exynos_cpufreq_match,
 	},
 	.probe		= exynos_cpufreq_probe,

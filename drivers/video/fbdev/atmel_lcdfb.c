@@ -19,12 +19,15 @@
 #include <linux/backlight.h>
 #include <linux/gfp.h>
 #include <linux/module.h>
+#include <linux/platform_data/atmel.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <video/of_display_timing.h>
 #include <linux/regulator/consumer.h>
 #include <video/videomode.h>
+
+#include <asm/gpio.h>
 
 #include <video/atmel_lcdc.h>
 
@@ -320,7 +323,7 @@ static inline void atmel_lcdfb_power_control(struct atmel_lcdfb_info *sinfo, int
 	}
 }
 
-static const struct fb_fix_screeninfo atmel_lcdfb_fix __initconst = {
+static struct fb_fix_screeninfo atmel_lcdfb_fix __initdata = {
 	.type		= FB_TYPE_PACKED_PIXELS,
 	.visual		= FB_VISUAL_TRUECOLOR,
 	.xpanstep	= 0,
@@ -412,8 +415,8 @@ static inline void atmel_lcdfb_free_video_memory(struct atmel_lcdfb_info *sinfo)
 {
 	struct fb_info *info = sinfo->info;
 
-	dma_free_wc(info->device, info->fix.smem_len, info->screen_base,
-		    info->fix.smem_start);
+	dma_free_writecombine(info->device, info->fix.smem_len,
+				info->screen_base, info->fix.smem_start);
 }
 
 /**
@@ -433,9 +436,8 @@ static int atmel_lcdfb_alloc_video_memory(struct atmel_lcdfb_info *sinfo)
 		    * ((var->bits_per_pixel + 7) / 8));
 	info->fix.smem_len = max(smem_len, sinfo->smem_len);
 
-	info->screen_base = dma_alloc_wc(info->device, info->fix.smem_len,
-					 (dma_addr_t *)&info->fix.smem_start,
-					 GFP_KERNEL);
+	info->screen_base = dma_alloc_writecombine(info->device, info->fix.smem_len,
+					(dma_addr_t *)&info->fix.smem_start, GFP_KERNEL);
 
 	if (!info->screen_base) {
 		return -ENOMEM;
@@ -997,7 +999,7 @@ static const char *atmel_lcdfb_wiring_modes[] = {
 	[ATMEL_LCDC_WIRING_RGB]	= "RGB",
 };
 
-static int atmel_lcdfb_get_of_wiring_modes(struct device_node *np)
+const int atmel_lcdfb_get_of_wiring_modes(struct device_node *np)
 {
 	const char *mode;
 	int err, i;
@@ -1270,8 +1272,7 @@ static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 			goto stop_clk;
 		}
 
-		info->screen_base = ioremap_wc(info->fix.smem_start,
-					       info->fix.smem_len);
+		info->screen_base = ioremap(info->fix.smem_start, info->fix.smem_len);
 		if (!info->screen_base) {
 			ret = -ENOMEM;
 			goto release_intmem;
@@ -1470,6 +1471,7 @@ static struct platform_driver atmel_lcdfb_driver = {
 	.id_table	= atmel_lcdfb_devtypes,
 	.driver		= {
 		.name	= "atmel_lcdfb",
+		.owner	= THIS_MODULE,
 		.of_match_table	= of_match_ptr(atmel_lcdfb_dt_ids),
 	},
 };

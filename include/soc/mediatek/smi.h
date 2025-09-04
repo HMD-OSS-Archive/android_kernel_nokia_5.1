@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 MediaTek Inc.
+ * Copyright (c) 2014-2015 MediaTek Inc.
  * Author: Yong Wu <yong.wu@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -14,58 +14,47 @@
 #ifndef MTK_IOMMU_SMI_H
 #define MTK_IOMMU_SMI_H
 
-#include <linux/bitops.h>
 #include <linux/device.h>
 
 #ifdef CONFIG_MTK_SMI
 
-#define MTK_LARB_NR_MAX		32
+/*
+ * Record the iommu info for each port in the local arbiter.
+ * It is only for iommu.
+ *
+ * Returns 0 if successfully, others if failed.
+ */
+int mtk_smi_config_port(struct device *larbdev, unsigned int larbportid,
+			bool enable);
+/*
+ * The two function below config iommu and enable/disable the clock
+ * for the larb.
+ *
+ * mtk_smi_larb_get must be called before the multimedia HW work.
+ * mtk_smi_larb_put must be called after HW done.
+ * Both should be called in non-atomic context.
+ *
+ * Returns 0 if successfully, others if failed.
+ */
+int mtk_smi_larb_get(struct device *larbdev);
+void mtk_smi_larb_put(struct device *larbdev);
 
-#define MTK_SMI_MMU_EN(port)	BIT(port)
+#else
 
-struct mtk_smi_larb_iommu {
-	struct device *dev;
-	unsigned int   mmu;
-};
+static int
+mtk_smi_config_port(struct device *larbdev, unsigned int larbportid,
+		    bool enable)
+{
+	return 0;
+}
 
-struct mtk_smi_iommu {
-	unsigned int larb_nr;
-	struct mtk_smi_larb_iommu larb_imu[MTK_LARB_NR_MAX];
-};
+static inline int mtk_smi_larb_get(struct device *larbdev)
+{
+	return 0;
+}
 
-#endif
-#if IS_ENABLED(CONFIG_MTK_SMI_EXT)
-#include <linux/platform_device.h>
+static inline void mtk_smi_larb_put(struct device *larbdev) { }
 
-struct mtk_smi_pair {
-	u32 off;
-	u32 val;
-};
-
-struct mtk_smi_dev {
-	u32 id;
-	struct device *dev;
-	void __iomem *base;
-	u32 *mmu;
-
-	u32 nr_clks;
-	struct clk **clks;
-	atomic_t clk_cnts;
-
-	u32 nr_conf_pairs;
-	struct mtk_smi_pair *conf_pairs;
-
-	u32 nr_scen_pairs;
-	struct mtk_smi_pair **scen_pairs;
-};
-
-s32 mtk_smi_clk_enable(struct mtk_smi_dev *smi);
-void mtk_smi_clk_disable(struct mtk_smi_dev *smi);
-
-struct mtk_smi_dev *mtk_smi_dev_get(const u32 id);
-s32 mtk_smi_conf_set(const struct mtk_smi_dev *smi, const u32 scen_id);
-
-s32 smi_register(void);
 #endif
 
 #endif

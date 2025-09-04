@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * ipv6 in net namespaces
  */
@@ -32,12 +31,9 @@ struct netns_sysctl_ipv6 {
 	int auto_flowlabels;
 	int icmpv6_time;
 	int anycast_src_echo_reply;
-	int ip_nonlocal_bind;
 	int fwmark_reflect;
 	int idgen_retries;
 	int idgen_delay;
-	int flowlabel_state_ranges;
-	int flowlabel_reflect;
 };
 
 struct netns_ipv6 {
@@ -60,14 +56,10 @@ struct netns_ipv6 {
 	struct timer_list       ip6_fib_timer;
 	struct hlist_head       *fib_table_hash;
 	struct fib6_table       *fib6_main_tbl;
-	struct list_head	fib6_walkers;
 	struct dst_ops		ip6_dst_ops;
-	rwlock_t		fib6_walker_lock;
-	spinlock_t		fib6_gc_lock;
 	unsigned int		 ip6_rt_gc_expire;
 	unsigned long		 ip6_rt_last_gc;
 #ifdef CONFIG_IPV6_MULTIPLE_TABLES
-	bool			 fib6_has_custom_rules;
 	struct rt6_info         *ip6_prohibit_entry;
 	struct rt6_info         *ip6_blk_hole_entry;
 	struct fib6_table       *fib6_local_tbl;
@@ -77,7 +69,6 @@ struct netns_ipv6 {
 	struct sock             *ndisc_sk;
 	struct sock             *tcp_sk;
 	struct sock             *igmp_sk;
-	struct sock		*mc_autojoin_sk;
 #ifdef CONFIG_IPV6_MROUTE
 #ifndef CONFIG_IPV6_MROUTE_MULTIPLE_TABLES
 	struct mr6_table	*mrt6;
@@ -88,12 +79,11 @@ struct netns_ipv6 {
 #endif
 	atomic_t		dev_addr_genid;
 	atomic_t		fib6_sernum;
-	struct seg6_pernet_data *seg6_data;
-	struct fib_notifier_ops	*notifier_ops;
 };
 
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)
 struct netns_nf_frag {
+	struct netns_sysctl_ipv6 sysctl;
 	struct netns_frags	frags;
 };
 #endif

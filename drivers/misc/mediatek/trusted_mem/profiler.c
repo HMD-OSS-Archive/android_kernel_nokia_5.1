@@ -53,7 +53,18 @@ struct profile_entry_string profile_entry_str[] = {
 #define GET_START_TIME() do_gettimeofday(&start_time)
 #define GET_END_TIME() do_gettimeofday(&end_time)
 
+/* clang-format off */
+#define GET_TIME_DIFF_SEC_P(start, end) \
+	(int)((end->tv_usec > start->tv_usec) ? (end->tv_sec - start->tv_sec) \
+					    : (end->tv_sec - start->tv_sec - 1))
+
+#define GET_TIME_DIFF_USEC_P(start, end) \
+	(int)((end->tv_usec > start->tv_usec) \
+		      ? (end->tv_usec - start->tv_usec) \
+		      : (1000000 + end->tv_usec - start->tv_usec))
+
 #define SEC_TO_US(s) (s*1000000)
+/* clang-format on */
 
 #include <asm/div64.h>
 static inline u64 u64_div(u64 n, u64 base)
@@ -126,17 +137,17 @@ static void add_exec_time(enum PROFILE_ENTRY_TYPE entry,
 	mutex_unlock(&data->item[entry].lock);
 }
 
-static int profile_ssmr_get(u64 *pa, u32 *size, u32 feat, void *dev_desc)
+static int profile_ssmr_get(u64 *pa, u32 *size, u32 feat, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_SSMR_GET, &prof_mgr->data);
 	GET_START_TIME();
 
-	ret = prof_mgr->profiled_ssmr_ops->offline(pa, size, feat,
-						   prof_mgr->profiled_dev_desc);
+	ret = prof_mgr->profiled_ssmr_ops->offline(
+		pa, size, feat, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_SSMR_GET, &prof_mgr->data, &start_time,
@@ -144,17 +155,17 @@ static int profile_ssmr_get(u64 *pa, u32 *size, u32 feat, void *dev_desc)
 	return ret;
 }
 
-static int profile_ssmr_put(u32 feat, void *dev_desc)
+static int profile_ssmr_put(u32 feat, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_SSMR_PUT, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_ssmr_ops->online(feat,
-						  prof_mgr->profiled_dev_desc);
+						  prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_SSMR_PUT, &prof_mgr->data, &start_time,
@@ -164,18 +175,18 @@ static int profile_ssmr_put(u32 feat, void *dev_desc)
 
 static int profile_chunk_alloc(u32 alignment, u32 size, u32 *refcount,
 			       u32 *sec_handle, u8 *owner, u32 id, u32 clean,
-			       void *peer_data, void *dev_desc)
+			       void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_CHUNK_ALLOC, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->memory_alloc(
 		alignment, size, refcount, sec_handle, owner, id, clean,
-		peer_data, prof_mgr->profiled_dev_desc);
+		peer_data, prof_mgr->profiled_peer_priv);
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_CHUNK_ALLOC, &prof_mgr->data, &start_time,
 		      &end_time);
@@ -184,17 +195,17 @@ static int profile_chunk_alloc(u32 alignment, u32 size, u32 *refcount,
 }
 
 static int profile_chunk_free(u32 sec_handle, u8 *owner, u32 id,
-			      void *peer_data, void *dev_desc)
+			      void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_CHUNK_FREE, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->memory_free(
-		sec_handle, owner, id, peer_data, prof_mgr->profiled_dev_desc);
+		sec_handle, owner, id, peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_CHUNK_FREE, &prof_mgr->data, &start_time,
@@ -202,17 +213,17 @@ static int profile_chunk_free(u32 sec_handle, u8 *owner, u32 id,
 	return ret;
 }
 
-static int profile_mem_add(u64 pa, u32 size, void *peer_data, void *dev_desc)
+static int profile_mem_add(u64 pa, u32 size, void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_MEM_ADD, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->memory_grant(
-		pa, size, peer_data, prof_mgr->profiled_dev_desc);
+		pa, size, peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_MEM_ADD, &prof_mgr->data, &start_time,
@@ -220,17 +231,17 @@ static int profile_mem_add(u64 pa, u32 size, void *peer_data, void *dev_desc)
 	return ret;
 }
 
-static int profile_mem_remove(void *peer_data, void *dev_desc)
+static int profile_mem_remove(void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_MEM_REMOVE, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->memory_reclaim(
-		peer_data, prof_mgr->profiled_dev_desc);
+		peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_MEM_REMOVE, &prof_mgr->data, &start_time,
@@ -238,17 +249,17 @@ static int profile_mem_remove(void *peer_data, void *dev_desc)
 	return ret;
 }
 
-static int profile_session_open(void **peer_data, void *dev_desc)
+static int profile_session_open(void **peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_SESSION_OPEN, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->session_open(
-		peer_data, prof_mgr->profiled_dev_desc);
+		peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_SESSION_OPEN, &prof_mgr->data, &start_time,
@@ -256,17 +267,17 @@ static int profile_session_open(void **peer_data, void *dev_desc)
 	return ret;
 }
 
-static int profile_session_close(void *peer_data, void *dev_desc)
+static int profile_session_close(void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_SESSION_CLOSE, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->session_close(
-		peer_data, prof_mgr->profiled_dev_desc);
+		peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_SESSION_CLOSE, &prof_mgr->data, &start_time,
@@ -276,17 +287,17 @@ static int profile_session_close(void *peer_data, void *dev_desc)
 
 static int
 profile_invoke_command(struct trusted_driver_cmd_params *invoke_params,
-		       void *peer_data, void *dev_desc)
+		       void *peer_data, void *priv)
 {
 	int ret;
 	struct timeval start_time, end_time;
-	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)dev_desc;
+	struct profile_mgr_desc *prof_mgr = (struct profile_mgr_desc *)priv;
 
 	increase_enter_count(PROFILE_ENTRY_INVOKE_COMMAND, &prof_mgr->data);
 	GET_START_TIME();
 
 	ret = prof_mgr->profiled_peer_ops->invoke_cmd(
-		invoke_params, peer_data, prof_mgr->profiled_dev_desc);
+		invoke_params, peer_data, prof_mgr->profiled_peer_priv);
 
 	GET_END_TIME();
 	add_exec_time(PROFILE_ENTRY_INVOKE_COMMAND, &prof_mgr->data,
@@ -332,7 +343,7 @@ struct profile_mgr_desc *create_profile_mgr_desc(void)
 
 	t_profile_desc->profiled_peer_ops = &profiler_peer_ops;
 	t_profile_desc->profiled_ssmr_ops = &profiler_ssmr_ops;
-	t_profile_desc->profiled_dev_desc = t_profile_desc;
+	t_profile_desc->profiled_peer_priv = t_profile_desc;
 
 	return t_profile_desc;
 }

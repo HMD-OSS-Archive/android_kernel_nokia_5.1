@@ -5,9 +5,7 @@ The Mediatek apmixedsys controller provides the PLLs to the system.
 
 Required Properties:
 
-- compatible: Should be one of:
-	- "mediatek,mt2701-apmixedsys"
-	- "mediatek,mt6797-apmixedsys"
+- compatible: Should be:
 	- "mediatek,mt8135-apmixedsys"
 	- "mediatek,mt8173-apmixedsys"
 - #clock-cells: Must be 1
@@ -18,7 +16,7 @@ The available clocks are defined in dt-bindings/clock/mt*-clk.h.
 
 Example:
 
-apmixedsys: clock-controller@10209000 {
+apmixedsys: apmixedsys@10209000 {
 	compatible = "mediatek,mt8173-apmixedsys";
 	reg = <0 0x10209000 0 0x1000>;
 	#clock-cells = <1>;

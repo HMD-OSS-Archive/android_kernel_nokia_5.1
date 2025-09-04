@@ -28,8 +28,6 @@
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/reboot.h>
-#include <linux/pm.h>
-#include <linux/log2.h>
 
 #include "../core.h"
 #include "../pinconf.h"
@@ -61,7 +59,7 @@ struct msm_pinctrl {
 	struct notifier_block restart_nb;
 	int irq;
 
-	raw_spinlock_t lock;
+	spinlock_t lock;
 
 	DECLARE_BITMAP(dual_edge_irqs, MAX_NR_GPIO);
 	DECLARE_BITMAP(enabled_irqs, MAX_NR_GPIO);
@@ -69,6 +67,11 @@ struct msm_pinctrl {
 	const struct msm_pinctrl_soc_data *soc;
 	void __iomem *regs;
 };
+
+static inline struct msm_pinctrl *to_msm_pinctrl(struct gpio_chip *gc)
+{
+	return container_of(gc, struct msm_pinctrl, chip);
+}
 
 static int msm_get_groups_count(struct pinctrl_dev *pctldev)
 {
@@ -102,7 +105,7 @@ static const struct pinctrl_ops msm_pinctrl_ops = {
 	.get_group_name		= msm_get_group_name,
 	.get_group_pins		= msm_get_group_pins,
 	.dt_node_to_map		= pinconf_generic_dt_node_to_map_group,
-	.dt_free_map		= pinctrl_utils_free_map,
+	.dt_free_map		= pinctrl_utils_dt_free_map,
 };
 
 static int msm_get_functions_count(struct pinctrl_dev *pctldev)
@@ -139,11 +142,10 @@ static int msm_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	struct msm_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
 	const struct msm_pingroup *g;
 	unsigned long flags;
-	u32 val, mask;
+	u32 val;
 	int i;
 
 	g = &pctrl->soc->groups[group];
-	mask = GENMASK(g->mux_bit + order_base_2(g->nfuncs) - 1, g->mux_bit);
 
 	for (i = 0; i < g->nfuncs; i++) {
 		if (g->funcs[i] == function)
@@ -153,14 +155,14 @@ static int msm_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	if (WARN_ON(i == g->nfuncs))
 		return -EINVAL;
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->ctl_reg);
-	val &= ~mask;
+	val &= ~(0x7 << g->mux_bit);
 	val |= i << g->mux_bit;
 	writel(val, pctrl->regs + g->ctl_reg);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 
 	return 0;
 }
@@ -191,22 +193,36 @@ static int msm_config_reg(struct msm_pinctrl *pctrl,
 		*mask = 7;
 		break;
 	case PIN_CONFIG_OUTPUT:
-	case PIN_CONFIG_INPUT_ENABLE:
 		*bit = g->oe_bit;
 		*mask = 1;
 		break;
 	default:
+		dev_err(pctrl->dev, "Invalid config param %04x\n", param);
 		return -ENOTSUPP;
 	}
 
 	return 0;
 }
 
-#define MSM_NO_PULL		0
-#define MSM_PULL_DOWN		1
-#define MSM_KEEPER		2
-#define MSM_PULL_UP_NO_KEEPER	2
-#define MSM_PULL_UP		3
+static int msm_config_get(struct pinctrl_dev *pctldev,
+			  unsigned int pin,
+			  unsigned long *config)
+{
+	dev_err(pctldev->dev, "pin_config_set op not supported\n");
+	return -ENOTSUPP;
+}
+
+static int msm_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
+				unsigned long *configs, unsigned num_configs)
+{
+	dev_err(pctldev->dev, "pin_config_set op not supported\n");
+	return -ENOTSUPP;
+}
+
+#define MSM_NO_PULL	0
+#define MSM_PULL_DOWN	1
+#define MSM_KEEPER	2
+#define MSM_PULL_UP	3
 
 static unsigned msm_regval_to_drive(u32 val)
 {
@@ -238,30 +254,16 @@ static int msm_config_group_get(struct pinctrl_dev *pctldev,
 	/* Convert register value to pinconf value */
 	switch (param) {
 	case PIN_CONFIG_BIAS_DISABLE:
-		if (arg != MSM_NO_PULL)
-			return -EINVAL;
-		arg = 1;
+		arg = arg == MSM_NO_PULL;
 		break;
 	case PIN_CONFIG_BIAS_PULL_DOWN:
-		if (arg != MSM_PULL_DOWN)
-			return -EINVAL;
-		arg = 1;
+		arg = arg == MSM_PULL_DOWN;
 		break;
 	case PIN_CONFIG_BIAS_BUS_HOLD:
-		if (pctrl->soc->pull_no_keeper)
-			return -ENOTSUPP;
-
-		if (arg != MSM_KEEPER)
-			return -EINVAL;
-		arg = 1;
+		arg = arg == MSM_KEEPER;
 		break;
 	case PIN_CONFIG_BIAS_PULL_UP:
-		if (pctrl->soc->pull_no_keeper)
-			arg = arg == MSM_PULL_UP_NO_KEEPER;
-		else
-			arg = arg == MSM_PULL_UP;
-		if (!arg)
-			return -EINVAL;
+		arg = arg == MSM_PULL_UP;
 		break;
 	case PIN_CONFIG_DRIVE_STRENGTH:
 		arg = msm_regval_to_drive(arg);
@@ -274,14 +276,10 @@ static int msm_config_group_get(struct pinctrl_dev *pctldev,
 		val = readl(pctrl->regs + g->io_reg);
 		arg = !!(val & BIT(g->in_bit));
 		break;
-	case PIN_CONFIG_INPUT_ENABLE:
-		/* Pin is output */
-		if (arg)
-			return -EINVAL;
-		arg = 1;
-		break;
 	default:
-		return -ENOTSUPP;
+		dev_err(pctrl->dev, "Unsupported config parameter: %x\n",
+			param);
+		return -EINVAL;
 	}
 
 	*config = pinconf_to_config_packed(param, arg);
@@ -324,16 +322,10 @@ static int msm_config_group_set(struct pinctrl_dev *pctldev,
 			arg = MSM_PULL_DOWN;
 			break;
 		case PIN_CONFIG_BIAS_BUS_HOLD:
-			if (pctrl->soc->pull_no_keeper)
-				return -ENOTSUPP;
-
 			arg = MSM_KEEPER;
 			break;
 		case PIN_CONFIG_BIAS_PULL_UP:
-			if (pctrl->soc->pull_no_keeper)
-				arg = MSM_PULL_UP_NO_KEEPER;
-			else
-				arg = MSM_PULL_UP;
+			arg = MSM_PULL_UP;
 			break;
 		case PIN_CONFIG_DRIVE_STRENGTH:
 			/* Check for invalid values */
@@ -344,21 +336,17 @@ static int msm_config_group_set(struct pinctrl_dev *pctldev,
 			break;
 		case PIN_CONFIG_OUTPUT:
 			/* set output value */
-			raw_spin_lock_irqsave(&pctrl->lock, flags);
+			spin_lock_irqsave(&pctrl->lock, flags);
 			val = readl(pctrl->regs + g->io_reg);
 			if (arg)
 				val |= BIT(g->out_bit);
 			else
 				val &= ~BIT(g->out_bit);
 			writel(val, pctrl->regs + g->io_reg);
-			raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+			spin_unlock_irqrestore(&pctrl->lock, flags);
 
 			/* enable output */
 			arg = 1;
-			break;
-		case PIN_CONFIG_INPUT_ENABLE:
-			/* disable output */
-			arg = 0;
 			break;
 		default:
 			dev_err(pctrl->dev, "Unsupported config parameter: %x\n",
@@ -372,19 +360,20 @@ static int msm_config_group_set(struct pinctrl_dev *pctldev,
 			return -EINVAL;
 		}
 
-		raw_spin_lock_irqsave(&pctrl->lock, flags);
+		spin_lock_irqsave(&pctrl->lock, flags);
 		val = readl(pctrl->regs + g->ctl_reg);
 		val &= ~(mask << bit);
 		val |= arg << bit;
 		writel(val, pctrl->regs + g->ctl_reg);
-		raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+		spin_unlock_irqrestore(&pctrl->lock, flags);
 	}
 
 	return 0;
 }
 
 static const struct pinconf_ops msm_pinconf_ops = {
-	.is_generic		= true,
+	.pin_config_get		= msm_config_get,
+	.pin_config_set		= msm_config_set,
 	.pin_config_group_get	= msm_config_group_get,
 	.pin_config_group_set	= msm_config_group_set,
 };
@@ -399,19 +388,19 @@ static struct pinctrl_desc msm_pinctrl_desc = {
 static int msm_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[offset];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->ctl_reg);
 	val &= ~BIT(g->oe_bit);
 	writel(val, pctrl->regs + g->ctl_reg);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 
 	return 0;
 }
@@ -419,13 +408,13 @@ static int msm_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 static int msm_gpio_direction_output(struct gpio_chip *chip, unsigned offset, int value)
 {
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[offset];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->io_reg);
 	if (value)
@@ -438,29 +427,15 @@ static int msm_gpio_direction_output(struct gpio_chip *chip, unsigned offset, in
 	val |= BIT(g->oe_bit);
 	writel(val, pctrl->regs + g->ctl_reg);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 
 	return 0;
-}
-
-static int msm_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
-{
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
-	const struct msm_pingroup *g;
-	u32 val;
-
-	g = &pctrl->soc->groups[offset];
-
-	val = readl(pctrl->regs + g->ctl_reg);
-
-	/* 0 = output, 1 = input */
-	return val & BIT(g->oe_bit) ? 0 : 1;
 }
 
 static int msm_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
 	u32 val;
 
 	g = &pctrl->soc->groups[offset];
@@ -472,13 +447,13 @@ static int msm_gpio_get(struct gpio_chip *chip, unsigned offset)
 static void msm_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[offset];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->io_reg);
 	if (value)
@@ -487,7 +462,19 @@ static void msm_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 		val &= ~BIT(g->out_bit);
 	writel(val, pctrl->regs + g->io_reg);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
+}
+
+static int msm_gpio_request(struct gpio_chip *chip, unsigned offset)
+{
+	int gpio = chip->base + offset;
+	return pinctrl_request_gpio(gpio);
+}
+
+static void msm_gpio_free(struct gpio_chip *chip, unsigned offset)
+{
+	int gpio = chip->base + offset;
+	return pinctrl_free_gpio(gpio);
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -500,7 +487,7 @@ static void msm_gpio_dbg_show_one(struct seq_file *s,
 				  unsigned gpio)
 {
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
 	unsigned func;
 	int is_out;
 	int drive;
@@ -542,14 +529,13 @@ static void msm_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 #define msm_gpio_dbg_show NULL
 #endif
 
-static const struct gpio_chip msm_gpio_template = {
+static struct gpio_chip msm_gpio_template = {
 	.direction_input  = msm_gpio_direction_input,
 	.direction_output = msm_gpio_direction_output,
-	.get_direction    = msm_gpio_get_direction,
 	.get              = msm_gpio_get,
 	.set              = msm_gpio_set,
-	.request          = gpiochip_generic_request,
-	.free             = gpiochip_generic_free,
+	.request          = msm_gpio_request,
+	.free             = msm_gpio_free,
 	.dbg_show         = msm_gpio_dbg_show,
 };
 
@@ -600,14 +586,14 @@ static void msm_gpio_update_dual_edge_pos(struct msm_pinctrl *pctrl,
 static void msm_gpio_irq_mask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[d->hwirq];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->intr_cfg_reg);
 	val &= ~BIT(g->intr_enable_bit);
@@ -615,20 +601,20 @@ static void msm_gpio_irq_mask(struct irq_data *d)
 
 	clear_bit(d->hwirq, pctrl->enabled_irqs);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 }
 
 static void msm_gpio_irq_unmask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[d->hwirq];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->intr_cfg_reg);
 	val |= BIT(g->intr_enable_bit);
@@ -636,20 +622,20 @@ static void msm_gpio_irq_unmask(struct irq_data *d)
 
 	set_bit(d->hwirq, pctrl->enabled_irqs);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 }
 
 static void msm_gpio_irq_ack(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[d->hwirq];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = readl(pctrl->regs + g->intr_status_reg);
 	if (g->intr_ack_high)
@@ -661,20 +647,20 @@ static void msm_gpio_irq_ack(struct irq_data *d)
 	if (test_bit(d->hwirq, pctrl->dual_edge_irqs))
 		msm_gpio_update_dual_edge_pos(pctrl, g, d);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 }
 
 static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
 	u32 val;
 
 	g = &pctrl->soc->groups[d->hwirq];
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	/*
 	 * For hw without possibility of detecting both edges
@@ -748,12 +734,12 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 	if (test_bit(d->hwirq, pctrl->dual_edge_irqs))
 		msm_gpio_update_dual_edge_pos(pctrl, g, d);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 
 	if (type & (IRQ_TYPE_LEVEL_LOW | IRQ_TYPE_LEVEL_HIGH))
-		irq_set_handler_locked(d, handle_level_irq);
+		__irq_set_handler_locked(d->irq, handle_level_irq);
 	else if (type & (IRQ_TYPE_EDGE_FALLING | IRQ_TYPE_EDGE_RISING))
-		irq_set_handler_locked(d, handle_edge_irq);
+		__irq_set_handler_locked(d->irq, handle_edge_irq);
 
 	return 0;
 }
@@ -761,14 +747,14 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 static int msm_gpio_irq_set_wake(struct irq_data *d, unsigned int on)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&pctrl->lock, flags);
+	spin_lock_irqsave(&pctrl->lock, flags);
 
 	irq_set_irq_wake(pctrl->irq, on);
 
-	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+	spin_unlock_irqrestore(&pctrl->lock, flags);
 
 	return 0;
 }
@@ -782,12 +768,12 @@ static struct irq_chip msm_gpio_irq_chip = {
 	.irq_set_wake   = msm_gpio_irq_set_wake,
 };
 
-static void msm_gpio_irq_handler(struct irq_desc *desc)
+static void msm_gpio_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct gpio_chip *gc = irq_desc_get_handler_data(desc);
 	const struct msm_pingroup *g;
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
-	struct irq_chip *chip = irq_desc_get_chip(desc);
+	struct msm_pinctrl *pctrl = to_msm_pinctrl(gc);
+	struct irq_chip *chip = irq_get_chip(irq);
 	int irq_pin;
 	int handled = 0;
 	u32 val;
@@ -811,7 +797,7 @@ static void msm_gpio_irq_handler(struct irq_desc *desc)
 
 	/* No interrupts were flagged */
 	if (handled == 0)
-		handle_bad_irq(desc);
+		handle_bad_irq(irq, desc);
 
 	chained_irq_exit(chip, desc);
 }
@@ -829,34 +815,21 @@ static int msm_gpio_init(struct msm_pinctrl *pctrl)
 	chip->base = 0;
 	chip->ngpio = ngpio;
 	chip->label = dev_name(pctrl->dev);
-	chip->parent = pctrl->dev;
+	chip->dev = pctrl->dev;
 	chip->owner = THIS_MODULE;
 	chip->of_node = pctrl->dev->of_node;
 
-	ret = gpiochip_add_data(&pctrl->chip, pctrl);
+	ret = gpiochip_add(&pctrl->chip);
 	if (ret) {
 		dev_err(pctrl->dev, "Failed register gpiochip\n");
 		return ret;
 	}
 
-	/*
-	 * For DeviceTree-supported systems, the gpio core checks the
-	 * pinctrl's device node for the "gpio-ranges" property.
-	 * If it is present, it takes care of adding the pin ranges
-	 * for the driver. In this case the driver can skip ahead.
-	 *
-	 * In order to remain compatible with older, existing DeviceTree
-	 * files which don't set the "gpio-ranges" property or systems that
-	 * utilize ACPI the driver has to call gpiochip_add_pin_range().
-	 */
-	if (!of_property_read_bool(pctrl->dev->of_node, "gpio-ranges")) {
-		ret = gpiochip_add_pin_range(&pctrl->chip,
-			dev_name(pctrl->dev), 0, 0, chip->ngpio);
-		if (ret) {
-			dev_err(pctrl->dev, "Failed to add pin range\n");
-			gpiochip_remove(&pctrl->chip);
-			return ret;
-		}
+	ret = gpiochip_add_pin_range(&pctrl->chip, dev_name(pctrl->dev), 0, 0, chip->ngpio);
+	if (ret) {
+		dev_err(pctrl->dev, "Failed to add pin range\n");
+		gpiochip_remove(&pctrl->chip);
+		return ret;
 	}
 
 	ret = gpiochip_irqchip_add(chip,
@@ -886,13 +859,6 @@ static int msm_ps_hold_restart(struct notifier_block *nb, unsigned long action,
 	return NOTIFY_DONE;
 }
 
-static struct msm_pinctrl *poweroff_pctrl;
-
-static void msm_ps_hold_poweroff(void)
-{
-	msm_ps_hold_restart(&poweroff_pctrl->restart_nb, 0, NULL);
-}
-
 static void msm_pinctrl_setup_pm_reset(struct msm_pinctrl *pctrl)
 {
 	int i;
@@ -905,8 +871,6 @@ static void msm_pinctrl_setup_pm_reset(struct msm_pinctrl *pctrl)
 			if (register_restart_handler(&pctrl->restart_nb))
 				dev_err(pctrl->dev,
 					"failed to setup restart handler.\n");
-			poweroff_pctrl = pctrl;
-			pm_power_off = msm_ps_hold_poweroff;
 			break;
 		}
 }
@@ -927,7 +891,7 @@ int msm_pinctrl_probe(struct platform_device *pdev,
 	pctrl->soc = soc_data;
 	pctrl->chip = msm_gpio_template;
 
-	raw_spin_lock_init(&pctrl->lock);
+	spin_lock_init(&pctrl->lock);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	pctrl->regs = devm_ioremap_resource(&pdev->dev, res);
@@ -945,16 +909,17 @@ int msm_pinctrl_probe(struct platform_device *pdev,
 	msm_pinctrl_desc.name = dev_name(&pdev->dev);
 	msm_pinctrl_desc.pins = pctrl->soc->pins;
 	msm_pinctrl_desc.npins = pctrl->soc->npins;
-	pctrl->pctrl = devm_pinctrl_register(&pdev->dev, &msm_pinctrl_desc,
-					     pctrl);
-	if (IS_ERR(pctrl->pctrl)) {
+	pctrl->pctrl = pinctrl_register(&msm_pinctrl_desc, &pdev->dev, pctrl);
+	if (!pctrl->pctrl) {
 		dev_err(&pdev->dev, "Couldn't register pinctrl driver\n");
-		return PTR_ERR(pctrl->pctrl);
+		return -ENODEV;
 	}
 
 	ret = msm_gpio_init(pctrl);
-	if (ret)
+	if (ret) {
+		pinctrl_unregister(pctrl->pctrl);
 		return ret;
+	}
 
 	platform_set_drvdata(pdev, pctrl);
 
@@ -969,6 +934,7 @@ int msm_pinctrl_remove(struct platform_device *pdev)
 	struct msm_pinctrl *pctrl = platform_get_drvdata(pdev);
 
 	gpiochip_remove(&pctrl->chip);
+	pinctrl_unregister(pctrl->pctrl);
 
 	unregister_restart_handler(&pctrl->restart_nb);
 

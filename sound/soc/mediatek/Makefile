@@ -10,41 +10,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
-subdir-ccflags-y += -Werror
-
-#scp smartpa related code
-obj-$(CONFIG_SND_SOC_MTK_SCP_SMARTPA) += scp_spk/
-obj-$(CONFIG_SND_SOC_MTK_SCP_SMARTPA) += utility/
-
-#scp vow bargein related code
-obj-$(CONFIG_MTK_VOW_BARGE_IN_SUPPORT) += scp_vow/
-
-# dsp related code
-obj-$(CONFIG_MTK_AUDIODSP_SUPPORT) += audio_dsp/
-obj-$(CONFIG_SND_SOC_MTK_AUDIO_DSP) += audio_dsp/
-
-# btcvsd
-obj-$(CONFIG_SND_SOC_MTK_BTCVSD) += common/
-obj-$(CONFIG_MTK_AUDIO_TUNNELING_SUPPORT) += common_int/
-obj-$(CONFIG_SND_SOC_MEDIATEK) += common/
-obj-$(CONFIG_SND_SOC_MT2701) += mt2701/
-obj-$(CONFIG_SND_SOC_MT6768) += mt6768/
-obj-$(CONFIG_SND_SOC_MT8168) += mt8168/
-obj-$(CONFIG_SND_SOC_MT6785) += mt6785/
-obj-$(CONFIG_SND_SOC_MT8173) += mt8173/
-obj-$(CONFIG_SND_SOC_MT6885) += mt6885/
-obj-$(CONFIG_SND_SOC_MT8167) += mt8167/
-# adsp
-ifeq ($(CONFIG_MTK_AURISYS_PHONE_CALL_SUPPORT),y)
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/audio_ipi/common/framework/
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/adsp/$(MTK_PLATFORM)/
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/audio_ipi/common/tasks/call/
-subdir-ccflags-y += -I$(srctree)/sound/soc/mediatek/audio_dsp
-endif
-
-ifeq ($(CONFIG_SND_SOC_MTK_SMART_PHONE),y)
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include
-endif
 
 # New architecture
 ifeq ($(CONFIG_MTK_SND_SOC_NEW_ARCH),y)
@@ -53,50 +18,57 @@ ifeq ($(CONFIG_MTK_SND_SOC_NEW_ARCH),y)
 MTK_PLATFORM := $(subst ",,$(CONFIG_MTK_PLATFORM))
 
 # MTK Codec Chip Support
-MTK_CODEC := $(subst ",,$(CONFIG_MTK_SND_SOC_CODEC))
+MTK_CODEC := $(subst ",,$(CONFIG_MT_SND_SOC_CODEC))
 
 # flags for not ready feature, uncomment after ready
+subdir-ccflags-y += -D_GIT318_READY
+subdir-ccflags-y += -D_GIT318_PMIC_READY
 subdir-ccflags-y += -DAUDIO_USING_WRAP_DRIVER
 subdir-ccflags-y += -D_MT_IDLE_HEADER
-subdir-ccflags-y += -D_REG_SYNC_WRITE
 
 # include path
-subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/accdet/mt6358
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include/mt-plat
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/base/power/include
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/base/power/$(MTK_PLATFORM)
-subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)/
-
-AUDIO_PLATFORM := $(subst ",,$(CONFIG_MTK_PLATFORM))
-
-subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/scp/$(AUDIO_PLATFORM)/
-subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/audio_ipi/$(AUDIO_PLATFORM)/
-
+subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/scp/$(MTK_PLATFORM)/
 
 # Common include path
-subdir-ccflags-y += -Werror -I$(src)/common_int
+subdir-ccflags-y += -Werror -I$(src)/common
 
 # PMIC include path
-ifneq  ($(MTK_CODEC),)
 subdir-ccflags-y += -Werror -I$(src)/codec/$(MTK_CODEC)
-endif
-
-subdir-ccflags-y += -Werror -Wno-incompatible-pointer-types
-
-# Update pmic built flow to avoid codec init later than codec probe
-ifneq  ($(MTK_CODEC),)
-obj-y += codec/$(MTK_CODEC)/
-endif
-obj-y += common_int/
-
-
-obj-y += $(AUDIO_PLATFORM)/
 
 # AP include path
-subdir-ccflags-y += -Werror -I$(src)/$(AUDIO_PLATFORM)
+subdir-ccflags-y += -Werror -I$(src)/$(MTK_PLATFORM)
+
+# Update pmic built flow to avoid codec init later than codec probe
+obj-y += common/
+obj-y += codec/$(MTK_CODEC)/
+obj-y += $(MTK_PLATFORM)/
+
+# Old architecture
+else
+
+obj-y += common/
+obj-$(CONFIG_MT_SND_SOC_V3) += mt6735/
+obj-$(CONFIG_MT_SND_SOC_6570) += mt6570/
+obj-$(CONFIG_MT_SND_SOC_6580) += mt6580/
+obj-$(CONFIG_MT_SND_SOC_6797) += mt6797/
+obj-$(CONFIG_MT_SND_SOC_6755) += mt6755/
+obj-$(CONFIG_MT_SND_SOC_6750) += mt6750/
+obj-$(CONFIG_SND_SOC_MT8173) += mt8173/
+obj-$(CONFIG_MT_SND_SOC_8163) += mt8163/
+obj-$(CONFIG_MT_SND_SOC_8127) += mt8127/
+obj-$(CONFIG_SND_SOC_MT8167) += mt8167/
+ifneq ($(CONFIG_MT_SND_SOC_2701),)
+obj-$(CONFIG_MT_SND_SOC_2701) += mt2701/
 endif
 
-#for AWINIC AW889X Smart K PA
-obj-$(CONFIG_SND_SOC_AW87329) += aw87329_audio.o
+# End CONFIG_MTK_SND_SOC_NEW_ARCH
+endif
+
+ifeq ($(CONFIG_MTK_BTCVSD_ALSA),y)
+obj-y += common/
+endif

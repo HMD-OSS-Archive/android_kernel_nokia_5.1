@@ -31,33 +31,30 @@
 
 
 /*
- *void DBG_Init(void);
- *void DBG_Deinit(void);
+void DBG_Init(void);
+void DBG_Deinit(void);
 
- *extern void hdmi_log_enable(int enable);
- *extern void hdmi_cable_fake_plug_in(void);
- *extern void hdmi_cable_fake_plug_out(void);
- */
+extern void hdmi_log_enable(int enable);
+extern void hdmi_cable_fake_plug_in(void);
+extern void hdmi_cable_fake_plug_out(void);
 
-/* ------------------------------------ */
+*/
+
+/* --------------------------------------------------------------------------- */
 /* External variable declarations */
-/* ------------------------------------ */
+/* --------------------------------------------------------------------------- */
 
 /* extern LCM_DRIVER *lcm_drv; */
-/* ------------------------------------ */
+/* --------------------------------------------------------------------------- */
 /* Debug Options */
-/* ------------------------------------ */
+/* --------------------------------------------------------------------------- */
 
 
 static char STR_HELP[] =
 	"\n"
 	"USAGE\n"
 	"        echo [ACTION]... > hdmi\n"
-	"\n"
-	"ACTION\n"
-	"        hdmitx:[on|off]\n"
-	"             enable hdmi video output\n"
-	"\n";
+	"\n" "ACTION\n" "        hdmitx:[on|off]\n" "             enable hdmi video output\n" "\n";
 
 /* extern void hdmi_log_enable(int enable); */
 /* TODO: this is a temp debug solution */
@@ -69,34 +66,34 @@ static void process_dbg_opt(const char *opt)
 		;/* to do*/
 
 #if defined(CONFIG_MTK_HDMI_SUPPORT)
-	else if (strncmp(opt, "on", 2) == 0) {
+	else if (0 == strncmp(opt, "on", 2)) {
 		hdmi_power_on();
-	} else if (strncmp(opt, "off", 3) == 0) {
+	} else if (0 == strncmp(opt, "off", 3)) {
 		hdmi_power_off();
-	} else if (strncmp(opt, "suspend", 7) == 0) {
+	} else if (0 == strncmp(opt, "suspend", 7)) {
 		hdmi_suspend();
-	} else if (strncmp(opt, "resume", 6) == 0) {
+	} else if (0 == strncmp(opt, "resume", 6)) {
 		hdmi_resume();
 	/* } else if (0 == strncmp(opt, "colorbar", 8)) { */
 
 	/*} else if (0 == strncmp(opt, "ldooff", 6)) { */
 
-	} else if (strncmp(opt, "loglv:", 6) == 0) {
+	} else if (0 == strncmp(opt, "loglv:", 6)) {
 		unsigned int lv = *(opt + 6) - '0';
 
 		if (lv >= 0 && lv <= 9)
 			hdmi_log_level(lv);
-	} else if (strncmp(opt, "log:", 4) == 0) {
-		if (strncmp(opt + 4, "on", 2) == 0)
+	} else if (0 == strncmp(opt, "log:", 4)) {
+		if (0 == strncmp(opt + 4, "on", 2))
 			hdmi_log_enable(true);
-		else if (strncmp(opt + 4, "off", 3) == 0)
+		else if (0 == strncmp(opt + 4, "off", 3))
 			hdmi_log_enable(false);
 		else
 			goto Error;
-	} else if (strncmp(opt, "fakecablein:", 12) == 0) {
-		if (strncmp(opt + 12, "enable", 6) == 0)
+	} else if (0 == strncmp(opt, "fakecablein:", 12)) {
+		if (0 == strncmp(opt + 12, "enable", 6))
 			hdmi_cable_fake_plug_in();
-		else if (strncmp(opt + 12, "disable", 7) == 0)
+		else if (0 == strncmp(opt + 12, "disable", 7))
 			hdmi_cable_fake_plug_out();
 		else
 			goto Error;
@@ -108,7 +105,7 @@ static void process_dbg_opt(const char *opt)
 	return;
 
  Error:
-	pr_debug("[hdmitx] parse command error!\n\n%s", STR_HELP);
+	pr_err("[hdmitx] parse command error!\n\n%s", STR_HELP);
 }
 
 static void process_dbg_cmd(char *cmd)
@@ -122,11 +119,11 @@ static void process_dbg_cmd(char *cmd)
 
 }
 
-/* ------------------------------ */
+/* --------------------------------------------------------------------------- */
 /* Debug FileSystem Routines */
-/* ------------------------------ */
+/* --------------------------------------------------------------------------- */
 
-struct dentry *hdmitx_dbgfs;
+struct dentry *hdmitx_dbgfs = NULL;
 
 
 static ssize_t debug_open(struct inode *inode, struct file *file)
@@ -138,8 +135,7 @@ static ssize_t debug_open(struct inode *inode, struct file *file)
 
 static char debug_buffer[2048];
 
-static ssize_t debug_read(struct file *file, char __user *ubuf,
-	size_t count, loff_t *ppos)
+static ssize_t debug_read(struct file *file, char __user *ubuf, size_t count, loff_t *ppos)
 {
 	const int debug_bufmax = sizeof(debug_buffer) - 1;
 	int n = 0;
@@ -151,8 +147,7 @@ static ssize_t debug_read(struct file *file, char __user *ubuf,
 }
 
 
-static ssize_t debug_write(struct file *file, const char __user *ubuf,
-	size_t count, loff_t *ppos)
+static ssize_t debug_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos)
 {
 	const int debug_bufmax = sizeof(debug_buffer) - 1;
 	size_t ret;
@@ -182,8 +177,7 @@ static const struct file_operations debug_fops = {
 
 void HDMI_DBG_Init(void)
 {
-	hdmitx_dbgfs = debugfs_create_file("hdmi",
-		S_IFREG | 0444, NULL, (void *)0, &debug_fops);
+	hdmitx_dbgfs = debugfs_create_file("hdmi", S_IFREG | S_IRUGO, NULL, (void *)0, &debug_fops);
 }
 
 

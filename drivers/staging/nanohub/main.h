@@ -21,7 +21,7 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/semaphore.h>
-#include <linux/pm_wakeup.h>
+#include <linux/wakelock.h>
 
 #include "comms.h"
 #include "bl.h"
@@ -30,8 +30,8 @@
 
 struct nanohub_buf {
 	struct list_head list;
-	u8 buffer[255];
-	u8 length;
+	uint8_t buffer[255];
+	uint8_t length;
 };
 
 struct nanohub_data;
@@ -69,7 +69,7 @@ struct nanohub_data {
 	atomic_t thread_state;
 	wait_queue_head_t kthread_wait;
 
-	struct wakeup_source ws;
+	struct wake_lock wakelock_read;
 
 	struct nanohub_io free_pool;
 
@@ -80,7 +80,7 @@ struct nanohub_data {
 	atomic_t wakeup_acquired;
 	wait_queue_head_t wakeup_wait;
 
-	u32 interrupts[8];
+	uint32_t interrupts[8];
 
 	int err_cnt;
 	void *vbuf;

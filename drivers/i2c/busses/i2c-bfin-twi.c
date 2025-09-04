@@ -21,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
+#include <linux/i2c/bfin_twi.h>
 
 #include <asm/irq.h>
 #include <asm/portmux.h>
@@ -562,7 +563,7 @@ static u32 bfin_twi_functionality(struct i2c_adapter *adap)
 	       I2C_FUNC_I2C | I2C_FUNC_SMBUS_I2C_BLOCK;
 }
 
-static const struct i2c_algorithm bfin_twi_algorithm = {
+static struct i2c_algorithm bfin_twi_algorithm = {
 	.master_xfer   = bfin_twi_master_xfer,
 	.smbus_xfer    = bfin_twi_smbus_xfer,
 	.functionality = bfin_twi_functionality,
@@ -684,12 +685,14 @@ static int i2c_bfin_twi_probe(struct platform_device *pdev)
 	write_CONTROL(iface, read_CONTROL(iface) | TWI_ENA);
 
 	rc = i2c_add_numbered_adapter(p_adap);
-	if (rc < 0)
+	if (rc < 0) {
+		dev_err(&pdev->dev, "Can't add i2c adapter!\n");
 		goto out_error;
+	}
 
 	platform_set_drvdata(pdev, iface);
 
-	dev_info(&pdev->dev, "Blackfin BF5xx on-chip I2C TWI Controller, "
+	dev_info(&pdev->dev, "Blackfin BF5xx on-chip I2C TWI Contoller, "
 		"regs_base@%p\n", iface->regs_base);
 
 	return 0;
@@ -714,6 +717,7 @@ static struct platform_driver i2c_bfin_twi_driver = {
 	.remove		= i2c_bfin_twi_remove,
 	.driver		= {
 		.name	= "i2c-bfin-twi",
+		.owner	= THIS_MODULE,
 		.pm	= I2C_BFIN_TWI_PM_OPS,
 	},
 };
@@ -732,6 +736,6 @@ subsys_initcall(i2c_bfin_twi_init);
 module_exit(i2c_bfin_twi_exit);
 
 MODULE_AUTHOR("Bryan Wu, Sonic Zhang");
-MODULE_DESCRIPTION("Blackfin BF5xx on-chip I2C TWI Controller Driver");
+MODULE_DESCRIPTION("Blackfin BF5xx on-chip I2C TWI Contoller Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:i2c-bfin-twi");

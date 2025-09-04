@@ -43,13 +43,11 @@
  * @dev:	Driver model representation of the device.
  * @ctrl:	SPMI controller managing the bus hosting this device.
  * @usid:	This devices' Unique Slave IDentifier.
- * @gsid:	This devices' Global Slave IDentifier.
  */
 struct spmi_device {
 	struct device		dev;
 	struct spmi_controller	*ctrl;
 	u8			usid;
-	u8			gsid;
 };
 
 static inline struct spmi_device *to_spmi_device(struct device *d)
@@ -136,6 +134,9 @@ void spmi_controller_remove(struct spmi_controller *ctrl);
  *		this structure.
  * @probe:	binds this driver to a SPMI device.
  * @remove:	unbinds this driver from the SPMI device.
+ * @shutdown:	standard shutdown callback used during powerdown/halt.
+ * @suspend:	standard suspend callback used during system suspend.
+ * @resume:	standard resume callback used during system resume.
  *
  * If PM runtime support is desired for a slave, a device driver can call
  * pm_runtime_put() from their probe() routine (and a balancing
@@ -155,9 +156,7 @@ static inline struct spmi_driver *to_spmi_driver(struct device_driver *d)
 	return container_of(d, struct spmi_driver, driver);
 }
 
-#define spmi_driver_register(sdrv) \
-	__spmi_driver_register(sdrv, THIS_MODULE)
-int __spmi_driver_register(struct spmi_driver *sdrv, struct module *owner);
+int spmi_driver_register(struct spmi_driver *sdrv);
 
 /**
  * spmi_driver_unregister() - unregister an SPMI client driver

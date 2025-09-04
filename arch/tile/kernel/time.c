@@ -20,7 +20,6 @@
 #include <linux/clockchips.h>
 #include <linux/hardirq.h>
 #include <linux/sched.h>
-#include <linux/sched/clock.h>
 #include <linux/smp.h>
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -38,7 +37,7 @@
  */
 
 /* How many cycles per second we are running at. */
-static cycles_t cycles_per_sec __ro_after_init;
+static cycles_t cycles_per_sec __write_once;
 
 cycles_t get_clock_rate(void)
 {
@@ -69,7 +68,7 @@ EXPORT_SYMBOL(get_cycles);
  */
 #define SCHED_CLOCK_SHIFT 10
 
-static unsigned long sched_clock_mult __ro_after_init;
+static unsigned long sched_clock_mult __write_once;
 
 static cycles_t clocksource_get_cycles(struct clocksource *cs)
 {
@@ -99,8 +98,8 @@ void __init calibrate_delay(void)
 {
 	loops_per_jiffy = get_clock_rate() / HZ;
 	pr_info("Clock rate yields %lu.%02lu BogoMIPS (lpj=%lu)\n",
-		loops_per_jiffy / (500000 / HZ),
-		(loops_per_jiffy / (5000 / HZ)) % 100, loops_per_jiffy);
+		loops_per_jiffy/(500000/HZ),
+		(loops_per_jiffy/(5000/HZ)) % 100, loops_per_jiffy);
 }
 
 /* Called fairly late in init/main.c, but before we go smp. */
@@ -141,10 +140,10 @@ static int tile_timer_set_next_event(unsigned long ticks,
  * Whenever anyone tries to change modes, we just mask interrupts
  * and wait for the next event to get set.
  */
-static int tile_timer_shutdown(struct clock_event_device *evt)
+static void tile_timer_set_mode(enum clock_event_mode mode,
+				struct clock_event_device *evt)
 {
 	arch_local_irq_mask_now(INT_TILE_TIMER);
-	return 0;
 }
 
 /*
@@ -155,15 +154,10 @@ static DEFINE_PER_CPU(struct clock_event_device, tile_timer) = {
 	.name = "tile timer",
 	.features = CLOCK_EVT_FEAT_ONESHOT,
 	.min_delta_ns = 1000,
-	.min_delta_ticks = 1,
-	.max_delta_ticks = MAX_TICK,
 	.rating = 100,
 	.irq = -1,
 	.set_next_event = tile_timer_set_next_event,
-	.set_state_shutdown = tile_timer_shutdown,
-	.set_state_oneshot = tile_timer_shutdown,
-	.set_state_oneshot_stopped = tile_timer_shutdown,
-	.tick_resume = tile_timer_shutdown,
+	.set_mode = tile_timer_set_mode,
 };
 
 void setup_tile_timer(void)
@@ -222,8 +216,8 @@ void do_timer_interrupt(struct pt_regs *regs, int fault_num)
  */
 unsigned long long sched_clock(void)
 {
-	return mult_frac(get_cycles(),
-			 sched_clock_mult, 1ULL << SCHED_CLOCK_SHIFT);
+	return clocksource_cyc2ns(get_cycles(),
+				  sched_clock_mult, SCHED_CLOCK_SHIFT);
 }
 
 int setup_profiling_timer(unsigned int multiplier)

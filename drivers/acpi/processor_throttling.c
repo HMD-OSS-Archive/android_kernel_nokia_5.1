@@ -19,6 +19,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
@@ -31,7 +35,7 @@
 #include <linux/acpi.h>
 #include <acpi/processor.h>
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define PREFIX "ACPI: "
 
@@ -375,11 +379,11 @@ int acpi_processor_tstate_has_changed(struct acpi_processor *pr)
  *	3. TSD domain
  */
 void acpi_processor_reevaluate_tstate(struct acpi_processor *pr,
-					bool is_dead)
+					unsigned long action)
 {
 	int result = 0;
 
-	if (is_dead) {
+	if (action == CPU_DEAD) {
 		/* When one CPU is offline, the T-state throttling
 		 * will be invalidated.
 		 */
@@ -676,15 +680,6 @@ static int acpi_processor_get_throttling_fadt(struct acpi_processor *pr)
 	if (!pr->flags.throttling)
 		return -ENODEV;
 
-	/*
-	 * We don't care about error returns - we just try to mark
-	 * these reserved so that nobody else is confused into thinking
-	 * that this region might be unused..
-	 *
-	 * (In particular, allocating the IO range for Cardbus)
-	 */
-	request_region(pr->throttling.address, 6, "ACPI CPU throttle");
-
 	pr->throttling.state = 0;
 
 	duty_mask = pr->throttling.state_count - 1;
@@ -909,13 +904,6 @@ static long __acpi_processor_get_throttling(void *data)
 	return pr->throttling.acpi_processor_get_throttling(pr);
 }
 
-static int call_on_cpu(int cpu, long (*fn)(void *), void *arg, bool direct)
-{
-	if (direct || (is_percpu_thread() && cpu == smp_processor_id()))
-		return fn(arg);
-	return work_on_cpu(cpu, fn, arg);
-}
-
 static int acpi_processor_get_throttling(struct acpi_processor *pr)
 {
 	if (!pr)
@@ -933,7 +921,7 @@ static int acpi_processor_get_throttling(struct acpi_processor *pr)
 	if (!cpu_online(pr->id))
 		return -ENODEV;
 
-	return call_on_cpu(pr->id, __acpi_processor_get_throttling, pr, false);
+	return work_on_cpu(pr->id, __acpi_processor_get_throttling, pr);
 }
 
 static int acpi_processor_get_fadt_info(struct acpi_processor *pr)
@@ -1081,6 +1069,13 @@ static long acpi_processor_throttling_fn(void *data)
 
 	return pr->throttling.acpi_processor_set_throttling(pr,
 			arg->target_state, arg->force);
+}
+
+static int call_on_cpu(int cpu, long (*fn)(void *), void *arg, bool direct)
+{
+	if (direct)
+		return fn(arg);
+	return work_on_cpu(cpu, fn, arg);
 }
 
 static int __acpi_processor_set_throttling(struct acpi_processor *pr,

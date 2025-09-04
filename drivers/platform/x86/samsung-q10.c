@@ -82,6 +82,7 @@ static int samsungq10_remove(struct platform_device *pdev)
 static struct platform_driver samsungq10_driver = {
 	.driver		= {
 		.name	= KBUILD_MODNAME,
+		.owner	= THIS_MODULE,
 	},
 	.probe		= samsungq10_probe,
 	.remove		= samsungq10_remove,
@@ -95,7 +96,7 @@ static int __init dmi_check_callback(const struct dmi_system_id *id)
 	return 1;
 }
 
-static const struct dmi_system_id samsungq10_dmi_table[] __initconst = {
+static struct dmi_system_id __initdata samsungq10_dmi_table[] = {
 	{
 		.ident = "Samsung Q10",
 		.matches = {

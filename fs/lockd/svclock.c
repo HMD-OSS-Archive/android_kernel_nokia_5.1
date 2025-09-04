@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/fs/lockd/svclock.c
  *
@@ -54,12 +53,12 @@ static const struct rpc_call_ops nlmsvc_grant_ops;
 static LIST_HEAD(nlm_blocked);
 static DEFINE_SPINLOCK(nlm_blocked_lock);
 
-#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
+#ifdef LOCKD_DEBUG
 static const char *nlmdbg_cookie2a(const struct nlm_cookie *cookie)
 {
 	/*
-	 * We can get away with a static buffer because this is only called
-	 * from lockd, which is single-threaded.
+	 * We can get away with a static buffer because we're only
+	 * called with BKL held.
 	 */
 	static char buf[2*NLM_MAXCOOKIELEN+1];
 	unsigned int i, len = sizeof(buf);
@@ -871,15 +870,15 @@ nlmsvc_grant_reply(struct nlm_cookie *cookie, __be32 status)
 	if (!(block = nlmsvc_find_block(cookie)))
 		return;
 
-	if (status == nlm_lck_denied_grace_period) {
-		/* Try again in a couple of seconds */
-		nlmsvc_insert_block(block, 10 * HZ);
-	} else {
-		/*
-		 * Lock is now held by client, or has been rejected.
-		 * In both cases, the block should be removed.
-		 */
-		nlmsvc_unlink_block(block);
+	if (block) {
+		if (status == nlm_lck_denied_grace_period) {
+			/* Try again in a couple of seconds */
+			nlmsvc_insert_block(block, 10 * HZ);
+		} else {
+			/* Lock is now held by client, or has been rejected.
+			 * In both cases, the block should be removed. */
+			nlmsvc_unlink_block(block);
+		}
 	}
 	nlmsvc_release_block(block);
 }

@@ -47,7 +47,6 @@ bool mtk_get_gpu_page_cache(unsigned int *pPageCache);
 
 /* unit: 0~100 % */
 bool mtk_get_gpu_loading(unsigned int *pLoading);
-bool mtk_get_gpu_loading2(unsigned int *pLoading, int reset);
 bool mtk_get_gpu_block(unsigned int *pBlock);
 bool mtk_get_gpu_idle(unsigned int *pIlde);
 bool mtk_get_gpu_freq(unsigned int *pFreq);
@@ -78,18 +77,6 @@ bool mtk_get_gpu_custom_boost_freq(unsigned long *pulFreq);
 bool mtk_get_gpu_custom_upbound_freq(unsigned long *pulFreq);
 bool mtk_get_vsync_offset_event_status(unsigned int *pui32EventStatus);
 bool mtk_get_vsync_offset_debug_status(unsigned int *pui32DebugStatus);
-bool mtk_dvfs_margin_value(int i32MarginValue);
-bool mtk_get_dvfs_margin_value(int *pi32MaginValue);
-bool mtk_loading_base_dvfs_step(int i32StepValue);
-bool mtk_get_loading_base_dvfs_step(int *pi32StepValue);
-bool mtk_timer_base_dvfs_margin(int i32MarginValue);
-bool mtk_get_timer_base_dvfs_margin(int *pi32MaginValue);
-
-/* CAP */
-bool mtk_get_gpu_dvfs_cal_freq(unsigned long *pulGpu_tar_freq);
-
-/* MET */
-bool mtk_enable_gpu_perf_monitor(bool enable);
 
 #ifdef __cplusplus
 }

@@ -93,7 +93,6 @@
 #define CLK_SCLK_FIMG2D		177
 
 /* gate clocks */
-#define CLK_SSS			255
 #define CLK_FIMC0		256
 #define CLK_FIMC1		257
 #define CLK_FIMC2		258
@@ -263,13 +262,8 @@
 #define CLK_DIV_MCUISP1		453 /* Exynos4x12 only */
 #define CLK_DIV_ACLK200		454 /* Exynos4x12 only */
 #define CLK_DIV_ACLK400_MCUISP	455 /* Exynos4x12 only */
-#define CLK_DIV_ACP		456
-#define CLK_DIV_DMC		457
-#define CLK_DIV_C2C		458 /* Exynos4x12 only */
-#define CLK_DIV_GDL		459
-#define CLK_DIV_GDR		460
 
 /* must be greater than maximal clock id */
-#define CLK_NR_CLKS		461
+#define CLK_NR_CLKS		456
 
 #endif /* _DT_BINDINGS_CLOCK_EXYNOS_4_H */

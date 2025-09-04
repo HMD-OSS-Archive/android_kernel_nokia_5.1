@@ -17,7 +17,7 @@
 #ifndef __DRIVERS_MTD_NAND_GPMI_NAND_H
 #define __DRIVERS_MTD_NAND_GPMI_NAND_H
 
-#include <linux/mtd/rawnand.h>
+#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
@@ -123,16 +123,13 @@ enum gpmi_type {
 	IS_MX23,
 	IS_MX28,
 	IS_MX6Q,
-	IS_MX6SX,
-	IS_MX7D,
+	IS_MX6SX
 };
 
 struct gpmi_devdata {
 	enum gpmi_type type;
 	int bch_max_ecc_strength;
 	int max_chain_delay; /* See the async EDO mode */
-	const char * const *clks;
-	const int clks_count;
 };
 
 struct gpmi_nand_data {
@@ -163,6 +160,7 @@ struct gpmi_nand_data {
 
 	/* MTD / NAND */
 	struct nand_chip	nand;
+	struct mtd_info		mtd;
 
 	/* General-use Variables */
 	int			current_chip;
@@ -190,8 +188,6 @@ struct gpmi_nand_data {
 
 	void			*auxiliary_virt;
 	dma_addr_t		auxiliary_phys;
-
-	void			*raw_buffer;
 
 	/* DMA channels */
 #define DMA_CHANS		8
@@ -234,7 +230,7 @@ struct gpmi_nfc_hardware_timing {
 };
 
 /**
- * struct timing_threshold - Timing threshold
+ * struct timing_threshod - Timing threshold
  * @max_data_setup_cycles:       The maximum number of data setup cycles that
  *                               can be expressed in the hardware.
  * @internal_data_setup_in_ns:   The time, in ns, that the NFC hardware requires
@@ -256,7 +252,7 @@ struct gpmi_nfc_hardware_timing {
  *                               progress, this is the clock frequency during
  *                               the most recent I/O transaction.
  */
-struct timing_threshold {
+struct timing_threshod {
 	const unsigned int      max_chip_count;
 	const unsigned int      max_data_setup_cycles;
 	const unsigned int      internal_data_setup_in_ns;
@@ -294,10 +290,6 @@ extern int gpmi_send_page(struct gpmi_nand_data *,
 extern int gpmi_read_page(struct gpmi_nand_data *,
 			dma_addr_t payload, dma_addr_t auxiliary);
 
-void gpmi_copy_bits(u8 *dst, size_t dst_bit_off,
-		    const u8 *src, size_t src_bit_off,
-		    size_t nbits);
-
 /* BCH : Status Block Completion Codes */
 #define STATUS_GOOD		0x00
 #define STATUS_ERASED		0xff
@@ -308,8 +300,6 @@ void gpmi_copy_bits(u8 *dst, size_t dst_bit_off,
 #define GPMI_IS_MX28(x)		((x)->devdata->type == IS_MX28)
 #define GPMI_IS_MX6Q(x)		((x)->devdata->type == IS_MX6Q)
 #define GPMI_IS_MX6SX(x)	((x)->devdata->type == IS_MX6SX)
-#define GPMI_IS_MX7D(x)		((x)->devdata->type == IS_MX7D)
 
-#define GPMI_IS_MX6(x)		(GPMI_IS_MX6Q(x) || GPMI_IS_MX6SX(x) || \
-				 GPMI_IS_MX7D(x))
+#define GPMI_IS_MX6(x)		(GPMI_IS_MX6Q(x) || GPMI_IS_MX6SX(x))
 #endif

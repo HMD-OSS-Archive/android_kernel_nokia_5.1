@@ -197,6 +197,8 @@ static int jornada680kbd_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	platform_set_drvdata(pdev, jornadakbd);
+
 	jornadakbd->poll_dev = poll_dev;
 
 	memcpy(jornadakbd->keymap, jornada_scancodes,
@@ -235,6 +237,7 @@ static int jornada680kbd_probe(struct platform_device *pdev)
 static struct platform_driver jornada680kbd_driver = {
 	.driver	= {
 		.name	= "jornada680_kbd",
+		.owner	= THIS_MODULE,
 	},
 	.probe	= jornada680kbd_probe,
 };

@@ -12,6 +12,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
  * File: dpc.h
  *
  * Purpose:
@@ -25,8 +29,14 @@
 #ifndef __DPC_H__
 #define __DPC_H__
 
+#include "ttype.h"
 #include "device.h"
+#include "wcmd.h"
 
-bool vnt_receive_frame(struct vnt_private *priv, struct vnt_rx_desc *curr_rd);
+bool
+device_receive_frame(
+	struct vnt_private *,
+	PSRxDesc pCurrRD
+);
 
-#endif /* __RXTX_H__ */
+#endif // __RXTX_H__

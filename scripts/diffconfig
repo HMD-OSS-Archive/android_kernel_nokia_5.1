@@ -1,5 +1,4 @@
 #!/usr/bin/python
-# SPDX-License-Identifier: GPL-2.0
 #
 # diffconfig - a tool to compare .config files.
 #
@@ -29,6 +28,7 @@ If no config files are specified, .config and .config.old are used.
 Example usage:
  $ diffconfig .config config-with-some-changes
 -EXT2_FS_XATTR  n
+-EXT2_FS_XIP  n
  CRAMFS  n -> y
  EXT2_FS  y -> n
  LOG_BUF_SHIFT  14 -> 16

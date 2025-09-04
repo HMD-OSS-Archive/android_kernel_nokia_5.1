@@ -14,7 +14,7 @@
 #ifndef __CMDQ_ENGINE_COMMON_H__
 #define __CMDQ_ENGINE_COMMON_H__
 
-enum CMDQ_ENG_ENUM {
+typedef enum CMDQ_ENG_ENUM {
 	/* ISP */
 	CMDQ_ENG_ISP_IMGI = 0,
 	CMDQ_ENG_ISP_IMGO,	/* 1 */
@@ -79,6 +79,6 @@ enum CMDQ_ENG_ENUM {
 	CMDQ_ENG_MMSYS_CONFIG,
 
 	CMDQ_MAX_ENGINE_COUNT	/* ALWAYS keep at the end */
-};
+} CMDQ_ENG_ENUM;
 
 #endif				/* __CMDQ_ENGINE_COMMON_H__ */

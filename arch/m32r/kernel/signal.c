@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/m32r/kernel/signal.c
  *
@@ -24,7 +23,7 @@
 #include <linux/tracehook.h>
 #include <asm/cacheflush.h>
 #include <asm/ucontext.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define DEBUG_SIG 0
 
@@ -173,14 +172,20 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 {
 	struct rt_sigframe __user *frame;
 	int err = 0;
-	int sig = ksig->sig;
+	int signal, sig = ksig->sig;
 
 	frame = get_sigframe(ksig, regs->spu, sizeof(*frame));
 
 	if (!access_ok(VERIFY_WRITE, frame, sizeof(*frame)))
 		return -EFAULT;
 
-	err |= __put_user(sig, &frame->sig);
+	signal = current_thread_info()->exec_domain
+		&& current_thread_info()->exec_domain->signal_invmap
+		&& sig < 32
+		? current_thread_info()->exec_domain->signal_invmap[sig]
+		: sig;
+
+	err |= __put_user(signal, &frame->sig);
 	if (err)
 		return -EFAULT;
 
@@ -204,10 +209,12 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 
 	/* Set up registers for signal handler */
 	regs->spu = (unsigned long)frame;
-	regs->r0 = sig;	/* Arg for signal handler */
+	regs->r0 = signal;	/* Arg for signal handler */
 	regs->r1 = (unsigned long)&frame->info;
 	regs->r2 = (unsigned long)&frame->uc;
 	regs->bpc = (unsigned long)ksig->ka.sa.sa_handler;
+
+	set_fs(USER_DS);
 
 #if DEBUG_SIG
 	printk("SIG deliver (%s:%d): sp=%p pc=%p\n",

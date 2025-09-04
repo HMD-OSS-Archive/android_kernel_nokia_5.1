@@ -2,8 +2,6 @@
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
- *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
  * the Free Software Foundation.
@@ -40,9 +38,8 @@
 extern bool hang_debug;
 
 static void a3xx_dump(struct msm_gpu *gpu);
-static bool a3xx_idle(struct msm_gpu *gpu);
 
-static bool a3xx_me_init(struct msm_gpu *gpu)
+static void a3xx_me_init(struct msm_gpu *gpu)
 {
 	struct msm_ringbuffer *ring = gpu->rb;
 
@@ -66,7 +63,7 @@ static bool a3xx_me_init(struct msm_gpu *gpu)
 	OUT_RING(ring, 0x00000000);
 
 	gpu->funcs->flush(gpu);
-	return a3xx_idle(gpu);
+	gpu->funcs->idle(gpu);
 }
 
 static int a3xx_hw_init(struct msm_gpu *gpu)
@@ -94,10 +91,7 @@ static int a3xx_hw_init(struct msm_gpu *gpu)
 		/* Set up AOOO: */
 		gpu_write(gpu, REG_A3XX_VBIF_OUT_AXI_AOOO_EN, 0x0000003c);
 		gpu_write(gpu, REG_A3XX_VBIF_OUT_AXI_AOOO, 0x003c003c);
-	} else if (adreno_is_a306(adreno_gpu)) {
-		gpu_write(gpu, REG_A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003);
-		gpu_write(gpu, REG_A3XX_VBIF_OUT_RD_LIM_CONF0, 0x0000000a);
-		gpu_write(gpu, REG_A3XX_VBIF_OUT_WR_LIM_CONF0, 0x0000000a);
+
 	} else if (adreno_is_a320(adreno_gpu)) {
 		/* Set up 16 deep read/write request queues: */
 		gpu_write(gpu, REG_A3XX_VBIF_IN_RD_LIM_CONF0, 0x10101010);
@@ -190,9 +184,7 @@ static int a3xx_hw_init(struct msm_gpu *gpu)
 	gpu_write(gpu, REG_A3XX_UCHE_CACHE_MODE_CONTROL_REG, 0x00000001);
 
 	/* Enable Clock gating: */
-	if (adreno_is_a306(adreno_gpu))
-		gpu_write(gpu, REG_A3XX_RBBM_CLOCK_CTL, 0xaaaaaaaa);
-	else if (adreno_is_a320(adreno_gpu))
+	if (adreno_is_a320(adreno_gpu))
 		gpu_write(gpu, REG_A3XX_RBBM_CLOCK_CTL, 0xbfffffff);
 	else if (adreno_is_a330v2(adreno_gpu))
 		gpu_write(gpu, REG_A3XX_RBBM_CLOCK_CTL, 0xaaaaaaaa);
@@ -277,8 +269,7 @@ static int a3xx_hw_init(struct msm_gpu *gpu)
 		gpu_write(gpu, REG_A3XX_CP_PFP_UCODE_DATA, ptr[i]);
 
 	/* CP ROQ queue sizes (bytes) - RB:16, ST:16, IB1:32, IB2:64 */
-	if (adreno_is_a305(adreno_gpu) || adreno_is_a306(adreno_gpu) ||
-			adreno_is_a320(adreno_gpu)) {
+	if (adreno_is_a305(adreno_gpu) || adreno_is_a320(adreno_gpu)) {
 		gpu_write(gpu, REG_AXXX_CP_QUEUE_THRESHOLDS,
 				AXXX_CP_QUEUE_THRESHOLDS_CSQ_IB1_START(2) |
 				AXXX_CP_QUEUE_THRESHOLDS_CSQ_IB2_START(6) |
@@ -295,24 +286,16 @@ static int a3xx_hw_init(struct msm_gpu *gpu)
 	/* clear ME_HALT to start micro engine */
 	gpu_write(gpu, REG_AXXX_CP_ME_CNTL, 0);
 
-	return a3xx_me_init(gpu) ? 0 : -EINVAL;
+	a3xx_me_init(gpu);
+
+	return 0;
 }
 
 static void a3xx_recover(struct msm_gpu *gpu)
 {
-	int i;
-
-	adreno_dump_info(gpu);
-
-	for (i = 0; i < 8; i++) {
-		printk("CP_SCRATCH_REG%d: %u\n", i,
-			gpu_read(gpu, REG_AXXX_CP_SCRATCH_REG0 + i));
-	}
-
 	/* dump registers before resetting gpu, if enabled: */
 	if (hang_debug)
 		a3xx_dump(gpu);
-
 	gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 1);
 	gpu_read(gpu, REG_A3XX_RBBM_SW_RESET_CMD);
 	gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 0);
@@ -336,22 +319,17 @@ static void a3xx_destroy(struct msm_gpu *gpu)
 	kfree(a3xx_gpu);
 }
 
-static bool a3xx_idle(struct msm_gpu *gpu)
+static void a3xx_idle(struct msm_gpu *gpu)
 {
 	/* wait for ringbuffer to drain: */
-	if (!adreno_idle(gpu))
-		return false;
+	adreno_idle(gpu);
 
 	/* then wait for GPU to finish: */
 	if (spin_until(!(gpu_read(gpu, REG_A3XX_RBBM_STATUS) &
-			A3XX_RBBM_STATUS_GPU_BUSY))) {
+			A3XX_RBBM_STATUS_GPU_BUSY)))
 		DRM_ERROR("%s: timeout waiting for GPU to idle!\n", gpu->name);
 
-		/* TODO maybe we need to reset GPU here to recover from hang? */
-		return false;
-	}
-
-	return true;
+	/* TODO maybe we need to reset GPU here to recover from hang? */
 }
 
 static irqreturn_t a3xx_irq(struct msm_gpu *gpu)
@@ -413,8 +391,10 @@ static const unsigned int a3xx_registers[] = {
 #ifdef CONFIG_DEBUG_FS
 static void a3xx_show(struct msm_gpu *gpu, struct seq_file *m)
 {
+	gpu->funcs->pm_resume(gpu);
 	seq_printf(m, "status:   %08x\n",
 			gpu_read(gpu, REG_A3XX_RBBM_STATUS));
+	gpu->funcs->pm_suspend(gpu);
 	adreno_show(gpu, m);
 }
 #endif
@@ -426,16 +406,6 @@ static void a3xx_dump(struct msm_gpu *gpu)
 			gpu_read(gpu, REG_A3XX_RBBM_STATUS));
 	adreno_dump(gpu);
 }
-/* Register offset defines for A3XX */
-static const unsigned int a3xx_register_offsets[REG_ADRENO_REGISTER_MAX] = {
-	REG_ADRENO_DEFINE(REG_ADRENO_CP_RB_BASE, REG_AXXX_CP_RB_BASE),
-	REG_ADRENO_SKIP(REG_ADRENO_CP_RB_BASE_HI),
-	REG_ADRENO_DEFINE(REG_ADRENO_CP_RB_RPTR_ADDR, REG_AXXX_CP_RB_RPTR_ADDR),
-	REG_ADRENO_SKIP(REG_ADRENO_CP_RB_RPTR_ADDR_HI),
-	REG_ADRENO_DEFINE(REG_ADRENO_CP_RB_RPTR, REG_AXXX_CP_RB_RPTR),
-	REG_ADRENO_DEFINE(REG_ADRENO_CP_RB_WPTR, REG_AXXX_CP_RB_WPTR),
-	REG_ADRENO_DEFINE(REG_ADRENO_CP_RB_CNTL, REG_AXXX_CP_RB_CNTL),
-};
 
 static const struct adreno_gpu_funcs funcs = {
 	.base = {
@@ -447,6 +417,7 @@ static const struct adreno_gpu_funcs funcs = {
 		.last_fence = adreno_last_fence,
 		.submit = adreno_submit,
 		.flush = adreno_flush,
+		.idle = a3xx_idle,
 		.irq = a3xx_irq,
 		.destroy = a3xx_destroy,
 #ifdef CONFIG_DEBUG_FS
@@ -486,11 +457,12 @@ struct msm_gpu *a3xx_gpu_init(struct drm_device *dev)
 	adreno_gpu = &a3xx_gpu->base;
 	gpu = &adreno_gpu->base;
 
+	a3xx_gpu->pdev = pdev;
+
 	gpu->perfcntrs = perfcntrs;
 	gpu->num_perfcntrs = ARRAY_SIZE(perfcntrs);
 
 	adreno_gpu->registers = a3xx_registers;
-	adreno_gpu->reg_offsets = a3xx_register_offsets;
 
 	ret = adreno_gpu_init(dev, pdev, adreno_gpu, &funcs);
 	if (ret)
@@ -511,7 +483,7 @@ struct msm_gpu *a3xx_gpu_init(struct drm_device *dev)
 #endif
 	}
 
-	if (!gpu->aspace) {
+	if (!gpu->mmu) {
 		/* TODO we think it is possible to configure the GPU to
 		 * restrict access to VRAM carveout.  But the required
 		 * registers are unknown.  For now just bail out and

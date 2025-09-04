@@ -58,32 +58,9 @@ struct mtk_cec {
 	struct clk *clk;
 	int irq;
 	bool hpd;
-	void (*hpd_event)(bool hpd, struct device *dev);
-	struct device *hdmi_dev;
-	spinlock_t lock;
+	void (*hpd_event)(bool hpd, void *data);
+	void *hpd_event_data;
 };
-
-static void mtk_cec_clear_bits(struct mtk_cec *cec, unsigned int offset,
-			       unsigned int bits)
-{
-	void __iomem *reg = cec->regs + offset;
-	u32 tmp;
-
-	tmp = readl(reg);
-	tmp &= ~bits;
-	writel(tmp, reg);
-}
-
-static void mtk_cec_set_bits(struct mtk_cec *cec, unsigned int offset,
-			     unsigned int bits)
-{
-	void __iomem *reg = cec->regs + offset;
-	u32 tmp;
-
-	tmp = readl(reg);
-	tmp |= bits;
-	writel(tmp, reg);
-}
 
 static void mtk_cec_mask(struct mtk_cec *cec, unsigned int offset,
 			 unsigned int val, unsigned int mask)
@@ -95,16 +72,13 @@ static void mtk_cec_mask(struct mtk_cec *cec, unsigned int offset,
 }
 
 void mtk_cec_set_hpd_event(struct device *dev,
-			   void (*hpd_event)(bool hpd, struct device *dev),
-			   struct device *hdmi_dev)
+			   void (*hpd_event)(bool hpd, void *data),
+			   void *hpd_event_data)
 {
 	struct mtk_cec *cec = dev_get_drvdata(dev);
-	unsigned long flags;
 
-	spin_lock_irqsave(&cec->lock, flags);
-	cec->hdmi_dev = hdmi_dev;
+	cec->hpd_event_data = hpd_event_data;
 	cec->hpd_event = hpd_event;
-	spin_unlock_irqrestore(&cec->lock, flags);
 }
 
 bool mtk_cec_hpd_high(struct device *dev)
@@ -117,54 +91,61 @@ bool mtk_cec_hpd_high(struct device *dev)
 	return (status & (HDMI_PORD | HDMI_HTPLG)) == (HDMI_PORD | HDMI_HTPLG);
 }
 
-static void mtk_cec_htplg_irq_init(struct mtk_cec *cec)
+int mtk_cec_irq(struct device *dev)
 {
-	mtk_cec_mask(cec, CEC_CKGEN, 0 | CEC_32K_PDN, PDN | CEC_32K_PDN);
-	mtk_cec_set_bits(cec, RX_GEN_WD, HDMI_PORD_INT_32K_CLR |
-			 RX_INT_32K_CLR | HDMI_HTPLG_INT_32K_CLR);
-	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_PORD_INT_32K_CLR | RX_INT_32K_CLR |
-		     HDMI_HTPLG_INT_32K_CLR | HDMI_PORD_INT_32K_EN |
-		     RX_INT_32K_EN | HDMI_HTPLG_INT_32K_EN);
+	struct mtk_cec *cec = dev_get_drvdata(dev);
+
+	return cec->irq;
 }
 
 static void mtk_cec_htplg_irq_enable(struct mtk_cec *cec)
 {
-	mtk_cec_set_bits(cec, RX_EVENT, HDMI_PORD_INT_EN | HDMI_HTPLG_INT_EN);
+	mtk_cec_mask(cec, CEC_CKGEN, 0, PDN);
+	mtk_cec_mask(cec, CEC_CKGEN, CEC_32K_PDN, CEC_32K_PDN);
+	mtk_cec_mask(cec, RX_GEN_WD, HDMI_PORD_INT_32K_CLR,
+		     HDMI_PORD_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, RX_INT_32K_CLR, RX_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, HDMI_HTPLG_INT_32K_CLR,
+		     HDMI_HTPLG_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_PORD_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, RX_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_HTPLG_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_PORD_INT_32K_EN);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, RX_INT_32K_EN);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_HTPLG_INT_32K_EN);
+
+	mtk_cec_mask(cec, RX_EVENT, HDMI_PORD_INT_EN, HDMI_PORD_INT_EN);
+	mtk_cec_mask(cec, RX_EVENT, HDMI_HTPLG_INT_EN, HDMI_HTPLG_INT_EN);
 }
 
 static void mtk_cec_htplg_irq_disable(struct mtk_cec *cec)
 {
-	mtk_cec_clear_bits(cec, RX_EVENT, HDMI_PORD_INT_EN | HDMI_HTPLG_INT_EN);
+	mtk_cec_mask(cec, RX_EVENT, 0, HDMI_PORD_INT_EN);
+	mtk_cec_mask(cec, RX_EVENT, 0, HDMI_HTPLG_INT_EN);
 }
 
 static void mtk_cec_clear_htplg_irq(struct mtk_cec *cec)
 {
-	mtk_cec_set_bits(cec, TR_CONFIG, CLEAR_CEC_IRQ);
-	mtk_cec_set_bits(cec, NORMAL_INT_CTRL, HDMI_HTPLG_INT_CLR |
-			 HDMI_PORD_INT_CLR | HDMI_FULL_INT_CLR);
-	mtk_cec_set_bits(cec, RX_GEN_WD, HDMI_PORD_INT_32K_CLR |
-			 RX_INT_32K_CLR | HDMI_HTPLG_INT_32K_CLR);
-	usleep_range(5, 10);
-	mtk_cec_clear_bits(cec, NORMAL_INT_CTRL, HDMI_HTPLG_INT_CLR |
-			   HDMI_PORD_INT_CLR | HDMI_FULL_INT_CLR);
-	mtk_cec_clear_bits(cec, TR_CONFIG, CLEAR_CEC_IRQ);
-	mtk_cec_clear_bits(cec, RX_GEN_WD, HDMI_PORD_INT_32K_CLR |
-			   RX_INT_32K_CLR | HDMI_HTPLG_INT_32K_CLR);
-}
-
-static void mtk_cec_hpd_event(struct mtk_cec *cec, bool hpd)
-{
-	void (*hpd_event)(bool hpd, struct device *dev);
-	struct device *hdmi_dev;
-	unsigned long flags;
-
-	spin_lock_irqsave(&cec->lock, flags);
-	hpd_event = cec->hpd_event;
-	hdmi_dev = cec->hdmi_dev;
-	spin_unlock_irqrestore(&cec->lock, flags);
-
-	if (hpd_event)
-		hpd_event(hpd, hdmi_dev);
+	mtk_cec_mask(cec, TR_CONFIG, CLEAR_CEC_IRQ, CLEAR_CEC_IRQ);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, HDMI_HTPLG_INT_CLR,
+		     HDMI_HTPLG_INT_CLR);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, HDMI_PORD_INT_CLR,
+		     HDMI_PORD_INT_CLR);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, HDMI_FULL_INT_CLR,
+		     HDMI_FULL_INT_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, HDMI_PORD_INT_32K_CLR,
+		     HDMI_PORD_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, RX_INT_32K_CLR, RX_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, HDMI_HTPLG_INT_32K_CLR,
+		     HDMI_HTPLG_INT_32K_CLR);
+	udelay(5);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, 0, HDMI_HTPLG_INT_CLR);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, 0, HDMI_PORD_INT_CLR);
+	mtk_cec_mask(cec, TR_CONFIG, 0, CLEAR_CEC_IRQ);
+	mtk_cec_mask(cec, NORMAL_INT_CTRL, 0, HDMI_FULL_INT_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_PORD_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, RX_INT_32K_CLR);
+	mtk_cec_mask(cec, RX_GEN_WD, 0, HDMI_HTPLG_INT_32K_CLR);
 }
 
 static irqreturn_t mtk_cec_htplg_isr_thread(int irq, void *arg)
@@ -177,10 +158,11 @@ static irqreturn_t mtk_cec_htplg_isr_thread(int irq, void *arg)
 	hpd = mtk_cec_hpd_high(dev);
 
 	if (cec->hpd != hpd) {
-		dev_dbg(dev, "hotplug event! cur hpd = %d, hpd = %d\n",
-			cec->hpd, hpd);
+		dev_info(dev, "hotplug event!,cur hpd = %d, hpd = %d\n",
+			 cec->hpd, hpd);
 		cec->hpd = hpd;
-		mtk_cec_hpd_event(cec, hpd);
+		if (cec->hpd_event)
+			cec->hpd_event(hpd, cec->hpd_event_data);
 	}
 	return IRQ_HANDLED;
 }
@@ -197,7 +179,6 @@ static int mtk_cec_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	platform_set_drvdata(pdev, cec);
-	spin_lock_init(&cec->lock);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	cec->regs = devm_ioremap_resource(dev, res);
@@ -235,7 +216,6 @@ static int mtk_cec_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	mtk_cec_htplg_irq_init(cec);
 	mtk_cec_htplg_irq_enable(cec);
 
 	return 0;
@@ -252,6 +232,7 @@ static int mtk_cec_remove(struct platform_device *pdev)
 
 static const struct of_device_id mtk_cec_of_ids[] = {
 	{ .compatible = "mediatek,mt8173-cec", },
+	{ .compatible = "mediatek,mt2701-cec", },
 	{}
 };
 

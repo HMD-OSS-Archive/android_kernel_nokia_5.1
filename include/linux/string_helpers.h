@@ -1,10 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_STRING_HELPERS_H_
 #define _LINUX_STRING_HELPERS_H_
 
 #include <linux/types.h>
-
-struct file;
 
 /* Descriptions of the types of units to
  * print in */
@@ -13,8 +10,8 @@ enum string_size_units {
 	STRING_UNITS_2,		/* use binary powers of 2^10 */
 };
 
-void string_get_size(u64 size, u64 blk_size, enum string_size_units units,
-		     char *buf, int len);
+int string_get_size(u64 size, enum string_size_units units,
+		    char *buf, int len);
 
 #define UNESCAPE_SPACE		0x01
 #define UNESCAPE_OCTAL		0x02
@@ -50,29 +47,25 @@ static inline int string_unescape_any_inplace(char *buf)
 #define ESCAPE_ANY_NP		(ESCAPE_ANY | ESCAPE_NP)
 #define ESCAPE_HEX		0x20
 
-int string_escape_mem(const char *src, size_t isz, char *dst, size_t osz,
-		unsigned int flags, const char *only);
+int string_escape_mem(const char *src, size_t isz, char **dst, size_t osz,
+		unsigned int flags, const char *esc);
 
 static inline int string_escape_mem_any_np(const char *src, size_t isz,
-		char *dst, size_t osz, const char *only)
+		char **dst, size_t osz, const char *esc)
 {
-	return string_escape_mem(src, isz, dst, osz, ESCAPE_ANY_NP, only);
+	return string_escape_mem(src, isz, dst, osz, ESCAPE_ANY_NP, esc);
 }
 
-static inline int string_escape_str(const char *src, char *dst, size_t sz,
-		unsigned int flags, const char *only)
+static inline int string_escape_str(const char *src, char **dst, size_t sz,
+		unsigned int flags, const char *esc)
 {
-	return string_escape_mem(src, strlen(src), dst, sz, flags, only);
+	return string_escape_mem(src, strlen(src), dst, sz, flags, esc);
 }
 
-static inline int string_escape_str_any_np(const char *src, char *dst,
-		size_t sz, const char *only)
+static inline int string_escape_str_any_np(const char *src, char **dst,
+		size_t sz, const char *esc)
 {
-	return string_escape_str(src, dst, sz, ESCAPE_ANY_NP, only);
+	return string_escape_str(src, dst, sz, ESCAPE_ANY_NP, esc);
 }
-
-char *kstrdup_quotable(const char *src, gfp_t gfp);
-char *kstrdup_quotable_cmdline(struct task_struct *task, gfp_t gfp);
-char *kstrdup_quotable_file(struct file *file, gfp_t gfp);
 
 #endif

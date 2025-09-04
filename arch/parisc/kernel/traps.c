@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/parisc/traps.c
  *
@@ -12,7 +11,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/errno.h>
@@ -28,9 +26,9 @@
 #include <linux/console.h>
 #include <linux/bug.h>
 #include <linux/ratelimit.h>
-#include <linux/uaccess.h>
 
 #include <asm/assembly.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/traps.h>
@@ -44,6 +42,10 @@
 #include <asm/cacheflush.h>
 
 #include "../math-emu/math-emu.h"	/* for handle_fpe() */
+
+#if defined(CONFIG_SMP) || defined(CONFIG_DEBUG_SPINLOCK)
+DEFINE_SPINLOCK(pa_dbit_lock);
+#endif
 
 static void parisc_show_stack(struct task_struct *task, unsigned long *sp,
 	struct pt_regs *regs);
@@ -286,8 +288,11 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
 
-	if (panic_on_oops)
+	if (panic_on_oops) {
+		printk(KERN_EMERG "Fatal exception: panic in 5 seconds\n");
+		ssleep(5);
 		panic("Fatal exception");
+	}
 
 	oops_exit();
 	do_exit(SIGSEGV);
@@ -460,8 +465,8 @@ void parisc_terminate(char *msg, struct pt_regs *regs, int code, unsigned long o
 	}
 
 	printk("\n");
-	pr_crit("%s: Code=%d (%s) regs=%p (Addr=" RFMT ")\n",
-		msg, code, trap_name(code), regs, offset);
+	printk(KERN_CRIT "%s: Code=%d regs=%p (Addr=" RFMT ")\n",
+			msg, code, regs, offset);
 	show_regs(regs);
 
 	spin_unlock(&terminate_lock);
@@ -795,7 +800,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 	     * unless pagefault_disable() was called before.
 	     */
 
-	    if (fault_space == 0 && !faulthandler_disabled())
+	    if (fault_space == 0 && !in_atomic())
 	    {
 		/* Clean up and return if in exception table. */
 		if (fixup_exception(regs))
@@ -809,7 +814,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 }
 
 
-void __init initialize_ivt(const void *iva)
+int __init check_ivt(void *iva)
 {
 	extern u32 os_hpmc_size;
 	extern const u32 os_hpmc[];
@@ -818,26 +823,17 @@ void __init initialize_ivt(const void *iva)
 	u32 check = 0;
 	u32 *ivap;
 	u32 *hpmcp;
-	u32 length, instr;
+	u32 length;
 
-	if (strcmp((const char *)iva, "cows can fly"))
-		panic("IVT invalid");
+	if (strcmp((char *)iva, "cows can fly"))
+		return -1;
 
 	ivap = (u32 *)iva;
 
 	for (i = 0; i < 8; i++)
 	    *ivap++ = 0;
 
-	/*
-	 * Use PDC_INSTR firmware function to get instruction that invokes
-	 * PDCE_CHECK in HPMC handler.  See programming note at page 1-31 of
-	 * the PA 1.1 Firmware Architecture document.
-	 */
-	if (pdc_instr(&instr) == PDC_OK)
-		ivap[0] = instr;
-
-	/* Setup IVA and compute checksum for HPMC handler */
-	ivap[6] = (u32)__pa(os_hpmc);
+	/* Compute Checksum for HPMC handler */
 	length = os_hpmc_size;
 	ivap[7] = length;
 
@@ -850,23 +846,28 @@ void __init initialize_ivt(const void *iva)
 	    check += ivap[i];
 
 	ivap[5] = -check;
+
+	return 0;
 }
 	
-
-/* early_trap_init() is called before we set up kernel mappings and
- * write-protect the kernel */
-void  __init early_trap_init(void)
-{
-	extern const void fault_vector_20;
-
 #ifndef CONFIG_64BIT
-	extern const void fault_vector_11;
-	initialize_ivt(&fault_vector_11);
+extern const void fault_vector_11;
 #endif
-
-	initialize_ivt(&fault_vector_20);
-}
+extern const void fault_vector_20;
 
 void __init trap_init(void)
 {
+	void *iva;
+
+	if (boot_cpu_data.cpu_type >= pcxu)
+		iva = (void *) &fault_vector_20;
+	else
+#ifdef CONFIG_64BIT
+		panic("Can't boot 64-bit OS on PA1.1 processor!");
+#else
+		iva = (void *) &fault_vector_11;
+#endif
+
+	if (check_ivt(iva))
+		panic("IVT invalid");
 }

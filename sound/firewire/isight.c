@@ -131,8 +131,14 @@ static void isight_samples(struct isight *isight,
 
 static void isight_pcm_abort(struct isight *isight)
 {
-	if (ACCESS_ONCE(isight->pcm_active))
-		snd_pcm_stop_xrun(isight->pcm);
+	unsigned long flags;
+
+	if (ACCESS_ONCE(isight->pcm_active)) {
+		snd_pcm_stream_lock_irqsave(isight->pcm, flags);
+		if (snd_pcm_running(isight->pcm))
+			snd_pcm_stop(isight->pcm, SNDRV_PCM_STATE_XRUN);
+		snd_pcm_stream_unlock_irqrestore(isight->pcm, flags);
+	}
 }
 
 static void isight_dropped_samples(struct isight *isight, unsigned int total)
@@ -444,7 +450,7 @@ static snd_pcm_uframes_t isight_pointer(struct snd_pcm_substream *substream)
 
 static int isight_create_pcm(struct isight *isight)
 {
-	static const struct snd_pcm_ops ops = {
+	static struct snd_pcm_ops ops = {
 		.open      = isight_open,
 		.close     = isight_close,
 		.ioctl     = snd_pcm_lib_ioctl,

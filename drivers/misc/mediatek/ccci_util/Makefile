@@ -20,6 +20,15 @@ ENABLE_CCCI_UTIL=n
 ifeq ($(CONFIG_MTK_ECCCI_DRIVER), y)
 ENABLE_CCCI_UTIL=y
 endif
+ifeq ($(CONFIG_MTK_CCCI_EXT), y)
+ENABLE_CCCI_UTIL=y
+endif
+
+ifneq ($(TARGET_BUILD_VARIANT),eng)
+ifeq ($(CONFIG_EXTREME_LOW_RAM), y)
+ccflags-y += -DCCCI_LOG_DISABLE
+endif
+endif
 
 ifeq ($(ENABLE_CCCI_UTIL), y)
 

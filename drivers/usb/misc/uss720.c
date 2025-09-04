@@ -50,8 +50,11 @@
 #include <linux/completion.h>
 #include <linux/kref.h>
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 
+/*
+ * Version Information
+ */
+#define DRIVER_VERSION "v0.6"
 #define DRIVER_AUTHOR "Thomas M. Sailer, t.sailer@alumni.ethz.ch"
 #define DRIVER_DESC "USB Parport Cable driver for Cables using the Lucent Technologies USS720 Chip"
 
@@ -121,8 +124,12 @@ static void async_complete(struct urb *urb)
 	} else if (rq->dr->bRequest == 3) {
 		memcpy(priv->reg, rq->reg, sizeof(priv->reg));
 #if 0
-		dev_dbg(&priv->usbdev->dev, "async_complete regs %7ph\n",
-			priv->reg);
+		dev_dbg(&priv->usbdev->dev,
+			"async_complete regs %02x %02x %02x %02x %02x %02x %02x\n",
+			(unsigned int)priv->reg[0], (unsigned int)priv->reg[1],
+			(unsigned int)priv->reg[2], (unsigned int)priv->reg[3],
+			(unsigned int)priv->reg[4], (unsigned int)priv->reg[5],
+			(unsigned int)priv->reg[6]);
 #endif
 		/* if nAck interrupts are enabled and we have an interrupt, call the interrupt procedure */
 		if (rq->reg[2] & rq->reg[1] & 0x10 && pp)
@@ -147,8 +154,10 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	if (!usbdev)
 		return NULL;
 	rq = kzalloc(sizeof(struct uss720_async_request), mem_flags);
-	if (!rq)
+	if (!rq) {
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
+	}
 	kref_init(&rq->ref_count);
 	INIT_LIST_HEAD(&rq->asynclist);
 	init_completion(&rq->compl);
@@ -157,6 +166,7 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	rq->urb = usb_alloc_urb(0, mem_flags);
 	if (!rq->urb) {
 		kref_put(&rq->ref_count, destroy_async);
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
 	}
 	rq->dr = kmalloc(sizeof(*rq->dr), mem_flags);
@@ -382,7 +392,7 @@ static unsigned char parport_uss720_frob_control(struct parport *pp, unsigned ch
 	mask &= 0x0f;
 	val &= 0x0f;
 	d = (priv->reg[1] & (~mask)) ^ val;
-	if (set_1284_register(pp, 2, d, GFP_ATOMIC))
+	if (set_1284_register(pp, 2, d, GFP_KERNEL))
 		return 0;
 	priv->reg[1] = d;
 	return d & 0xf;
@@ -392,7 +402,7 @@ static unsigned char parport_uss720_read_status(struct parport *pp)
 {
 	unsigned char ret;
 
-	if (get_1284_register(pp, 1, &ret, GFP_ATOMIC))
+	if (get_1284_register(pp, 1, &ret, GFP_KERNEL))
 		return 0;
 	return ret & 0xf8;
 }
@@ -523,7 +533,7 @@ static size_t parport_uss720_epp_write_data(struct parport *pp, const void *buf,
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buf, length, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buf, length, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buf, length, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 #endif
@@ -584,7 +594,7 @@ static size_t parport_uss720_ecp_write_data(struct parport *pp, const void *buff
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -602,7 +612,7 @@ static size_t parport_uss720_ecp_read_data(struct parport *pp, void *buffer, siz
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_rcvbulkpipe(usbdev, 2), buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: recvbulk ep 2 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: recvbulk ep 2 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -635,7 +645,7 @@ static size_t parport_uss720_write_compat(struct parport *pp, const void *buffer
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -685,7 +695,7 @@ static int uss720_probe(struct usb_interface *intf,
 {
 	struct usb_device *usbdev = usb_get_dev(interface_to_usbdev(intf));
 	struct usb_host_interface *interface;
-	struct usb_endpoint_descriptor *epd;
+	struct usb_host_endpoint *endpoint;
 	struct parport_uss720_private *priv;
 	struct parport *pp;
 	unsigned char reg;
@@ -713,8 +723,7 @@ static int uss720_probe(struct usb_interface *intf,
 	/*
 	 * Allocate parport interface 
 	 */
-	priv = kzalloc(sizeof(struct parport_uss720_private), GFP_KERNEL);
-	if (!priv) {
+	if (!(priv = kzalloc(sizeof(struct parport_uss720_private), GFP_KERNEL))) {
 		usb_put_dev(usbdev);
 		return -ENOMEM;
 	}
@@ -723,8 +732,7 @@ static int uss720_probe(struct usb_interface *intf,
 	kref_init(&priv->ref_count);
 	spin_lock_init(&priv->asynclock);
 	INIT_LIST_HEAD(&priv->asynclist);
-	pp = parport_register_port(0, PARPORT_IRQ_NONE, PARPORT_DMA_NONE, &parport_uss720_ops);
-	if (!pp) {
+	if (!(pp = parport_register_port(0, PARPORT_IRQ_NONE, PARPORT_DMA_NONE, &parport_uss720_ops))) {
 		printk(KERN_WARNING "uss720: could not register parport\n");
 		goto probe_abort;
 	}
@@ -739,13 +747,13 @@ static int uss720_probe(struct usb_interface *intf,
 	set_1284_register(pp, 2, 0x0c, GFP_KERNEL);
 	/* debugging */
 	get_1284_register(pp, 0, &reg, GFP_KERNEL);
-	dev_dbg(&intf->dev, "reg: %7ph\n", priv->reg);
+	dev_dbg(&intf->dev, "reg: %02x %02x %02x %02x %02x %02x %02x\n",
+		priv->reg[0], priv->reg[1], priv->reg[2], priv->reg[3],
+		priv->reg[4], priv->reg[5], priv->reg[6]);
 
-	i = usb_find_last_int_in_endpoint(interface, &epd);
-	if (!i) {
-		dev_dbg(&intf->dev, "epaddr %d interval %d\n",
-				epd->bEndpointAddress, epd->bInterval);
-	}
+	endpoint = &interface->endpoint[2];
+	dev_dbg(&intf->dev, "epaddr %d interval %d\n",
+		endpoint->desc.bEndpointAddress, endpoint->desc.bInterval);
 	parport_announce_port(pp);
 
 	usb_set_intfdata(intf, pp);
@@ -812,7 +820,8 @@ static int __init uss720_init(void)
 	if (retval)
 		goto out;
 
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_DESC "\n");
+	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
+	       DRIVER_DESC "\n");
 	printk(KERN_INFO KBUILD_MODNAME ": NOTE: this is a special purpose "
 	       "driver to allow nonstandard\n");
 	printk(KERN_INFO KBUILD_MODNAME ": protocols (eg. bitbang) over "

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Inode operations for Coda filesystem
  * Original version: (C) 1996 P. Braam and M. Callahan
@@ -39,6 +38,12 @@ int coda_iscontrol(const char *name, size_t length)
 {
 	return ((CODA_CONTROLLEN == length) && 
                 (strncmp(name, CODA_CONTROL, CODA_CONTROLLEN) == 0));
+}
+
+/* recognize /coda inode */
+int coda_isroot(struct inode *i)
+{
+    return ( i->i_sb->s_root->d_inode == i );
 }
 
 unsigned short coda_flags_to_cflags(unsigned short flags)

@@ -24,7 +24,7 @@
 #include <linux/ctype.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "cifspdu.h"
 #include "cifsglob.h"
 #include "cifsproto.h"
@@ -123,41 +123,25 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, "CIFS Version %s\n", CIFS_VERSION);
 	seq_printf(m, "Features:");
 #ifdef CONFIG_CIFS_DFS_UPCALL
-	seq_printf(m, " DFS");
+	seq_printf(m, " dfs");
 #endif
 #ifdef CONFIG_CIFS_FSCACHE
-	seq_printf(m, ",FSCACHE");
-#endif
-#ifdef CONFIG_CIFS_SMB_DIRECT
-	seq_printf(m, ",SMB_DIRECT");
-#endif
-#ifdef CONFIG_CIFS_STATS2
-	seq_printf(m, ",STATS2");
-#elif defined(CONFIG_CIFS_STATS)
-	seq_printf(m, ",STATS");
-#endif
-#ifdef CONFIG_CIFS_DEBUG2
-	seq_printf(m, ",DEBUG2");
-#elif defined(CONFIG_CIFS_DEBUG)
-	seq_printf(m, ",DEBUG");
-#endif
-#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
-	seq_printf(m, ",ALLOW_INSECURE_LEGACY");
+	seq_printf(m, " fscache");
 #endif
 #ifdef CONFIG_CIFS_WEAK_PW_HASH
-	seq_printf(m, ",WEAK_PW_HASH");
+	seq_printf(m, " lanman");
 #endif
 #ifdef CONFIG_CIFS_POSIX
-	seq_printf(m, ",CIFS_POSIX");
+	seq_printf(m, " posix");
 #endif
 #ifdef CONFIG_CIFS_UPCALL
-	seq_printf(m, ",UPCALL(SPNEGO)");
+	seq_printf(m, " spnego");
 #endif
 #ifdef CONFIG_CIFS_XATTR
-	seq_printf(m, ",XATTR");
+	seq_printf(m, " xattr");
 #endif
 #ifdef CONFIG_CIFS_ACL
-	seq_printf(m, ",ACL");
+	seq_printf(m, " acl");
 #endif
 	seq_putc(m, '\n');
 	seq_printf(m, "Active VFS Requests: %d\n", GlobalTotalActiveXid);
@@ -168,7 +152,6 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 	list_for_each(tmp1, &cifs_tcp_ses_list) {
 		server = list_entry(tmp1, struct TCP_Server_Info,
 				    tcp_ses_list);
-		seq_printf(m, "\nNumber of credits: %d", server->credits);
 		i++;
 		list_for_each(tmp2, &server->smb_ses_list) {
 			ses = list_entry(tmp2, struct cifs_ses,
@@ -176,13 +159,8 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 			if ((ses->serverDomain == NULL) ||
 				(ses->serverOS == NULL) ||
 				(ses->serverNOS == NULL)) {
-				seq_printf(m, "\n%d) Name: %s Uses: %d Capability: 0x%x\tSession Status: %d\t",
-					i, ses->serverName, ses->ses_count,
-					ses->capabilities, ses->status);
-				if (ses->session_flags & SMB2_SESSION_FLAG_IS_GUEST)
-					seq_printf(m, "Guest\t");
-				else if (ses->session_flags & SMB2_SESSION_FLAG_IS_NULL)
-					seq_printf(m, "Anonymous\t");
+				seq_printf(m, "\n%d) entry for %s not fully "
+					   "displayed\n\t", i, ses->serverName);
 			} else {
 				seq_printf(m,
 				    "\n%d) Name: %s  Domain: %s Uses: %d OS:"
@@ -266,6 +244,7 @@ static int cifs_debug_data_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations cifs_debug_data_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifs_debug_data_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -276,26 +255,22 @@ static const struct file_operations cifs_debug_data_proc_fops = {
 static ssize_t cifs_stats_proc_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
 {
-	bool bv;
+	char c;
 	int rc;
 	struct list_head *tmp1, *tmp2, *tmp3;
 	struct TCP_Server_Info *server;
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon;
 
-	rc = kstrtobool_from_user(buffer, count, &bv);
-	if (rc == 0) {
+	rc = get_user(c, buffer);
+	if (rc)
+		return rc;
+
+	if (c == '1' || c == 'y' || c == 'Y' || c == '0') {
 #ifdef CONFIG_CIFS_STATS2
 		atomic_set(&totBufAllocCount, 0);
 		atomic_set(&totSmBufAllocCount, 0);
 #endif /* CONFIG_CIFS_STATS2 */
-		atomic_set(&tcpSesReconnectCount, 0);
-		atomic_set(&tconInfoReconnectCount, 0);
-
-		spin_lock(&GlobalMid_Lock);
-		GlobalMaxActiveXid = 0;
-		GlobalCurrentXid = 0;
-		spin_unlock(&GlobalMid_Lock);
 		spin_lock(&cifs_tcp_ses_lock);
 		list_for_each(tmp1, &cifs_tcp_ses_list) {
 			server = list_entry(tmp1, struct TCP_Server_Info,
@@ -308,18 +283,12 @@ static ssize_t cifs_stats_proc_write(struct file *file,
 							  struct cifs_tcon,
 							  tcon_list);
 					atomic_set(&tcon->num_smbs_sent, 0);
-					spin_lock(&tcon->stat_lock);
-					tcon->bytes_read = 0;
-					tcon->bytes_written = 0;
-					spin_unlock(&tcon->stat_lock);
 					if (server->ops->clear_stats)
 						server->ops->clear_stats(tcon);
 				}
 			}
 		}
 		spin_unlock(&cifs_tcp_ses_lock);
-	} else {
-		return rc;
 	}
 
 	return count;
@@ -393,6 +362,7 @@ static int cifs_stats_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations cifs_stats_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifs_stats_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -462,22 +432,24 @@ static int cifsFYI_proc_open(struct inode *inode, struct file *file)
 static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
 		size_t count, loff_t *ppos)
 {
-	char c[2] = { '\0' };
-	bool bv;
+	char c;
 	int rc;
 
-	rc = get_user(c[0], buffer);
+	rc = get_user(c, buffer);
 	if (rc)
 		return rc;
-	if (strtobool(c, &bv) == 0)
-		cifsFYI = bv;
-	else if ((c[0] > '1') && (c[0] <= '9'))
-		cifsFYI = (int) (c[0] - '0'); /* see cifs_debug.h for meanings */
+	if (c == '0' || c == 'n' || c == 'N')
+		cifsFYI = 0;
+	else if (c == '1' || c == 'y' || c == 'Y')
+		cifsFYI = 1;
+	else if ((c > '1') && (c <= '9'))
+		cifsFYI = (int) (c - '0'); /* see cifs_debug.h for meanings */
 
 	return count;
 }
 
 static const struct file_operations cifsFYI_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifsFYI_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -499,16 +471,22 @@ static int cifs_linux_ext_proc_open(struct inode *inode, struct file *file)
 static ssize_t cifs_linux_ext_proc_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
 {
+	char c;
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &linuxExtEnabled);
+	rc = get_user(c, buffer);
 	if (rc)
 		return rc;
+	if (c == '0' || c == 'n' || c == 'N')
+		linuxExtEnabled = 0;
+	else if (c == '1' || c == 'y' || c == 'Y')
+		linuxExtEnabled = 1;
 
 	return count;
 }
 
 static const struct file_operations cifs_linux_ext_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifs_linux_ext_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -530,16 +508,22 @@ static int cifs_lookup_cache_proc_open(struct inode *inode, struct file *file)
 static ssize_t cifs_lookup_cache_proc_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
 {
+	char c;
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &lookupCacheEnabled);
+	rc = get_user(c, buffer);
 	if (rc)
 		return rc;
+	if (c == '0' || c == 'n' || c == 'N')
+		lookupCacheEnabled = 0;
+	else if (c == '1' || c == 'y' || c == 'Y')
+		lookupCacheEnabled = 1;
 
 	return count;
 }
 
 static const struct file_operations cifs_lookup_cache_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifs_lookup_cache_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -561,16 +545,22 @@ static int traceSMB_proc_open(struct inode *inode, struct file *file)
 static ssize_t traceSMB_proc_write(struct file *file, const char __user *buffer,
 		size_t count, loff_t *ppos)
 {
+	char c;
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &traceSMB);
+	rc = get_user(c, buffer);
 	if (rc)
 		return rc;
+	if (c == '0' || c == 'n' || c == 'N')
+		traceSMB = 0;
+	else if (c == '1' || c == 'y' || c == 'Y')
+		traceSMB = 1;
 
 	return count;
 }
 
 static const struct file_operations traceSMB_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= traceSMB_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -607,11 +597,9 @@ cifs_security_flags_handle_must_flags(unsigned int *flags)
 		*flags = CIFSSEC_MUST_NTLMV2;
 	else if ((*flags & CIFSSEC_MUST_NTLM) == CIFSSEC_MUST_NTLM)
 		*flags = CIFSSEC_MUST_NTLM;
-	else if (CIFSSEC_MUST_LANMAN &&
-		 (*flags & CIFSSEC_MUST_LANMAN) == CIFSSEC_MUST_LANMAN)
+	else if ((*flags & CIFSSEC_MUST_LANMAN) == CIFSSEC_MUST_LANMAN)
 		*flags = CIFSSEC_MUST_LANMAN;
-	else if (CIFSSEC_MUST_PLNTXT &&
-		 (*flags & CIFSSEC_MUST_PLNTXT) == CIFSSEC_MUST_PLNTXT)
+	else if ((*flags & CIFSSEC_MUST_PLNTXT) == CIFSSEC_MUST_PLNTXT)
 		*flags = CIFSSEC_MUST_PLNTXT;
 
 	*flags |= signflags;
@@ -623,7 +611,7 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 	int rc;
 	unsigned int flags;
 	char flags_string[12];
-	bool bv;
+	char c;
 
 	if ((count < 1) || (count > 11))
 		return -EINVAL;
@@ -635,10 +623,14 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 
 	if (count < 3) {
 		/* single char or single char followed by null */
-		if (strtobool(flags_string, &bv) == 0) {
-			global_secflags = bv ? CIFSSEC_MAX : CIFSSEC_DEF;
+		c = flags_string[0];
+		if (c == '0' || c == 'n' || c == 'N') {
+			global_secflags = CIFSSEC_DEF; /* default */
 			return count;
-		} else if (!isdigit(flags_string[0])) {
+		} else if (c == '1' || c == 'y' || c == 'Y') {
+			global_secflags = CIFSSEC_MAX;
+			return count;
+		} else if (!isdigit(c)) {
 			cifs_dbg(VFS, "Invalid SecurityFlags: %s\n",
 					flags_string);
 			return -EINVAL;
@@ -682,6 +674,7 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 }
 
 static const struct file_operations cifs_security_flags_proc_fops = {
+	.owner		= THIS_MODULE,
 	.open		= cifs_security_flags_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,

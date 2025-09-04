@@ -248,6 +248,8 @@ static int pm860x_touch_probe(struct platform_device *pdev)
 	if (!touch)
 		return -ENOMEM;
 
+	platform_set_drvdata(pdev, touch);
+
 	touch->idev = devm_input_allocate_device(&pdev->dev);
 	if (!touch->idev) {
 		dev_err(&pdev->dev, "Failed to allocate input device!\n");
@@ -291,12 +293,14 @@ static int pm860x_touch_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	platform_set_drvdata(pdev, touch);
 	return 0;
 }
 
 static struct platform_driver pm860x_touch_driver = {
 	.driver	= {
 		.name	= "88pm860x-touch",
+		.owner	= THIS_MODULE,
 	},
 	.probe	= pm860x_touch_probe,
 };

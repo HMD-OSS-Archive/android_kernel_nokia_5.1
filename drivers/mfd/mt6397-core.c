@@ -21,27 +21,18 @@
 #include <linux/mfd/mt6397/core.h>
 #include <linux/mfd/mt6323/core.h>
 #include <linux/mfd/mt6392/core.h>
-#include <linux/mfd/mt6397/registers.h>
-#include <linux/mfd/mt6358/registers.h>
 #include <linux/mfd/mt6323/registers.h>
+#include <linux/mfd/mt6397/registers.h>
 #include <linux/mfd/mt6392/registers.h>
 
 #define MT6397_RTC_BASE		0xe000
-#define MT6392_RTC_BASE		0x8000
+#define MT6323_RTC_BASE		0x8000
 #define MT6397_RTC_SIZE		0x3e
 
-#define MT6392_TYPEC_BASE	0x800
-#define MT6392_TYPEC_SIZE	0x100
-
-#define MT6323_CID_CODE		0x23
-#define MT6358_CID_CODE		0x20
-#define MT6391_CID_CODE		0x91
-#define MT6397_CID_CODE		0x97
-#define MT6392_CID_CODE		0x92
-
-struct chip_data {
-	u32 cid_addr;
-};
+#define MT6323_CID_CODE    0x23
+#define MT6391_CID_CODE    0x91
+#define MT6397_CID_CODE    0x97
+#define MT6392_CID_CODE    0x92
 
 static const struct resource mt6397_rtc_resources[] = {
 	{
@@ -56,129 +47,77 @@ static const struct resource mt6397_rtc_resources[] = {
 	},
 };
 
+static const struct resource mt6323_rtc_resources[] = {
+	{
+		.start = MT6323_RTC_BASE,
+		.end   = MT6323_RTC_BASE + MT6397_RTC_SIZE,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = RG_INT_STATUS_RTC,
+		.end   = RG_INT_STATUS_RTC,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
 static const struct resource mt6323_keys_resources[] = {
-	DEFINE_RES_IRQ(MT6323_IRQ_STATUS_PWRKEY),
-	DEFINE_RES_IRQ(MT6323_IRQ_STATUS_FCHRKEY),
+	{
+		.start = RG_INT_STATUS_PWRKEY,
+		.end   = RG_INT_STATUS_FCHRKEY,
+		.flags = IORESOURCE_IRQ,
+	},
 };
 
 static const struct resource mt6397_keys_resources[] = {
-	DEFINE_RES_IRQ(MT6397_IRQ_PWRKEY),
-	DEFINE_RES_IRQ(MT6397_IRQ_HOMEKEY),
-};
-
-static const struct resource mt6392_pmic_resources[] = {
 	{
-		.start = MT6392_IRQ_STATUS_THR_L,
-		.end   = MT6392_IRQ_STATUS_THR_H,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-static const struct resource mt6392_rtc_resources[] = {
-	{
-		.start = MT6392_RTC_BASE,
-		.end   = MT6392_RTC_BASE + MT6397_RTC_SIZE,
-		.flags = IORESOURCE_MEM,
-	},
-	{
-		.start = MT6392_IRQ_STATUS_RTC,
-		.end   = MT6392_IRQ_STATUS_RTC,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-static const struct resource mt6392_keys_resources[] = {
-	{
-		.start = MT6392_IRQ_STATUS_PWRKEY,
-		.end   = MT6392_IRQ_STATUS_RELEASE_FCHRKEY,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-static const struct resource mt6392_typec_resources[] = {
-	{
-		.start = MT6392_TYPEC_BASE,
-		.end   = MT6392_TYPEC_BASE + MT6392_TYPEC_SIZE,
-		.flags = IORESOURCE_MEM,
-	},
-	{
-		.start = MT6392_IRQ_STATUS_TYPE_C_CC,
-		.end   = MT6392_IRQ_STATUS_TYPE_C_CC,
+		.start = MT6397_IRQ_PWRKEY,
+		.end   = MT6397_IRQ_HOMEKEY,
 		.flags = IORESOURCE_IRQ,
 	},
 };
 
 static const struct mfd_cell mt6323_devs[] = {
 	{
+		.name = "mt6323-pmic",
+		.of_compatible = "mediatek,mt6323-pmic"
+	}, {
+		.name = "mt6397-rtc",
+		.num_resources = ARRAY_SIZE(mt6323_rtc_resources),
+		.resources = mt6323_rtc_resources,
+		.of_compatible = "mediatek,mt6323-rtc",
+	}, {
+		.name = "mt6397-misc",
+		.num_resources = ARRAY_SIZE(mt6323_rtc_resources),
+		.resources = mt6323_rtc_resources,
+		.of_compatible = "mediatek,mt6323-misc",
+	}, {
 		.name = "mt6323-regulator",
 		.of_compatible = "mediatek,mt6323-regulator"
-	}, {
-		.name = "mt6323-led",
-		.of_compatible = "mediatek,mt6323-led"
 	}, {
 		.name = "mtk-pmic-keys",
 		.num_resources = ARRAY_SIZE(mt6323_keys_resources),
 		.resources = mt6323_keys_resources,
 		.of_compatible = "mediatek,mt6323-keys"
-	},
-};
-
-static const struct mfd_cell mt6358_devs[] = {
-	{
-		.name = "mt6358-regulator",
-		.of_compatible = "mediatek,mt6358-regulator"
-	},
-};
-
-static const struct mfd_cell mt6392_devs[] = {
-	{
-		.name = "mt6392-pmic",
-		.num_resources = ARRAY_SIZE(mt6392_pmic_resources),
-		.resources = mt6392_pmic_resources,
-		.of_compatible = "mediatek,mt6392-pmic",
-	}, {
-		.name = "mt6392-regulator",
-		.of_compatible = "mediatek,mt6392-regulator",
-	}, {
-		.name = "mt6392-pinctrl",
-		.of_compatible = "mediatek,mt6392-pinctrl",
-	}, {
-		.name = "mt6397-rtc",
-		.num_resources = ARRAY_SIZE(mt6392_rtc_resources),
-		.resources = mt6392_rtc_resources,
-		.of_compatible = "mediatek,mt6392-rtc",
-	}, {
-		.name = "mt6397-misc",
-		.num_resources = ARRAY_SIZE(mt6392_rtc_resources),
-		.resources = mt6392_rtc_resources,
-		.of_compatible = "mediatek,mt6392-misc",
-	}, {
-		.name = "mt6392-adc",
-		.of_compatible = "mediatek,mt6392-adc"
-	}, {
-		.name = "mtk-pmic-keys",
-		.num_resources = ARRAY_SIZE(mt6392_keys_resources),
-		.resources = mt6392_keys_resources,
-		.of_compatible = "mediatek,mt6392-keys"
-	},
-	{
-		.name = "mt6392-thermal",
-		.of_compatible = "mediatek,mt6392-thermal"
-	},
-	{
-		.name = "mt6392-typec",
-		.num_resources = ARRAY_SIZE(mt6392_typec_resources),
-		.resources = mt6392_typec_resources,
-		.of_compatible = "mediatek,mt6392-typec",
+	},	{
+		.name = "mt6323-auxadc",
+		.of_compatible = "mediatek,mt6323-auxadc"
 	},
 };
 
 static const struct mfd_cell mt6397_devs[] = {
 	{
+		.name = "mt6397-pmic",
+		.of_compatible = "mediatek,mt6397-pmic",
+	}, {
 		.name = "mt6397-rtc",
 		.num_resources = ARRAY_SIZE(mt6397_rtc_resources),
 		.resources = mt6397_rtc_resources,
 		.of_compatible = "mediatek,mt6397-rtc",
+	}, {
+		.name = "mt6397-misc",
+		.num_resources = ARRAY_SIZE(mt6397_rtc_resources),
+		.resources = mt6397_rtc_resources,
+		.of_compatible = "mediatek,mt6397-misc",
 	}, {
 		.name = "mt6397-regulator",
 		.of_compatible = "mediatek,mt6397-regulator",
@@ -199,21 +138,25 @@ static const struct mfd_cell mt6397_devs[] = {
 	}
 };
 
-static const struct chip_data mt6323_core = {
-	.cid_addr = MT6397_CID,
+static const struct mfd_cell mt6392_devs[] = {
+	{
+		.name = "mt6392-pmic",
+		.of_compatible = "mediatek,mt6392-pmic",
+	}, {
+		.name = "mt6392-regulator",
+		.of_compatible = "mediatek,mt6392-regulator",
+	}, {
+		.name = "mt6392-auxadc",
+		.of_compatible = "mediatek,mt6392-auxadc"
+	}, {
+		.name = "mt6392-adc",
+		.of_compatible = "mediatek,mt6392-adc"
+	}, {
+		.name = "mt6392-pinctrl",
+		.of_compatible = "mediatek,mt6392-pinctrl",
+	}
 };
 
-static const struct chip_data mt6358_core = {
-	.cid_addr = MT6358_SWCID,
-};
-
-static const struct chip_data mt6392_core = {
-	.cid_addr = MT6392_CID,
-};
-
-static const struct chip_data mt6397_core = {
-	.cid_addr = MT6397_CID,
-};
 
 static void mt6397_irq_lock(struct irq_data *data)
 {
@@ -226,10 +169,8 @@ static void mt6397_irq_sync_unlock(struct irq_data *data)
 {
 	struct mt6397_chip *mt6397 = irq_data_get_irq_chip_data(data);
 
-	regmap_write(mt6397->regmap, mt6397->int_con[0],
-		     mt6397->irq_masks_cur[0]);
-	regmap_write(mt6397->regmap, mt6397->int_con[1],
-		     mt6397->irq_masks_cur[1]);
+	regmap_write(mt6397->regmap, mt6397->int_con[0], mt6397->irq_masks_cur[0]);
+	regmap_write(mt6397->regmap, mt6397->int_con[1], mt6397->irq_masks_cur[1]);
 
 	mutex_unlock(&mt6397->irqlock);
 }
@@ -362,6 +303,9 @@ static int mt6397_irq_suspend(struct device *dev)
 {
 	struct mt6397_chip *chip = dev_get_drvdata(dev);
 
+	if (!chip->irq_domain)
+		return 0;
+
 	regmap_write(chip->regmap, chip->int_con[0], chip->wake_mask[0]);
 	regmap_write(chip->regmap, chip->int_con[1], chip->wake_mask[1]);
 
@@ -373,6 +317,9 @@ static int mt6397_irq_suspend(struct device *dev)
 static int mt6397_irq_resume(struct device *dev)
 {
 	struct mt6397_chip *chip = dev_get_drvdata(dev);
+
+	if (!chip->irq_domain)
+		return 0;
 
 	regmap_write(chip->regmap, chip->int_con[0], chip->irq_masks_cur[0]);
 	regmap_write(chip->regmap, chip->int_con[1], chip->irq_masks_cur[1]);
@@ -390,104 +337,87 @@ static int mt6397_probe(struct platform_device *pdev)
 {
 	int ret;
 	unsigned int id;
-	struct mt6397_chip *pmic;
-	const struct chip_data *pmic_core;
+	struct mt6397_chip *mt6397;
 
-	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
-	if (!pmic)
+	mt6397 = devm_kzalloc(&pdev->dev, sizeof(*mt6397), GFP_KERNEL);
+	if (!mt6397)
 		return -ENOMEM;
 
-	pmic->dev = &pdev->dev;
-
+	mt6397->dev = &pdev->dev;
 	/*
 	 * mt6397 MFD is child device of soc pmic wrapper.
 	 * Regmap is set from its parent.
 	 */
-	pmic->regmap = dev_get_regmap(pdev->dev.parent, NULL);
-	if (!pmic->regmap)
+	mt6397->regmap = dev_get_regmap(pdev->dev.parent, NULL);
+	if (!mt6397->regmap)
 		return -ENODEV;
 
-	platform_set_drvdata(pdev, pmic);
+	platform_set_drvdata(pdev, mt6397);
 
-	pmic_core = of_device_get_match_data(&pdev->dev);
-	if (!pmic_core)
-		return -ENODEV;
-
-	ret = regmap_read(pmic->regmap, pmic_core->cid_addr, &id);
+	ret = regmap_read(mt6397->regmap, MT6397_CID, &id);
 	if (ret) {
-		dev_err(pmic->dev, "Failed to read chip id: %d\n", ret);
-		return ret;
+		dev_err(mt6397->dev, "Failed to read chip id: %d\n", ret);
+		goto fail_irq;
 	}
 
-	pmic->irq = platform_get_irq(pdev, 0);
-	if (pmic->irq <= 0)
-		return pmic->irq;
+	mt6397->irq = platform_get_irq(pdev, 0);
 
 	switch (id & 0xff) {
 	case MT6323_CID_CODE:
-		pmic->int_con[0] = MT6323_INT_CON0;
-		pmic->int_con[1] = MT6323_INT_CON1;
-		pmic->int_status[0] = MT6323_INT_STATUS0;
-		pmic->int_status[1] = MT6323_INT_STATUS1;
-		ret = mt6397_irq_init(pmic);
-		if (ret)
-			return ret;
-
+		mt6397->int_con[0] = MT6323_INT_CON0;
+		mt6397->int_con[1] = MT6323_INT_CON1;
+		mt6397->int_status[0] = MT6323_INT_STATUS0;
+		mt6397->int_status[1] = MT6323_INT_STATUS1;
+		if (mt6397->irq > 0) {
+			ret = mt6397_irq_init(mt6397);
+			if (ret)
+				return ret;
+		}
 		ret = devm_mfd_add_devices(&pdev->dev, -1, mt6323_devs,
 					   ARRAY_SIZE(mt6323_devs), NULL,
-					   0, pmic->irq_domain);
-		break;
-
-	case MT6358_CID_CODE:
-		pmic->int_con[0] = MT6358_PSC_TOP_INT_CON0;
-		pmic->int_con[1] = MT6358_HK_TOP_INT_CON0;
-		pmic->int_status[0] = MT6358_PSC_TOP_INT_STATUS0;
-		pmic->int_status[1] = MT6358_HK_TOP_INT_STATUS0;
-		ret = mt6397_irq_init(pmic);
-		if (ret)
-			return ret;
-
-		ret = devm_mfd_add_devices(&pdev->dev, -1, mt6358_devs,
-					   ARRAY_SIZE(mt6358_devs), NULL,
-					   0, pmic->irq_domain);
-		break;
-
-	case MT6392_CID_CODE:
-		pmic->int_con[0] = MT6392_INT_CON0;
-		pmic->int_con[1] = MT6392_INT_CON1;
-		pmic->int_status[0] = MT6392_INT_STATUS0;
-		pmic->int_status[1] = MT6392_INT_STATUS1;
-		ret = mt6397_irq_init(pmic);
-		if (ret)
-			return ret;
-
-		ret = devm_mfd_add_devices(&pdev->dev, -1, mt6392_devs,
-					   ARRAY_SIZE(mt6392_devs), NULL,
 					   0, NULL);
 		break;
 
 	case MT6397_CID_CODE:
 	case MT6391_CID_CODE:
-		pmic->int_con[0] = MT6397_INT_CON0;
-		pmic->int_con[1] = MT6397_INT_CON1;
-		pmic->int_status[0] = MT6397_INT_STATUS0;
-		pmic->int_status[1] = MT6397_INT_STATUS1;
-		ret = mt6397_irq_init(pmic);
-		if (ret)
-			return ret;
-
+		mt6397->int_con[0] = MT6397_INT_CON0;
+		mt6397->int_con[1] = MT6397_INT_CON1;
+		mt6397->int_status[0] = MT6397_INT_STATUS0;
+		mt6397->int_status[1] = MT6397_INT_STATUS1;
+		if (mt6397->irq > 0) {
+			ret = mt6397_irq_init(mt6397);
+			if (ret)
+				return ret;
+		}
 		ret = devm_mfd_add_devices(&pdev->dev, -1, mt6397_devs,
 					   ARRAY_SIZE(mt6397_devs), NULL,
-					   0, pmic->irq_domain);
+					   0, NULL);
+		break;
+
+	case MT6392_CID_CODE:
+		mt6397->int_con[0] = MT6392_INT_CON0;
+		mt6397->int_con[1] = MT6392_INT_CON1;
+		mt6397->int_status[0] = MT6392_INT_STATUS0;
+		mt6397->int_status[1] = MT6392_INT_STATUS1;
+		if (mt6397->irq > 0) {
+			ret = mt6397_irq_init(mt6397);
+			if (ret)
+				return ret;
+		}
+		ret = devm_mfd_add_devices(&pdev->dev, -1, mt6392_devs,
+					   ARRAY_SIZE(mt6392_devs), NULL,
+					   0, NULL);
 		break;
 
 	default:
 		dev_err(&pdev->dev, "unsupported chip: %d\n", id);
-		return -ENODEV;
+		ret = -ENODEV;
+		break;
 	}
 
+fail_irq:
 	if (ret) {
-		irq_domain_remove(pmic->irq_domain);
+		irq_domain_remove(mt6397->irq_domain);
 		dev_err(&pdev->dev, "failed to add child devices: %d\n", ret);
 	}
 
@@ -495,21 +425,10 @@ static int mt6397_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id mt6397_of_match[] = {
-	{
-		.compatible = "mediatek,mt6323",
-		.data = &mt6323_core,
-	}, {
-		.compatible = "mediatek,mt6358",
-		.data = &mt6358_core,
-	}, {
-		.compatible = "mediatek,mt6392",
-		.data = &mt6392_core,
-	}, {
-		.compatible = "mediatek,mt6397",
-		.data = &mt6397_core,
-	}, {
-		/* sentinel */
-	}
+	{ .compatible = "mediatek,mt6397" },
+	{ .compatible = "mediatek,mt6323" },
+	{ .compatible = "mediatek,mt6392" },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, mt6397_of_match);
 

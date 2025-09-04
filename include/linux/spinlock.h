@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_SPINLOCK_H
 #define __LINUX_SPINLOCK_H
 
@@ -90,6 +89,8 @@
 # include <linux/spinlock_up.h>
 #endif
 
+extern bool is_logbuf_lock(raw_spinlock_t *lock);
+
 #ifdef CONFIG_DEBUG_SPINLOCK
   extern void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 				   struct lock_class_key *key);
@@ -119,40 +120,33 @@ do {								\
 #endif
 
 /*
- * This barrier must provide two things:
- *
- *   - it must guarantee a STORE before the spin_lock() is ordered against a
- *     LOAD after it, see the comments at its two usage sites.
- *
- *   - it must ensure the critical section is RCsc.
- *
- * The latter is important for cases where we observe values written by other
- * CPUs in spin-loops, without barriers, while being subject to scheduling.
- *
- * CPU0			CPU1			CPU2
- *
- *			for (;;) {
- *			  if (READ_ONCE(X))
- *			    break;
- *			}
- * X=1
- *			<sched-out>
- *						<sched-in>
- *						r = X;
- *
- * without transitivity it could be that CPU1 observes X!=0 breaks the loop,
- * we get migrated and CPU2 sees X==0.
- *
- * Since most load-store architectures implement ACQUIRE with an smp_mb() after
- * the LL/SC loop, they need no further barriers. Similarly all our TSO
- * architectures imply an smp_mb() for each atomic instruction and equally don't
- * need more.
- *
- * Architectures that can implement ACQUIRE better need to take care.
+ * Despite its name it doesn't necessarily has to be a full barrier.
+ * It should only guarantee that a STORE before the critical section
+ * can not be reordered with a LOAD inside this section.
+ * spin_lock() is the one-way barrier, this LOAD can not escape out
+ * of the region. So the default implementation simply ensures that
+ * a STORE can not move into the critical section, smp_wmb() should
+ * serialize it with another STORE done by spin_lock().
  */
-#ifndef smp_mb__after_spinlock
-#define smp_mb__after_spinlock()	do { } while (0)
+#ifndef smp_mb__before_spinlock
+#define smp_mb__before_spinlock()	smp_wmb()
 #endif
+
+/*
+ * Place this after a lock-acquisition primitive to guarantee that
+ * an UNLOCK+LOCK pair act as a full barrier.  This guarantee applies
+ * if the UNLOCK and LOCK are executed by the same CPU or if the
+ * UNLOCK and LOCK operate on the same lock variable.
+ */
+#ifndef smp_mb__after_unlock_lock
+#define smp_mb__after_unlock_lock()	do { } while (0)
+#endif
+
+/**
+ * raw_spin_unlock_wait - wait until the spinlock gets unlocked
+ * @lock: the spinlock in question.
+ */
+#define raw_spin_unlock_wait(lock)	arch_spin_unlock_wait(&(lock)->raw_lock)
 
 #ifdef CONFIG_DEBUG_SPINLOCK
  extern void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock);
@@ -301,7 +295,7 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
  * Map the spin_lock functions to the raw variants for PREEMPT_RT=n
  */
 
-static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
+static inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
 {
 	return &lock->rlock;
 }
@@ -312,17 +306,17 @@ do {							\
 	raw_spin_lock_init(&(_lock)->rlock);		\
 } while (0)
 
-static __always_inline void spin_lock(spinlock_t *lock)
+static inline void spin_lock(spinlock_t *lock)
 {
 	raw_spin_lock(&lock->rlock);
 }
 
-static __always_inline void spin_lock_bh(spinlock_t *lock)
+static inline void spin_lock_bh(spinlock_t *lock)
 {
 	raw_spin_lock_bh(&lock->rlock);
 }
 
-static __always_inline int spin_trylock(spinlock_t *lock)
+static inline int spin_trylock(spinlock_t *lock)
 {
 	return raw_spin_trylock(&lock->rlock);
 }
@@ -337,7 +331,7 @@ do {									\
 	raw_spin_lock_nest_lock(spinlock_check(lock), nest_lock);	\
 } while (0)
 
-static __always_inline void spin_lock_irq(spinlock_t *lock)
+static inline void spin_lock_irq(spinlock_t *lock)
 {
 	raw_spin_lock_irq(&lock->rlock);
 }
@@ -352,32 +346,32 @@ do {									\
 	raw_spin_lock_irqsave_nested(spinlock_check(lock), flags, subclass); \
 } while (0)
 
-static __always_inline void spin_unlock(spinlock_t *lock)
+static inline void spin_unlock(spinlock_t *lock)
 {
 	raw_spin_unlock(&lock->rlock);
 }
 
-static __always_inline void spin_unlock_bh(spinlock_t *lock)
+static inline void spin_unlock_bh(spinlock_t *lock)
 {
 	raw_spin_unlock_bh(&lock->rlock);
 }
 
-static __always_inline void spin_unlock_irq(spinlock_t *lock)
+static inline void spin_unlock_irq(spinlock_t *lock)
 {
 	raw_spin_unlock_irq(&lock->rlock);
 }
 
-static __always_inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+static inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 {
 	raw_spin_unlock_irqrestore(&lock->rlock, flags);
 }
 
-static __always_inline int spin_trylock_bh(spinlock_t *lock)
+static inline int spin_trylock_bh(spinlock_t *lock)
 {
 	return raw_spin_trylock_bh(&lock->rlock);
 }
 
-static __always_inline int spin_trylock_irq(spinlock_t *lock)
+static inline int spin_trylock_irq(spinlock_t *lock)
 {
 	return raw_spin_trylock_irq(&lock->rlock);
 }
@@ -387,17 +381,22 @@ static __always_inline int spin_trylock_irq(spinlock_t *lock)
 	raw_spin_trylock_irqsave(spinlock_check(lock), flags); \
 })
 
-static __always_inline int spin_is_locked(spinlock_t *lock)
+static inline void spin_unlock_wait(spinlock_t *lock)
+{
+	raw_spin_unlock_wait(&lock->rlock);
+}
+
+static inline int spin_is_locked(spinlock_t *lock)
 {
 	return raw_spin_is_locked(&lock->rlock);
 }
 
-static __always_inline int spin_is_contended(spinlock_t *lock)
+static inline int spin_is_contended(spinlock_t *lock)
 {
 	return raw_spin_is_contended(&lock->rlock);
 }
 
-static __always_inline int spin_can_lock(spinlock_t *lock)
+static inline int spin_can_lock(spinlock_t *lock)
 {
 	return raw_spin_can_lock(&lock->rlock);
 }
@@ -420,12 +419,5 @@ static __always_inline int spin_can_lock(spinlock_t *lock)
 extern int _atomic_dec_and_lock(atomic_t *atomic, spinlock_t *lock);
 #define atomic_dec_and_lock(atomic, lock) \
 		__cond_lock(lock, _atomic_dec_and_lock(atomic, lock))
-
-/* It's the lock irq safe version of atomic_dec_and_lock */
-extern int _atomic_dec_and_lock_irqsafe(atomic_t *atomic, spinlock_t *lock,
-					unsigned long *flags);
-#define atomic_dec_and_lock_irqsafe(atomic, lock, flags) \
-			__cond_lock(lock, _atomic_dec_and_lock_irqsafe(atomic, \
-								lock, flags))
 
 #endif /* __LINUX_SPINLOCK_H */

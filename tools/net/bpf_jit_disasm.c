@@ -22,14 +22,9 @@
 #include <string.h>
 #include <bfd.h>
 #include <dis-asm.h>
-#include <regex.h>
-#include <fcntl.h>
 #include <sys/klog.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-
-#define CMD_ACTION_SIZE_BUFFER		10
-#define CMD_ACTION_READ_ALL		3
+#include <regex.h>
 
 static void get_exec_path(char *tpath, size_t size)
 {
@@ -92,75 +87,26 @@ static void get_asm_insns(uint8_t *image, size_t len, int opcodes)
 	bfd_close(bfdf);
 }
 
-static char *get_klog_buff(unsigned int *klen)
+static char *get_klog_buff(int *klen)
 {
-	int ret, len;
-	char *buff;
+	int ret, len = klogctl(10, NULL, 0);
+	char *buff = malloc(len);
 
-	len = klogctl(CMD_ACTION_SIZE_BUFFER, NULL, 0);
-	if (len < 0)
-		return NULL;
-
-	buff = malloc(len);
-	if (!buff)
-		return NULL;
-
-	ret = klogctl(CMD_ACTION_READ_ALL, buff, len);
-	if (ret < 0) {
-		free(buff);
-		return NULL;
-	}
-
+	assert(buff && klen);
+	ret = klogctl(3, buff, len);
+	assert(ret >= 0);
 	*klen = ret;
+
 	return buff;
 }
 
-static char *get_flog_buff(const char *file, unsigned int *klen)
-{
-	int fd, ret, len;
-	struct stat fi;
-	char *buff;
-
-	fd = open(file, O_RDONLY);
-	if (fd < 0)
-		return NULL;
-
-	ret = fstat(fd, &fi);
-	if (ret < 0 || !S_ISREG(fi.st_mode))
-		goto out;
-
-	len = fi.st_size + 1;
-	buff = malloc(len);
-	if (!buff)
-		goto out;
-
-	memset(buff, 0, len);
-	ret = read(fd, buff, len - 1);
-	if (ret <= 0)
-		goto out_free;
-
-	close(fd);
-	*klen = ret;
-	return buff;
-out_free:
-	free(buff);
-out:
-	close(fd);
-	return NULL;
-}
-
-static char *get_log_buff(const char *file, unsigned int *klen)
-{
-	return file ? get_flog_buff(file, klen) : get_klog_buff(klen);
-}
-
-static void put_log_buff(char *buff)
+static void put_klog_buff(char *buff)
 {
 	free(buff);
 }
 
-static uint8_t *get_last_jit_image(char *haystack, size_t hlen,
-				   unsigned int *ilen)
+static int get_last_jit_image(char *haystack, size_t hlen,
+			      uint8_t *image, size_t ilen)
 {
 	char *ptr, *pptr, *tmp;
 	off_t off = 0;
@@ -168,18 +114,15 @@ static uint8_t *get_last_jit_image(char *haystack, size_t hlen,
 	regmatch_t pmatch[1];
 	unsigned long base;
 	regex_t regex;
-	uint8_t *image;
 
 	if (hlen == 0)
-		return NULL;
+		return 0;
 
 	ret = regcomp(&regex, "flen=[[:alnum:]]+ proglen=[[:digit:]]+ "
 		      "pass=[[:digit:]]+ image=[[:xdigit:]]+", REG_EXTENDED);
 	assert(ret == 0);
 
 	ptr = haystack;
-	memset(pmatch, 0, sizeof(pmatch));
-
 	while (1) {
 		ret = regexec(&regex, ptr, 1, pmatch, 0);
 		if (ret == 0) {
@@ -193,24 +136,11 @@ static uint8_t *get_last_jit_image(char *haystack, size_t hlen,
 	ptr = haystack + off - (pmatch[0].rm_eo - pmatch[0].rm_so);
 	ret = sscanf(ptr, "flen=%d proglen=%d pass=%d image=%lx",
 		     &flen, &proglen, &pass, &base);
-	if (ret != 4) {
-		regfree(&regex);
-		return NULL;
-	}
-	if (proglen > 1000000) {
-		printf("proglen of %d too big, stopping\n", proglen);
-		return NULL;
-	}
-
-	image = malloc(proglen);
-	if (!image) {
-		printf("Out of memory\n");
-		return NULL;
-	}
-	memset(image, 0, proglen);
+	if (ret != 4)
+		return 0;
 
 	tmp = ptr = haystack + off;
-	while ((ptr = strtok(tmp, "\n")) != NULL && ulen < proglen) {
+	while ((ptr = strtok(tmp, "\n")) != NULL && ulen < ilen) {
 		tmp = NULL;
 		if (!strstr(ptr, "JIT code"))
 			continue;
@@ -220,12 +150,10 @@ static uint8_t *get_last_jit_image(char *haystack, size_t hlen,
 		ptr = pptr;
 		do {
 			image[ulen++] = (uint8_t) strtoul(pptr, &pptr, 16);
-			if (ptr == pptr) {
+			if (ptr == pptr || ulen >= ilen) {
 				ulen--;
 				break;
 			}
-			if (ulen >= proglen)
-				break;
 			ptr = pptr;
 		} while (1);
 	}
@@ -236,85 +164,34 @@ static uint8_t *get_last_jit_image(char *haystack, size_t hlen,
 	printf("%lx + <x>:\n", base);
 
 	regfree(&regex);
-	*ilen = ulen;
-	return image;
-}
-
-static void usage(void)
-{
-	printf("Usage: bpf_jit_disasm [...]\n");
-	printf("       -o          Also display related opcodes (default: off).\n");
-	printf("       -O <file>   Write binary image of code to file, don't disassemble to stdout.\n");
-	printf("       -f <file>   Read last image dump from file or stdin (default: klog).\n");
-	printf("       -h          Display this help.\n");
+	return ulen;
 }
 
 int main(int argc, char **argv)
 {
-	unsigned int len, klen, opt, opcodes = 0;
-	char *kbuff, *file = NULL;
-	char *ofile = NULL;
-	int ofd;
-	ssize_t nr;
-	uint8_t *pos;
-	uint8_t *image = NULL;
+	int len, klen, opcodes = 0;
+	char *kbuff;
+	static uint8_t image[32768];
 
-	while ((opt = getopt(argc, argv, "of:O:")) != -1) {
-		switch (opt) {
-		case 'o':
+	if (argc > 1) {
+		if (!strncmp("-o", argv[argc - 1], 2)) {
 			opcodes = 1;
-			break;
-		case 'O':
-			ofile = optarg;
-			break;
-		case 'f':
-			file = optarg;
-			break;
-		default:
-			usage();
-			return -1;
+		} else {
+			printf("usage: bpf_jit_disasm [-o: show opcodes]\n");
+			exit(0);
 		}
 	}
 
 	bfd_init();
+	memset(image, 0, sizeof(image));
 
-	kbuff = get_log_buff(file, &klen);
-	if (!kbuff) {
-		fprintf(stderr, "Could not retrieve log buffer!\n");
-		return -1;
-	}
+	kbuff = get_klog_buff(&klen);
 
-	image = get_last_jit_image(kbuff, klen, &len);
-	if (!image) {
-		fprintf(stderr, "No JIT image found!\n");
-		goto done;
-	}
-	if (!ofile) {
+	len = get_last_jit_image(kbuff, klen, image, sizeof(image));
+	if (len > 0)
 		get_asm_insns(image, len, opcodes);
-		goto done;
-	}
 
-	ofd = open(ofile, O_WRONLY | O_CREAT | O_TRUNC, DEFFILEMODE);
-	if (ofd < 0) {
-		fprintf(stderr, "Could not open file %s for writing: ", ofile);
-		perror(NULL);
-		goto done;
-	}
-	pos = image;
-	do {
-		nr = write(ofd, pos, len);
-		if (nr < 0) {
-			fprintf(stderr, "Could not write data to %s: ", ofile);
-			perror(NULL);
-			goto done;
-		}
-		len -= nr;
-		pos += nr;
-	} while (len);
-	close(ofd);
+	put_klog_buff(kbuff);
 
-done:
-	put_log_buff(kbuff);
-	free(image);
 	return 0;
 }

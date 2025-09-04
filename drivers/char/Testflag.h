@@ -1,12 +1,9 @@
-/* Foxconn added , BokeeLi, 2011/10/06 */
-/* Note:
-   (1) Refer to Mulberry project
-   (2) Reserve a partition for store Manufacture data
+/*
+ * Copyright (c) 2017 FIH Mobile Limited.
+ */
 
-*/
 #ifndef _TESTFLAG_H /*_TESTFLAG_H */
 #define _TESTFLAG_H
-
 
 #define MANUFACTURE_SIZE (1024*1024)
 #define MANUFACTURE_OFFSET (0x100000)
@@ -15,7 +12,6 @@
 #define MANUF_FILE_LOCATION "/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/proinfo"
 
 #define MANUF_MAX_DATA_LEN 64
-
 #define MANUF_MAGIC_LEN 8
 #define MANUF_SYNC_INFO_LEN 8
 #define MANUF_VERSION_LEN 8
@@ -37,7 +33,7 @@
 #define MANUF_SECINFO_LEN 16
 #define FIH_CERT_LENGTH   (256)
 
-#define MANUF_SKUID_LEN 16 
+#define MANUF_SKUID_LEN 16
 #define MULTICDA_ID_OFFSET (4*1024)  //4KB
 #define MANUF_SKUID_CHANGE_FLAG "SKUchange"
 #define INVALID_PTN               -1
@@ -65,24 +61,21 @@
 #define MANUF_SECINFO_STRING "SECURITYINFO"
 #define MANUF_CALIBRATION_DATA_STRING "CAL_DATA"
 #define MANUF_GSENSOR_STRING "GSENOR_CALI"
-#define MANUF_GYRO_STRING	"GYRO_CALI"
-#define MANUF_ALS_STRING	"ALS_CALI"
-#define MANUF_SIM_CARD_SLOT_STRING	"SIM_CARD_SLOT"
+#define MANUF_GYRO_STRING "GYRO_CALI"
+#define MANUF_ALS_STRING "ALS_CALI"
+#define MANUF_SIM_CARD_SLOT_STRING "SIM_CARD_SLOT"
 
 /* status */
 #define SUCCESS         0x00
 #define FAIL            0x01
 
-
 #define INVALID_MODE        0x55
 #define FILE_NOT_FOUND      0x03
 #define FILE_CORRUPTED      0x04
 
-
 /* return for PID read/write */
 #define READ_MANUFACTURE_FAIL  (-1)
 #define WRITE_MANUFACTURE_FAIL  (-2)
-
 
 /* Note : if you add a new structure, please add reserved data in this feature for extension */
 struct manuf_version
@@ -165,7 +158,7 @@ struct manuf_onetimeftm_flag
 	char reserved[MANUF_RESERVED_LEN];
 };
 
-// porting for SKUID&Multi-Splash
+//for SKUID&Multi-Splash
 struct manuf_SKU_flag
 {
 	char name[MANUF_NAME_LEN];
@@ -225,16 +218,15 @@ struct manuf_root
 	char reserved[MANUF_RESERVED_LEN];
 };
 
-/* add gsensor calibration for alex 20141205 begin*/
+/* add for gsensor calibration*/
 struct manuf_gsensor_cali
 {
 	int cali_x;
 	int cali_y;
 	int cali_z;
 };
-/* add gsensor calibration for alex 20141205 end*/
 
-/* add for gyro calibration 20150912 by xurd begin*/
+/* add for gyro calibration*/
 struct manuf_gyro_cali
 {
 	int cali_x;
@@ -246,10 +238,7 @@ struct manuf_als_cali
 	int cali_data;
 };
 
-/* add for gyro calibration 20150912 by xurd end*/
-
-
-/* 20150715, for store security information begin*/
+/* for store security information*/
 struct manuf_need_sec_chk
 {
 	char sec_bt_chk;
@@ -264,11 +253,10 @@ struct manuf_sec_info
 	char lk[MANUF_SECINFO_LEN+1];
 	char boot[MANUF_SECINFO_LEN+1];
 	char recovery[MANUF_SECINFO_LEN+1];
-	unsigned int lk_size; 		// lk write data size
-	unsigned int boot_size; 
+	unsigned int lk_size;  // lk write data size
+	unsigned int boot_size;
 	unsigned int recovery_size;
 };
-/* 20150715, for store security information end*/
 
 struct manuf_sim_info
 {
@@ -277,9 +265,9 @@ struct manuf_sim_info
 
 struct cert_timecount_st
 {
-    unsigned char en_uid_index;
-    unsigned char rest_count;
-    unsigned char en_uid[FIH_CERT_LENGTH];
+	unsigned char en_uid_index;
+	unsigned char rest_count;
+	unsigned char en_uid[FIH_CERT_LENGTH];
 };
 
 
@@ -302,12 +290,12 @@ struct manuf_data
 	struct manuf_root rootflag;
 	struct manuf_PSENSOR PSENSORflag;
 	struct manuf_als als_flag;
-    struct manuf_tp_rawdata_range_t tp_rawdata_range;
+	struct manuf_tp_rawdata_range_t tp_rawdata_range;
 	struct manuf_uicolor uicolor;
 	struct manuf_sim_info sim_info;
-	struct manuf_gsensor_cali gcali;		// add gsensor calibration for alex 20141205 
-	struct manuf_gyro_cali gycali;			// add for gyro calibration 20150912 by xurd
-	struct manuf_als_cali alscali;			// add for als calibration 20151029 by xurd
+	struct manuf_gsensor_cali gcali;  // add gsensor calibration
+	struct manuf_gyro_cali gycali;  // add for gyro calibration
+	struct manuf_als_cali alscali;  // add for als calibration
 	struct manuf_need_sec_chk is_need_chk;
 	struct manuf_sec_info sec_info;
 	struct cert_timecount_st cert_set;
@@ -315,10 +303,10 @@ struct manuf_data
 
 struct manuf_file_data
 {
-    char magic[MANUF_MAGIC_LEN];
-    unsigned int manuf_length;
-    char filename[MANUF_CALIBRATION_FILENAME_LEN];
-    char file_raw_data[MANUF_CALIBRATION_DATA_SIZE];
+	char magic[MANUF_MAGIC_LEN];
+	unsigned int manuf_length;
+	char filename[MANUF_CALIBRATION_FILENAME_LEN];
+	char file_raw_data[MANUF_CALIBRATION_DATA_SIZE];
 };
 
 int fih_read_ps_thd(u8 data[7]);
@@ -327,16 +315,16 @@ int fih_read_CAVIS(char* pid_str,int i);
 int fih_write_CAVIS(char* pid_str,int i);
 int fih_read_pid(char* pid_str);
 int fih_write_pid(char* pid_str);
-
 int fih_read_als_slope(u8 data[16]);
 int fih_write_als_slope(u8 data[16]);
-
 int fih_read_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p);
 int fih_write_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p);
-/* add gsensor calibration for alex 20141205 begin*/
-int fih_read_gsensor_cali(struct manuf_gsensor_cali *p);  
+/* add gsensor calibration */
+int fih_read_gsensor_cali(struct manuf_gsensor_cali *p);
 int fih_write_gsensor_cali(struct manuf_gsensor_cali *p);
-/* add gsensor calibration for alex 20141205 end*/
+
+int write_ef(struct manuf_data * wdata);
+int read_ef(struct manuf_data * rdata);
 
 int fih_read_skuid(char* skuid);
 

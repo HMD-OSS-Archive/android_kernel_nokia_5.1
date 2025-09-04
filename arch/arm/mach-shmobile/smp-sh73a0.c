@@ -12,6 +12,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -33,6 +37,14 @@
 
 #define SH73A0_SCU_BASE 0xf0000000
 
+#ifdef CONFIG_HAVE_ARM_TWD
+static DEFINE_TWD_LOCAL_TIMER(twd_local_timer, SH73A0_SCU_BASE + 0x600, 29);
+void __init sh73a0_register_twd(void)
+{
+	twd_local_timer_register(&twd_local_timer);
+}
+#endif
+
 static int sh73a0_boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
 	unsigned int lcpu = cpu_logical_map(cpu);
@@ -52,14 +64,15 @@ static void __init sh73a0_smp_prepare_cpus(unsigned int max_cpus)
 	__raw_writel(__pa(shmobile_boot_vector), SBAR);
 
 	/* setup sh73a0 specific SCU bits */
-	shmobile_smp_scu_prepare_cpus(SH73A0_SCU_BASE, max_cpus);
+	shmobile_scu_base = IOMEM(SH73A0_SCU_BASE);
+	shmobile_smp_scu_prepare_cpus(max_cpus);
 }
 
-const struct smp_operations sh73a0_smp_ops __initconst = {
+struct smp_operations sh73a0_smp_ops __initdata = {
 	.smp_prepare_cpus	= sh73a0_smp_prepare_cpus,
 	.smp_boot_secondary	= sh73a0_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
-	.cpu_can_disable	= shmobile_smp_cpu_can_disable,
+	.cpu_disable		= shmobile_smp_cpu_disable,
 	.cpu_die		= shmobile_smp_scu_cpu_die,
 	.cpu_kill		= shmobile_smp_scu_cpu_kill,
 #endif

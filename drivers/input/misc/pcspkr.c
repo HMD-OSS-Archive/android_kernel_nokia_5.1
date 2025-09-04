@@ -18,30 +18,25 @@
 #include <linux/input.h>
 #include <linux/platform_device.h>
 #include <linux/timex.h>
-#include <linux/io.h>
+#include <asm/io.h>
 
 MODULE_AUTHOR("Vojtech Pavlik <vojtech@ucw.cz>");
 MODULE_DESCRIPTION("PC Speaker beeper driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:pcspkr");
 
-static int pcspkr_event(struct input_dev *dev, unsigned int type,
-			unsigned int code, int value)
+static int pcspkr_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
 	unsigned int count = 0;
 	unsigned long flags;
 
 	if (type != EV_SND)
-		return -EINVAL;
+		return -1;
 
 	switch (code) {
-	case SND_BELL:
-		if (value)
-			value = 1000;
-	case SND_TONE:
-		break;
-	default:
-		return -EINVAL;
+		case SND_BELL: if (value) value = 1000;
+		case SND_TONE: break;
+		default: return -1;
 	}
 
 	if (value > 20 && value < 32767)
@@ -130,6 +125,7 @@ static const struct dev_pm_ops pcspkr_pm_ops = {
 static struct platform_driver pcspkr_platform_driver = {
 	.driver		= {
 		.name	= "pcspkr",
+		.owner	= THIS_MODULE,
 		.pm	= &pcspkr_pm_ops,
 	},
 	.probe		= pcspkr_probe,

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM kmem
 
@@ -7,7 +6,7 @@
 
 #include <linux/types.h>
 #include <linux/tracepoint.h>
-#include <trace/events/mmflags.h>
+#include <trace/events/gfpflags.h>
 
 DECLARE_EVENT_CLASS(kmem_alloc,
 
@@ -155,18 +154,18 @@ TRACE_EVENT(mm_page_free,
 	TP_ARGS(page, order),
 
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn		)
+		__field(	struct page *,	page		)
 		__field(	unsigned int,	order		)
 	),
 
 	TP_fast_assign(
-		__entry->pfn		= page_to_pfn(page);
+		__entry->page		= page;
 		__entry->order		= order;
 	),
 
 	TP_printk("page=%p pfn=%lu order=%d",
-			pfn_to_page(__entry->pfn),
-			__entry->pfn,
+			__entry->page,
+			page_to_pfn(__entry->page),
 			__entry->order)
 );
 
@@ -177,18 +176,18 @@ TRACE_EVENT(mm_page_free_batched,
 	TP_ARGS(page, cold),
 
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn		)
+		__field(	struct page *,	page		)
 		__field(	int,		cold		)
 	),
 
 	TP_fast_assign(
-		__entry->pfn		= page_to_pfn(page);
+		__entry->page		= page;
 		__entry->cold		= cold;
 	),
 
 	TP_printk("page=%p pfn=%lu order=0 cold=%d",
-			pfn_to_page(__entry->pfn),
-			__entry->pfn,
+			__entry->page,
+			page_to_pfn(__entry->page),
 			__entry->cold)
 );
 
@@ -200,22 +199,22 @@ TRACE_EVENT(mm_page_alloc,
 	TP_ARGS(page, order, gfp_flags, migratetype),
 
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn		)
+		__field(	struct page *,	page		)
 		__field(	unsigned int,	order		)
 		__field(	gfp_t,		gfp_flags	)
 		__field(	int,		migratetype	)
 	),
 
 	TP_fast_assign(
-		__entry->pfn		= page ? page_to_pfn(page) : -1UL;
+		__entry->page		= page;
 		__entry->order		= order;
 		__entry->gfp_flags	= gfp_flags;
 		__entry->migratetype	= migratetype;
 	),
 
 	TP_printk("page=%p pfn=%lu order=%d migratetype=%d gfp_flags=%s",
-		__entry->pfn != -1UL ? pfn_to_page(__entry->pfn) : NULL,
-		__entry->pfn != -1UL ? __entry->pfn : 0,
+		__entry->page,
+		__entry->page ? page_to_pfn(__entry->page) : 0,
 		__entry->order,
 		__entry->migratetype,
 		show_gfp_flags(__entry->gfp_flags))
@@ -228,20 +227,20 @@ DECLARE_EVENT_CLASS(mm_page,
 	TP_ARGS(page, order, migratetype),
 
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn		)
+		__field(	struct page *,	page		)
 		__field(	unsigned int,	order		)
 		__field(	int,		migratetype	)
 	),
 
 	TP_fast_assign(
-		__entry->pfn		= page ? page_to_pfn(page) : -1UL;
+		__entry->page		= page;
 		__entry->order		= order;
 		__entry->migratetype	= migratetype;
 	),
 
 	TP_printk("page=%p pfn=%lu order=%u migratetype=%d percpu_refill=%d",
-		__entry->pfn != -1UL ? pfn_to_page(__entry->pfn) : NULL,
-		__entry->pfn != -1UL ? __entry->pfn : 0,
+		__entry->page,
+		__entry->page ? page_to_pfn(__entry->page) : 0,
 		__entry->order,
 		__entry->migratetype,
 		__entry->order == 0)
@@ -254,27 +253,73 @@ DEFINE_EVENT(mm_page, mm_page_alloc_zone_locked,
 	TP_ARGS(page, order, migratetype)
 );
 
-TRACE_EVENT(mm_page_pcpu_drain,
+DEFINE_EVENT_PRINT(mm_page, mm_page_pcpu_drain,
 
 	TP_PROTO(struct page *page, unsigned int order, int migratetype),
 
 	TP_ARGS(page, order, migratetype),
 
+	TP_printk("page=%p pfn=%lu order=%d migratetype=%d",
+		__entry->page, page_to_pfn(__entry->page),
+		__entry->order, __entry->migratetype)
+);
+
+TRACE_EVENT(debug_allocate_large_pages,
+
+	TP_PROTO(struct page *page, unsigned int order, gfp_t gfp_mask),
+
+	TP_ARGS(page, order, gfp_mask),
+
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn		)
-		__field(	unsigned int,	order		)
-		__field(	int,		migratetype	)
+		__field(struct page *,	page			)
+		__field(unsigned int,	order			)
+		__field(gfp_t,		gfp_mask		)
 	),
 
 	TP_fast_assign(
-		__entry->pfn		= page ? page_to_pfn(page) : -1UL;
+		__entry->page		= page;
 		__entry->order		= order;
-		__entry->migratetype	= migratetype;
+		__entry->gfp_mask	= gfp_mask;
 	),
 
-	TP_printk("page=%p pfn=%lu order=%d migratetype=%d",
-		pfn_to_page(__entry->pfn), __entry->pfn,
-		__entry->order, __entry->migratetype)
+	TP_printk("large pages, page=%p, order=%d, gfp_mask=%lx",
+		__entry->page,
+		__entry->order,
+		(unsigned long)__entry->gfp_mask
+	)
+);
+
+TRACE_EVENT(dump_allocate_large_pages,
+
+	TP_PROTO(struct page *page, unsigned int order, gfp_t gfp_mask, unsigned long bt[6]),
+
+	TP_ARGS(page, order, gfp_mask, bt),
+
+	TP_STRUCT__entry(
+		__field(struct page *,	page			)
+		__field(unsigned int,	order			)
+		__field(gfp_t,		gfp_mask		)
+		__array(unsigned long, bt, sizeof(unsigned long) * 6)
+	),
+
+	TP_fast_assign(
+		__entry->page		= page;
+		__entry->order		= order;
+		__entry->gfp_mask	= gfp_mask;
+		memcpy(__entry->bt, bt, sizeof(unsigned long) * 6);
+	),
+
+	TP_printk("large pages, page=%p, order=%d, gfp_mask=%lx, bt: %pS, %pS, %pS, %pS, %pS, %pS",
+		__entry->page,
+		__entry->order,
+		(unsigned long)__entry->gfp_mask,
+		(void *)__entry->bt[0],
+		(void *)__entry->bt[1],
+		(void *)__entry->bt[2],
+		(void *)__entry->bt[3],
+		(void *)__entry->bt[4],
+		(void *)__entry->bt[5]
+	)
 );
 
 TRACE_EVENT(mm_page_alloc_extfrag,
@@ -288,7 +333,7 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		alloc_migratetype, fallback_migratetype),
 
 	TP_STRUCT__entry(
-		__field(	unsigned long,	pfn			)
+		__field(	struct page *,	page			)
 		__field(	int,		alloc_order		)
 		__field(	int,		fallback_order		)
 		__field(	int,		alloc_migratetype	)
@@ -297,7 +342,7 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 	),
 
 	TP_fast_assign(
-		__entry->pfn			= page_to_pfn(page);
+		__entry->page			= page;
 		__entry->alloc_order		= alloc_order;
 		__entry->fallback_order		= fallback_order;
 		__entry->alloc_migratetype	= alloc_migratetype;
@@ -307,8 +352,8 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 	),
 
 	TP_printk("page=%p pfn=%lu alloc_order=%d fallback_order=%d pageblock_order=%d alloc_migratetype=%d fallback_migratetype=%d fragmenting=%d change_ownership=%d",
-		pfn_to_page(__entry->pfn),
-		__entry->pfn,
+		__entry->page,
+		page_to_pfn(__entry->page),
 		__entry->alloc_order,
 		__entry->fallback_order,
 		pageblock_order,
@@ -318,75 +363,6 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		__entry->change_ownership)
 );
 
-TRACE_EVENT(ion_heap_shrink,
-
-	TP_PROTO(const char *heap_name,
-		 size_t len,
-		 long total_allocated),
-
-	TP_ARGS(heap_name, len, total_allocated),
-
-	TP_STRUCT__entry(
-		__string(heap_name, heap_name)
-		__field(size_t, len)
-		__field(long, total_allocated)
-	),
-
-	TP_fast_assign(
-		__assign_str(heap_name, heap_name);
-		__entry->len = len;
-		__entry->total_allocated = total_allocated;
-	),
-
-	TP_printk("heap_name=%s, len=%zu, total_allocated=%ld",
-		  __get_str(heap_name), __entry->len, __entry->total_allocated)
-);
-
-TRACE_EVENT(ion_heap_grow,
-
-	TP_PROTO(const char *heap_name,
-		 size_t len,
-		 long total_allocated),
-
-	TP_ARGS(heap_name, len, total_allocated),
-
-	TP_STRUCT__entry(
-		__string(heap_name, heap_name)
-		__field(size_t, len)
-		__field(long, total_allocated)
-	),
-
-	TP_fast_assign(
-		__assign_str(heap_name, heap_name);
-		__entry->len = len;
-		__entry->total_allocated = total_allocated;
-	),
-
-	TP_printk("heap_name=%s, len=%zu, total_allocated=%ld",
-		  __get_str(heap_name), __entry->len, __entry->total_allocated)
-	);
-
-TRACE_EVENT(rss_stat,
-
-	TP_PROTO(int member,
-		long count),
-
-	TP_ARGS(member, count),
-
-	TP_STRUCT__entry(
-		__field(int, member)
-		__field(long, size)
-	),
-
-	TP_fast_assign(
-		__entry->member = member;
-		__entry->size = (count << PAGE_SHIFT);
-	),
-
-	TP_printk("member=%d size=%ldB",
-		__entry->member,
-		__entry->size)
-	);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */

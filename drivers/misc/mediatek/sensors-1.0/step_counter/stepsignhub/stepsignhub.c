@@ -1,18 +1,15 @@
 /* step_chub motion sensor driver
  *
- * Copyright (C) 2016 MediaTek Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
-#define pr_fmt(fmt) "[stepsignhub] " fmt
 
 #include <hwmsensor.h>
 #include "stepsignhub.h"
@@ -21,9 +18,16 @@
 #include <linux/notifier.h>
 #include "scp_helper.h"
 
-enum STEP_CDS_TRC {
+
+
+#define STEP_CDS_TAG                  "[stepsignhub] "
+#define STEP_CDS_FUN(f)               pr_err(STEP_CDS_TAG"%s\n", __func__)
+#define STEP_CDS_ERR(fmt, args...)    pr_err(STEP_CDS_TAG"%s %d : "fmt, __func__, __LINE__, ##args)
+#define STEP_CDS_LOG(fmt, args...)    pr_err(STEP_CDS_TAG fmt, ##args)
+
+typedef enum {
 	STEP_CDSH_TRC_INFO = 0X10,
-};
+} STEP_CDS_TRC;
 
 static struct step_c_init_info step_cdshub_init_info;
 
@@ -33,38 +37,42 @@ struct step_chub_ipi_data {
 };
 
 static struct step_chub_ipi_data obj_ipi_data;
+static ssize_t show_step_cds_value(struct device_driver *ddri, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%s\n", buf);
+}
 
-static ssize_t trace_store(struct device_driver *ddri,
-	const char *buf, size_t count)
+static ssize_t store_trace_value(struct device_driver *ddri, const char *buf, size_t count)
 {
 	struct step_chub_ipi_data *obj = &obj_ipi_data;
 	int trace = 0;
 
 	if (obj == NULL) {
-		pr_err("obj is null!!\n");
+		STEP_CDS_ERR("obj is null!!\n");
 		return 0;
 	}
 
-	if (sscanf(buf, "0x%x", &trace) == 1) {
+	if (1 == sscanf(buf, "0x%x", &trace)) {
 		atomic_set(&obj->trace, trace);
 	} else {
-		pr_err("invalid content: '%s', length = %zu\n",
-			buf, count);
+		STEP_CDS_ERR("invalid content: '%s', length = %zu\n", buf, count);
 		return 0;
 	}
 	return count;
 }
 
-static DRIVER_ATTR_WO(trace);
+static DRIVER_ATTR(step_cds, S_IRUGO, show_step_cds_value, NULL);
+static DRIVER_ATTR(trace, S_IWUSR | S_IRUGO, NULL, store_trace_value);
 
 static struct driver_attribute *step_chub_attr_list[] = {
+	&driver_attr_step_cds,
 	&driver_attr_trace,
 };
 
 static int step_chub_create_attr(struct device_driver *driver)
 {
 	int idx, err = 0;
-	int num = (int)(ARRAY_SIZE(step_chub_attr_list));
+	int num = (int)(sizeof(step_chub_attr_list) / sizeof(step_chub_attr_list[0]));
 
 
 	if (driver == NULL)
@@ -72,8 +80,8 @@ static int step_chub_create_attr(struct device_driver *driver)
 
 	for (idx = 0; idx < num; idx++) {
 		err = driver_create_file(driver, step_chub_attr_list[idx]);
-		if (err != 0) {
-			pr_err("driver_create_file (%s) = %d\n",
+		if (0 != err) {
+			STEP_CDS_ERR("driver_create_file (%s) = %d\n",
 				     step_chub_attr_list[idx]->attr.name, err);
 			break;
 		}
@@ -84,7 +92,7 @@ static int step_chub_create_attr(struct device_driver *driver)
 static int step_chub_delete_attr(struct device_driver *driver)
 {
 	int idx, err = 0;
-	int num = (int)(ARRAY_SIZE(step_chub_attr_list));
+	int num = (int)(sizeof(step_chub_attr_list) / sizeof(step_chub_attr_list[0]));
 
 	if (driver == NULL)
 		return -EINVAL;
@@ -155,12 +163,9 @@ static int step_c_set_delay(u64 delay)
 #endif
 	return ret;
 }
-
-static int step_c_batch(int flag,
-	int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
+static int step_c_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
 {
-	return sensor_batch_to_hub(ID_STEP_COUNTER,
-		flag, samplingPeriodNs, maxBatchReportLatencyNs);
+	return sensor_batch_to_hub(ID_STEP_COUNTER, flag, samplingPeriodNs, maxBatchReportLatencyNs);
 }
 
 static int step_c_flush(void)
@@ -184,12 +189,9 @@ static int step_d_set_delay(u64 delay)
 #endif
 	return ret;
 }
-
-static int step_d_batch(int flag,
-	int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
+static int step_d_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
 {
-	return sensor_batch_to_hub(ID_STEP_DETECTOR,
-		flag, samplingPeriodNs, maxBatchReportLatencyNs);
+	return sensor_batch_to_hub(ID_STEP_DETECTOR, flag, samplingPeriodNs, maxBatchReportLatencyNs);
 }
 
 static int step_d_flush(void)
@@ -213,11 +215,9 @@ static int floor_c_set_delay(u64 delay)
 #endif
 	return ret;
 }
-static int floor_c_batch(int flag,
-	int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
+static int floor_c_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
 {
-	return sensor_batch_to_hub(ID_FLOOR_COUNTER,
-		flag, samplingPeriodNs, maxBatchReportLatencyNs);
+	return sensor_batch_to_hub(ID_FLOOR_COUNTER, flag, samplingPeriodNs, maxBatchReportLatencyNs);
 }
 
 static int floor_c_flush(void)
@@ -230,34 +230,33 @@ static int step_counter_get_data(uint32_t *counter, int *status)
 	int err = 0;
 	struct data_unit_t data;
 	uint64_t time_stamp = 0;
+	uint64_t time_stamp_gpt = 0;
 
 	err = sensor_get_data_from_hub(ID_STEP_COUNTER, &data);
 	if (err < 0) {
-		pr_err("sensor_get_data_from_hub fail!!\n");
+		STEP_CDS_ERR("sensor_get_data_from_hub fail!!\n");
 		return -1;
 	}
 	time_stamp = data.time_stamp;
+	time_stamp_gpt = data.time_stamp_gpt;
 	*counter = data.step_counter_t.accumulated_step_count;
+	STEP_CDS_LOG("recv ipi: timestamp: %lld, timestamp_gpt: %lld, counter: %d!\n", time_stamp,
+		     time_stamp_gpt, *counter);
 	return 0;
 }
-
 static int step_detector_get_data(uint32_t *counter, int *status)
 {
 	return 0;
 }
-
-static int smd_batch(int flag,
-	int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
+static int smd_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
 {
-	return sensor_batch_to_hub(ID_SIGNIFICANT_MOTION,
-		flag, samplingPeriodNs, maxBatchReportLatencyNs);
+	return sensor_batch_to_hub(ID_SIGNIFICANT_MOTION, flag, samplingPeriodNs, maxBatchReportLatencyNs);
 }
 
 static int smd_flush(void)
 {
 	return sensor_flush_to_hub(ID_SIGNIFICANT_MOTION);
 }
-
 static int significant_get_data(uint32_t *counter, int *status)
 {
 	return 0;
@@ -268,14 +267,18 @@ static int floor_counter_get_data(uint32_t *counter, int *status)
 	int err = 0;
 	struct data_unit_t data;
 	uint64_t time_stamp = 0;
+	uint64_t time_stamp_gpt = 0;
 
 	err = sensor_get_data_from_hub(ID_FLOOR_COUNTER, &data);
 	if (err < 0) {
-		pr_err("%s fail!!\n", __func__);
+		STEP_CDS_ERR("floor_counter_get_data fail!!\n");
 		return -1;
 	}
 	time_stamp = data.time_stamp;
+	time_stamp_gpt = data.time_stamp_gpt;
 	*counter = data.floor_counter_t.accumulated_floor_count;
+	STEP_CDS_LOG("recv ipi: timestamp: %lld, timestamp_gpt: %lld, counter: %d!\n", time_stamp,
+		     time_stamp_gpt, *counter);
 	return 0;
 }
 
@@ -284,56 +287,40 @@ static int step_cds_open_report_data(int open)
 	return 0;
 }
 
-static int step_detect_recv_data(struct data_unit_t *event,
-				void *reserved)
+static int step_detect_recv_data(struct data_unit_t *event, void *reserved)
 {
-	int err = 0;
-
 	if (event->flush_action == FLUSH_ACTION)
-		err = step_d_flush_report();
+		step_d_flush_report();
 	else if (event->flush_action == DATA_ACTION)
-		err = step_notify_t(TYPE_STEP_DETECTOR,
-			(int64_t)event->time_stamp);
-	return err;
+		step_notify(TYPE_STEP_DETECTOR);
+	return 0;
 }
 
 static int step_count_recv_data(struct data_unit_t *event, void *reserved)
 {
-	int err = 0;
-
 	if (event->flush_action == FLUSH_ACTION)
-		err = step_c_flush_report();
+		step_c_flush_report();
 	else if (event->flush_action == DATA_ACTION)
-		err = step_c_data_report_t(
-			event->step_counter_t.accumulated_step_count,
-			2, (int64_t)event->time_stamp);
-	return err;
+		step_c_data_report(event->step_counter_t.accumulated_step_count, 2);
+	return 0;
 }
 
 static int sign_recv_data(struct data_unit_t *event, void *reserved)
 {
-	int err = 0;
-
 	if (event->flush_action == FLUSH_ACTION)
-		pr_err("sign do not support flush\n");
+		STEP_CDS_ERR("sign do not support flush\n");
 	else if (event->flush_action == DATA_ACTION)
-		err = step_notify_t(TYPE_SIGNIFICANT,
-			(int64_t)event->time_stamp);
-	return err;
+		step_notify(TYPE_SIGNIFICANT);
+	return 0;
 }
 
 static int floor_count_recv_data(struct data_unit_t *event, void *reserved)
 {
-	int err = 0;
-	struct floor_counter_event_t *pfloor_counter = &event->floor_counter_t;
-
 	if (event->flush_action == FLUSH_ACTION)
-		err = floor_c_flush_report();
+		floor_c_flush_report();
 	else if (event->flush_action == DATA_ACTION)
-		err = floor_c_data_report_t(
-			pfloor_counter->accumulated_floor_count, 2,
-			(int64_t)event->time_stamp);
-	return err;
+		floor_c_data_report(event->floor_counter_t.accumulated_floor_count, 2);
+	return 0;
 }
 
 static int step_chub_local_init(void)
@@ -341,12 +328,10 @@ static int step_chub_local_init(void)
 	struct step_c_control_path ctl = { 0 };
 	struct step_c_data_path data = { 0 };
 	int err = 0;
-	struct platform_driver *paddr =
-		step_cdshub_init_info.platform_diver_addr;
 
-	err = step_chub_create_attr(&paddr->driver);
+	err = step_chub_create_attr(&step_cdshub_init_info.platform_diver_addr->driver);
 	if (err) {
-		pr_err("create attribute err = %d\n", err);
+		STEP_CDS_ERR("create attribute err = %d\n", err);
 		goto exit_create_attr_failed;
 	}
 	ctl.open_report_data = step_cds_open_report_data;
@@ -365,13 +350,13 @@ static int step_chub_local_init(void)
 	ctl.floor_c_flush = floor_c_flush;
 	ctl.smd_batch = smd_batch;
 	ctl.smd_flush = smd_flush;
-	ctl.is_report_input_direct = true;
+	ctl.is_report_input_direct = false;
 	ctl.is_counter_support_batch = false;
 	ctl.is_detector_support_batch = true;
 	ctl.is_smd_support_batch = false;
 	err = step_c_register_control_path(&ctl);
 	if (err) {
-		pr_err("register step_cds control path err\n");
+		STEP_CDS_ERR("register step_cds control path err\n");
 		goto exit;
 	}
 
@@ -381,37 +366,34 @@ static int step_chub_local_init(void)
 	data.get_data_floor_c = floor_counter_get_data;
 	err = step_c_register_data_path(&data);
 	if (err) {
-		pr_err("register step_cds data path err\n");
+		STEP_CDS_ERR("register step_cds data path err\n");
 		goto exit;
 	}
-	err = scp_sensorHub_data_registration(ID_STEP_DETECTOR,
-		step_detect_recv_data);
+	err = scp_sensorHub_data_registration(ID_STEP_DETECTOR, step_detect_recv_data);
 	if (err) {
-		pr_err("SCP_sensorHub_data_registration fail!!\n");
+		STEP_CDS_ERR("SCP_sensorHub_data_registration fail!!\n");
 		goto exit_create_attr_failed;
 	}
 	err =
 	    scp_sensorHub_data_registration(ID_SIGNIFICANT_MOTION,
 					   sign_recv_data);
 	if (err) {
-		pr_err("SCP_sensorHub_data_registration fail!!\n");
+		STEP_CDS_ERR("SCP_sensorHub_data_registration fail!!\n");
 		goto exit_create_attr_failed;
 	}
-	err = scp_sensorHub_data_registration(ID_STEP_COUNTER,
-		step_count_recv_data);
+	err = scp_sensorHub_data_registration(ID_STEP_COUNTER, step_count_recv_data);
 	if (err) {
-		pr_err("SCP_sensorHub_data_registration fail!!\n");
+		STEP_CDS_ERR("SCP_sensorHub_data_registration fail!!\n");
 		goto exit_create_attr_failed;
 	}
-	err = scp_sensorHub_data_registration(ID_FLOOR_COUNTER,
-		floor_count_recv_data);
+	err = scp_sensorHub_data_registration(ID_FLOOR_COUNTER, floor_count_recv_data);
 	if (err) {
-		pr_err("SCP_sensorHub_data_registration fail!!\n");
+		STEP_CDS_ERR("SCP_sensorHub_data_registration fail!!\n");
 		goto exit_create_attr_failed;
 	}
 	return 0;
 exit:
-	step_chub_delete_attr(&paddr->driver);
+	step_chub_delete_attr(&(step_cdshub_init_info.platform_diver_addr->driver));
 exit_create_attr_failed:
 	return -1;
 }
@@ -435,7 +417,7 @@ static int __init step_chub_init(void)
 
 static void __exit step_chub_exit(void)
 {
-	pr_debug("%s\n", __func__);
+	STEP_CDS_FUN();
 }
 
 module_init(step_chub_init);

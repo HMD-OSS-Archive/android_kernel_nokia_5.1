@@ -845,7 +845,7 @@ serial_txx9_type(struct uart_port *port)
 	return "txx9";
 }
 
-static const struct uart_ops serial_txx9_pops = {
+static struct uart_ops serial_txx9_pops = {
 	.tx_empty	= serial_txx9_tx_empty,
 	.set_mctrl	= serial_txx9_set_mctrl,
 	.get_mctrl	= serial_txx9_get_mctrl,
@@ -1165,6 +1165,7 @@ static struct platform_driver serial_txx9_plat_driver = {
 #endif
 	.driver		= {
 		.name	= "serial_txx9",
+		.owner	= THIS_MODULE,
 	},
 };
 

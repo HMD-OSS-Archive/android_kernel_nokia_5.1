@@ -30,8 +30,8 @@
 #include <linux/delay.h>
 #include <linux/input.h>
 #include <linux/leds.h>
-#include <linux/platform_data/lm8323.h>
 #include <linux/pm.h>
+#include <linux/i2c/lm8323.h>
 #include <linux/slab.h>
 
 /* Commands to send to the chip. */
@@ -616,8 +616,6 @@ static ssize_t lm8323_set_disable(struct device *dev,
 	unsigned int i;
 
 	ret = kstrtouint(buf, 10, &i);
-	if (ret)
-		return ret;
 
 	mutex_lock(&lm->lock);
 	lm->kp_enabled = !i;

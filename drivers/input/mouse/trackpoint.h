@@ -21,16 +21,10 @@
 #define TP_COMMAND		0xE2	/* Commands start with this */
 
 #define TP_READ_ID		0xE1	/* Sent for device identification */
+#define TP_MAGIC_IDENT		0x03	/* Sent after a TP_READ_ID followed */
+					/* by the firmware ID */
+					/* Firmware ID includes 0x1, 0x2, 0x3 */
 
-/*
- * Valid first byte responses to the "Read Secondary ID" (0xE1) command.
- * 0x01 was the original IBM trackpoint, others implement very limited
- * subset of trackpoint features.
- */
-#define TP_VARIANT_IBM		0x01
-#define TP_VARIANT_ALPS		0x02
-#define TP_VARIANT_ELAN		0x03
-#define TP_VARIANT_NXP		0x04
 
 /*
  * Commands
@@ -77,9 +71,6 @@
 #define TP_UP_THRESH		0x5A	/* Used to generate a 'click' on Z-axis */
 #define TP_Z_TIME		0x5E	/* How sharp of a press */
 #define TP_JENKS_CURV		0x5D	/* Minimum curvature for double click */
-#define TP_DRIFT_TIME		0x5F	/* How long a 'hands off' condition */
-					/* must last (x*107ms) for drift */
-					/* correction to occur */
 
 /*
  * Toggling Flag bits
@@ -130,7 +121,6 @@
 #define TP_DEF_UP_THRESH	0xFF
 #define TP_DEF_Z_TIME		0x26
 #define TP_DEF_JENKS_CURV	0x87
-#define TP_DEF_DRIFT_TIME	0x05
 
 /* Toggles */
 #define TP_DEF_MB		0x00
@@ -142,27 +132,23 @@
 
 #define MAKE_PS2_CMD(params, results, cmd) ((params<<12) | (results<<8) | (cmd))
 
-struct trackpoint_data {
-	u8 variant_id;
-	u8 firmware_id;
-
-	u8 sensitivity, speed, inertia, reach;
-	u8 draghys, mindrag;
-	u8 thresh, upthresh;
-	u8 ztime, jenks;
-	u8 drift_time;
+struct trackpoint_data
+{
+	unsigned char sensitivity, speed, inertia, reach;
+	unsigned char draghys, mindrag;
+	unsigned char thresh, upthresh;
+	unsigned char ztime, jenks;
 
 	/* toggles */
-	bool press_to_select;
-	bool skipback;
-	bool ext_dev;
+	unsigned char press_to_select;
+	unsigned char skipback;
+	unsigned char ext_dev;
 };
 
 #ifdef CONFIG_MOUSE_PS2_TRACKPOINT
 int trackpoint_detect(struct psmouse *psmouse, bool set_properties);
 #else
-static inline int trackpoint_detect(struct psmouse *psmouse,
-				    bool set_properties)
+inline int trackpoint_detect(struct psmouse *psmouse, bool set_properties)
 {
 	return -ENOSYS;
 }

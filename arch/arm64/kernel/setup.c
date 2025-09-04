@@ -17,7 +17,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/acpi.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
@@ -31,7 +30,9 @@
 #include <linux/screen_info.h>
 #include <linux/init.h>
 #include <linux/kexec.h>
+#include <linux/crash_dump.h>
 #include <linux/root_dev.h>
+#include <linux/clk-provider.h>
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
 #include <linux/smp.h>
@@ -39,20 +40,16 @@
 #include <linux/proc_fs.h>
 #include <linux/memblock.h>
 #include <linux/of_fdt.h>
+#include <linux/of_platform.h>
 #include <linux/efi.h>
-#include <linux/psci.h>
-#include <linux/sched/task.h>
-#include <linux/mm.h>
+#include <linux/personality.h>
 
-#include <asm/acpi.h>
 #include <asm/fixmap.h>
 #include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/elf.h>
 #include <asm/cpufeature.h>
 #include <asm/cpu_ops.h>
-#include <asm/kasan.h>
-#include <asm/numa.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
@@ -60,9 +57,8 @@
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
 #include <asm/memblock.h>
+#include <asm/psci.h>
 #include <asm/efi.h>
-#include <asm/xen/hypervisor.h>
-#include <asm/mmu_context.h>
 
 phys_addr_t __fdt_pointer __initdata;
 
@@ -74,18 +70,30 @@ static struct resource mem_res[] = {
 		.name = "Kernel code",
 		.start = 0,
 		.end = 0,
-		.flags = IORESOURCE_SYSTEM_RAM
+		.flags = IORESOURCE_MEM
 	},
 	{
 		.name = "Kernel data",
 		.start = 0,
 		.end = 0,
-		.flags = IORESOURCE_SYSTEM_RAM
+		.flags = IORESOURCE_MEM
 	}
 };
 
 #define kernel_code mem_res[0]
 #define kernel_data mem_res[1]
+
+void __init early_print(const char *str, ...)
+{
+	char buf[256];
+	va_list ap;
+
+	va_start(ap, str);
+	vsnprintf(buf, sizeof(buf), str, ap);
+	va_end(ap);
+
+	printk("%s", buf);
+}
 
 /*
  * The recorded values of x0 .. x3 upon kernel entry.
@@ -94,16 +102,12 @@ u64 __cacheline_aligned boot_args[4];
 
 void __init smp_setup_processor_id(void)
 {
-	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
-	cpu_logical_map(0) = mpidr;
-
 	/*
 	 * clear __my_cpu_offset on boot CPU to avoid hang caused by
 	 * using percpu variable early, for example, lockdep will
 	 * access percpu variable inside lock_release
 	 */
 	set_my_cpu_offset(0);
-	pr_info("Booting Linux on physical CPU 0x%lx\n", (unsigned long)mpidr);
 }
 
 bool arch_match_cpu_phys_id(int cpu, u64 phys_id)
@@ -175,55 +179,61 @@ static void __init smp_build_mpidr_hash(void)
 	 */
 	if (mpidr_hash_size() > 4 * num_possible_cpus())
 		pr_warn("Large number of MPIDR hash buckets detected\n");
+	__flush_dcache_area(&mpidr_hash, sizeof(struct mpidr_hash));
 }
 
 static void __init setup_machine_fdt(phys_addr_t dt_phys)
 {
-	void *dt_virt = fixmap_remap_fdt(dt_phys);
-	const char *name;
-
-	if (!dt_virt || !early_init_dt_scan(dt_virt)) {
-		pr_crit("\n"
-			"Error: invalid device tree blob at physical address %pa (virtual address 0x%p)\n"
-			"The dtb must be 8-byte aligned and must not exceed 2 MB in size\n"
-			"\nPlease check your bootloader.",
-			&dt_phys, dt_virt);
+	if (!dt_phys || !early_init_dt_scan(phys_to_virt(dt_phys))) {
+		early_print("\n"
+			"Error: invalid device tree blob at physical address 0x%p (virtual address 0x%p)\n"
+			"The dtb must be 8-byte aligned and passed in the first 512MB of memory\n"
+			"\nPlease check your bootloader.\n",
+			dt_phys, phys_to_virt(dt_phys));
 
 		while (true)
 			cpu_relax();
 	}
 
-	name = of_flat_dt_get_machine_name();
-	if (!name)
-		return;
-	/* backward-compatibility for third-party applications */
-	machine_desc_set(name);
-
-	pr_info("Machine model: %s\n", name);
-	dump_stack_set_arch_desc("%s (DT)", name);
+	machine_desc_set(of_flat_dt_get_machine_name());
+	dump_stack_set_arch_desc("%s (DT)", of_flat_dt_get_machine_name());
 }
+
+/*
+ * Limit the memory size that was specified via FDT.
+ */
+static int __init early_mem(char *p)
+{
+	phys_addr_t limit;
+
+	if (!p)
+		return 1;
+
+	limit = memparse(p, &p) & PAGE_MASK;
+	pr_notice("Memory limited to %lldMB\n", limit >> 20);
+
+	memblock_enforce_memory_limit(limit);
+
+	return 0;
+}
+early_param("mem", early_mem);
 
 static void __init request_standard_resources(void)
 {
 	struct memblock_region *region;
 	struct resource *res;
 
-	kernel_code.start   = __pa_symbol(_text);
-	kernel_code.end     = __pa_symbol(__init_begin - 1);
-	kernel_data.start   = __pa_symbol(_sdata);
-	kernel_data.end     = __pa_symbol(_end - 1);
+	kernel_code.start   = virt_to_phys(_text);
+	kernel_code.end     = virt_to_phys(__init_begin - 1);
+	kernel_data.start   = virt_to_phys(_sdata);
+	kernel_data.end     = virt_to_phys(_end - 1);
 
 	for_each_memblock(memory, region) {
 		res = alloc_bootmem_low(sizeof(*res));
-		if (memblock_is_nomap(region)) {
-			res->name  = "reserved";
-			res->flags = IORESOURCE_MEM;
-		} else {
-			res->name  = "System RAM";
-			res->flags = IORESOURCE_SYSTEM_RAM | IORESOURCE_BUSY;
-		}
+		res->name  = "System RAM";
 		res->start = __pfn_to_phys(memblock_region_memory_base_pfn(region));
 		res->end = __pfn_to_phys(memblock_region_memory_end_pfn(region)) - 1;
+		res->flags = IORESOURCE_MEM | IORESOURCE_BUSY;
 
 		request_resource(&iomem_resource, res);
 
@@ -233,12 +243,6 @@ static void __init request_standard_resources(void)
 		if (kernel_data.start >= res->start &&
 		    kernel_data.end <= res->end)
 			request_resource(res, &kernel_data);
-#ifdef CONFIG_KEXEC_CORE
-		/* Userspace will find "Crash kernel" region in /proc/iomem. */
-		if (crashk_res.end && crashk_res.start >= res->start &&
-		    crashk_res.end <= res->end)
-			request_resource(res, &crashk_res);
-#endif
 	}
 }
 
@@ -248,7 +252,9 @@ void __init setup_arch(char **cmdline_p)
 {
 	pr_info("Boot CPU: AArch64 Processor [%08x]\n", read_cpuid_id());
 
-	sprintf(init_utsname()->machine, UTS_MACHINE);
+	setup_machine_fdt(__fdt_pointer);
+
+	sprintf(init_utsname()->machine, ELF_PLATFORM);
 	init_mm.start_code = (unsigned long) _text;
 	init_mm.end_code   = (unsigned long) _etext;
 	init_mm.end_data   = (unsigned long) _edata;
@@ -259,8 +265,6 @@ void __init setup_arch(char **cmdline_p)
 	early_fixmap_init();
 	early_ioremap_init();
 
-	setup_machine_fdt(__fdt_pointer);
-
 	parse_early_param();
 
 	/*
@@ -269,39 +273,19 @@ void __init setup_arch(char **cmdline_p)
 	 */
 	local_async_enable();
 
-	/*
-	 * TTBR0 is only used for the identity mapping at this stage. Make it
-	 * point to zero page to avoid speculatively fetching new entries.
-	 */
-	cpu_uninstall_idmap();
-
-	xen_early_init();
 	efi_init();
 	arm64_memblock_init();
 
 	paging_init();
-
-	acpi_table_upgrade();
-
-	/* Parse the ACPI tables for possible boot-time configuration */
-	acpi_boot_table_init();
-
-	if (acpi_disabled)
-		unflatten_device_tree();
-
-	bootmem_init();
-
-	kasan_init();
-
 	request_standard_resources();
 
 	early_ioremap_reset();
 
-	if (acpi_disabled)
-		psci_dt_init();
-	else
-		psci_acpi_init();
+	unflatten_device_tree();
 
+	psci_init();
+
+	cpu_logical_map(0) = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
 	cpu_read_bootcpu_ops();
 	smp_init_cpus();
 	smp_build_mpidr_hash();
@@ -312,7 +296,11 @@ void __init setup_arch(char **cmdline_p)
 	 * faults in case uaccess_enable() is inadvertently called by the init
 	 * thread.
 	 */
-	init_task.thread_info.ttbr0 = __pa_symbol(empty_zero_page);
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+        init_task.thread_info.ttbr0 = virt_to_phys(empty_zero_page);
+#else
+	init_thread_info.ttbr0 = virt_to_phys(empty_zero_page);
+#endif
 #endif
 
 #ifdef CONFIG_VT
@@ -330,12 +318,16 @@ void __init setup_arch(char **cmdline_p)
 	}
 }
 
+static int __init arm64_device_init(void)
+{
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
+	return 0;
+}
+arch_initcall_sync(arm64_device_init);
+
 static int __init topology_init(void)
 {
 	int i;
-
-	for_each_online_node(i)
-		register_one_node(i);
 
 	for_each_possible_cpu(i) {
 		struct cpu *cpu = &per_cpu(cpu_data.cpu, i);
@@ -346,33 +338,3 @@ static int __init topology_init(void)
 	return 0;
 }
 subsys_initcall(topology_init);
-
-/*
- * Dump out kernel offset information on panic.
- */
-static int dump_kernel_offset(struct notifier_block *self, unsigned long v,
-			      void *p)
-{
-	const unsigned long offset = kaslr_offset();
-
-	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE) && offset > 0) {
-		pr_emerg("Kernel Offset: 0x%lx from 0x%lx\n",
-			 offset, KIMAGE_VADDR);
-		pr_emerg("PHYS_OFFSET: 0x%llx\n", PHYS_OFFSET);
-	} else {
-		pr_emerg("Kernel Offset: disabled\n");
-	}
-	return 0;
-}
-
-static struct notifier_block kernel_offset_notifier = {
-	.notifier_call = dump_kernel_offset
-};
-
-static int __init register_kernel_offset_dumper(void)
-{
-	atomic_notifier_chain_register(&panic_notifier_list,
-				       &kernel_offset_notifier);
-	return 0;
-}
-__initcall(register_kernel_offset_dumper);

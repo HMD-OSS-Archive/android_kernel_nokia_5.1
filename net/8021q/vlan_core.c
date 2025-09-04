@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
@@ -10,7 +9,7 @@ bool vlan_do_receive(struct sk_buff **skbp)
 {
 	struct sk_buff *skb = *skbp;
 	__be16 vlan_proto = skb->vlan_proto;
-	u16 vlan_id = skb_vlan_tag_get_id(skb);
+	u16 vlan_id = vlan_tx_tag_get_id(skb);
 	struct net_device *vlan_dev;
 	struct vlan_pcpu_stats *rx_stats;
 
@@ -22,12 +21,6 @@ bool vlan_do_receive(struct sk_buff **skbp)
 	if (unlikely(!skb))
 		return false;
 
-	if (unlikely(!(vlan_dev->flags & IFF_UP))) {
-		kfree_skb(skb);
-		*skbp = NULL;
-		return false;
-	}
-
 	skb->dev = vlan_dev;
 	if (unlikely(skb->pkt_type == PACKET_OTHERHOST)) {
 		/* Our lower layer thinks this is not local, let's make sure.
@@ -37,9 +30,7 @@ bool vlan_do_receive(struct sk_buff **skbp)
 			skb->pkt_type = PACKET_HOST;
 	}
 
-	if (!(vlan_dev_priv(vlan_dev)->flags & VLAN_FLAG_REORDER_HDR) &&
-	    !netif_is_macvlan_port(vlan_dev) &&
-	    !netif_is_bridge_port(vlan_dev)) {
+	if (!(vlan_dev_priv(vlan_dev)->flags & VLAN_FLAG_REORDER_HDR)) {
 		unsigned int offset = skb->data - skb_mac_header(skb);
 
 		/*
@@ -48,8 +39,8 @@ bool vlan_do_receive(struct sk_buff **skbp)
 		 * original position later
 		 */
 		skb_push(skb, offset);
-		skb = *skbp = vlan_insert_inner_tag(skb, skb->vlan_proto,
-						    skb->vlan_tci, skb->mac_len);
+		skb = *skbp = vlan_insert_tag(skb, skb->vlan_proto,
+					      skb->vlan_tci);
 		if (!skb)
 			return false;
 		skb_pull(skb, offset + VLAN_HLEN);
@@ -215,10 +206,7 @@ static int __vlan_vid_add(struct vlan_info *vlan_info, __be16 proto, u16 vid,
 		return -ENOMEM;
 
 	if (vlan_hw_filter_capable(dev, vid_info)) {
-		if (netif_device_present(dev))
-			err = ops->ndo_vlan_rx_add_vid(dev, proto, vid);
-		else
-			err = -ENODEV;
+		err =  ops->ndo_vlan_rx_add_vid(dev, proto, vid);
 		if (err) {
 			kfree(vid_info);
 			return err;
@@ -276,10 +264,7 @@ static void __vlan_vid_del(struct vlan_info *vlan_info,
 	int err;
 
 	if (vlan_hw_filter_capable(dev, vid_info)) {
-		if (netif_device_present(dev))
-			err = ops->ndo_vlan_rx_kill_vid(dev, proto, vid);
-		else
-			err = -ENODEV;
+		err = ops->ndo_vlan_rx_kill_vid(dev, proto, vid);
 		if (err) {
 			pr_warn("failed to kill vid %04x/%d for device %s\n",
 				proto, vid, dev->name);

@@ -17,7 +17,7 @@
 
 #include <linux/anon_inodes.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/kvm_ppc.h>
 #include <asm/kvm_book3s.h>
 
@@ -262,29 +262,6 @@ static int kvmppc_h_pr_protect(struct kvm_vcpu *vcpu)
 	return EMULATE_DONE;
 }
 
-static int kvmppc_h_pr_logical_ci_load(struct kvm_vcpu *vcpu)
-{
-	long rc;
-
-	rc = kvmppc_h_logical_ci_load(vcpu);
-	if (rc == H_TOO_HARD)
-		return EMULATE_FAIL;
-	kvmppc_set_gpr(vcpu, 3, rc);
-	return EMULATE_DONE;
-}
-
-static int kvmppc_h_pr_logical_ci_store(struct kvm_vcpu *vcpu)
-{
-	long rc;
-
-	rc = kvmppc_h_logical_ci_store(vcpu);
-	if (rc == H_TOO_HARD)
-		return EMULATE_FAIL;
-	kvmppc_set_gpr(vcpu, 3, rc);
-	return EMULATE_DONE;
-}
-
-#ifdef CONFIG_SPAPR_TCE_IOMMU
 static int kvmppc_h_pr_put_tce(struct kvm_vcpu *vcpu)
 {
 	unsigned long liobn = kvmppc_get_gpr(vcpu, 4);
@@ -298,54 +275,6 @@ static int kvmppc_h_pr_put_tce(struct kvm_vcpu *vcpu)
 	kvmppc_set_gpr(vcpu, 3, rc);
 	return EMULATE_DONE;
 }
-
-static int kvmppc_h_pr_put_tce_indirect(struct kvm_vcpu *vcpu)
-{
-	unsigned long liobn = kvmppc_get_gpr(vcpu, 4);
-	unsigned long ioba = kvmppc_get_gpr(vcpu, 5);
-	unsigned long tce = kvmppc_get_gpr(vcpu, 6);
-	unsigned long npages = kvmppc_get_gpr(vcpu, 7);
-	long rc;
-
-	rc = kvmppc_h_put_tce_indirect(vcpu, liobn, ioba,
-			tce, npages);
-	if (rc == H_TOO_HARD)
-		return EMULATE_FAIL;
-	kvmppc_set_gpr(vcpu, 3, rc);
-	return EMULATE_DONE;
-}
-
-static int kvmppc_h_pr_stuff_tce(struct kvm_vcpu *vcpu)
-{
-	unsigned long liobn = kvmppc_get_gpr(vcpu, 4);
-	unsigned long ioba = kvmppc_get_gpr(vcpu, 5);
-	unsigned long tce_value = kvmppc_get_gpr(vcpu, 6);
-	unsigned long npages = kvmppc_get_gpr(vcpu, 7);
-	long rc;
-
-	rc = kvmppc_h_stuff_tce(vcpu, liobn, ioba, tce_value, npages);
-	if (rc == H_TOO_HARD)
-		return EMULATE_FAIL;
-	kvmppc_set_gpr(vcpu, 3, rc);
-	return EMULATE_DONE;
-}
-
-#else /* CONFIG_SPAPR_TCE_IOMMU */
-static int kvmppc_h_pr_put_tce(struct kvm_vcpu *vcpu)
-{
-	return EMULATE_FAIL;
-}
-
-static int kvmppc_h_pr_put_tce_indirect(struct kvm_vcpu *vcpu)
-{
-	return EMULATE_FAIL;
-}
-
-static int kvmppc_h_pr_stuff_tce(struct kvm_vcpu *vcpu)
-{
-	return EMULATE_FAIL;
-}
-#endif /* CONFIG_SPAPR_TCE_IOMMU */
 
 static int kvmppc_h_pr_xics_hcall(struct kvm_vcpu *vcpu, u32 cmd)
 {
@@ -373,20 +302,12 @@ int kvmppc_h_pr(struct kvm_vcpu *vcpu, unsigned long cmd)
 		return kvmppc_h_pr_bulk_remove(vcpu);
 	case H_PUT_TCE:
 		return kvmppc_h_pr_put_tce(vcpu);
-	case H_PUT_TCE_INDIRECT:
-		return kvmppc_h_pr_put_tce_indirect(vcpu);
-	case H_STUFF_TCE:
-		return kvmppc_h_pr_stuff_tce(vcpu);
 	case H_CEDE:
 		kvmppc_set_msr_fast(vcpu, kvmppc_get_msr(vcpu) | MSR_EE);
 		kvm_vcpu_block(vcpu);
-		kvm_clear_request(KVM_REQ_UNHALT, vcpu);
+		clear_bit(KVM_REQ_UNHALT, &vcpu->requests);
 		vcpu->stat.halt_wakeup++;
 		return EMULATE_DONE;
-	case H_LOGICAL_CI_LOAD:
-		return kvmppc_h_pr_logical_ci_load(vcpu);
-	case H_LOGICAL_CI_STORE:
-		return kvmppc_h_pr_logical_ci_store(vcpu);
 	case H_XIRR:
 	case H_CPPR:
 	case H_EOI:
@@ -420,8 +341,6 @@ int kvmppc_hcall_impl_pr(unsigned long cmd)
 	case H_BULK_REMOVE:
 	case H_PUT_TCE:
 	case H_CEDE:
-	case H_LOGICAL_CI_LOAD:
-	case H_LOGICAL_CI_STORE:
 #ifdef CONFIG_KVM_XICS
 	case H_XIRR:
 	case H_CPPR:

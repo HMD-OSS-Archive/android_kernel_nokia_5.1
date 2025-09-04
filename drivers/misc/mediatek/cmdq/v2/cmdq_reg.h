@@ -15,7 +15,7 @@
 #define __CMDQ_REG_H__
 
 #include <mt-plat/sync_write.h>
-#include <linux/io.h>
+#include <asm/io.h>
 
 #include "cmdq_core.h"
 #include "cmdq_device.h"
@@ -69,8 +69,7 @@
 
 #define CMDQ_GCE_END_ADDR_PA         (GCE_BASE_PA + 0xC00)
 #define CMDQ_THR_FIX_END_ADDR(id)    (CMDQ_GCE_END_ADDR_PA | (id << 4))
-#define CMDQ_IS_END_ADDR(addr)       ((addr & CMDQ_GCE_END_ADDR_PA) == \
-					CMDQ_GCE_END_ADDR_PA)
+#define CMDQ_IS_END_ADDR(addr)       ((addr & CMDQ_GCE_END_ADDR_PA) == CMDQ_GCE_END_ADDR_PA)
 
 #define CMDQ_APXGPT2_COUNT           (cmdq_dev_get_APXGPT2_count())
 
@@ -80,9 +79,6 @@
 
 #define CMDQ_REG_GET64_GPR_PX(id)    cmdq_core_get_GPR64(id)
 #define CMDQ_REG_SET64_GPR_PX(id, value)    cmdq_core_set_GPR64(id, value)
-
-#define CMDQ_GET_GPR_PX2RX_LOW(id)	((id & 0xf) * 2)
-#define CMDQ_GET_GPR_PX2RX_HIGH(id)	((id & 0xf) * 2 + 1)
 
 #define CMDQ_REG_SET32(addr, val)    mt_reg_sync_writel(val, (addr))
 

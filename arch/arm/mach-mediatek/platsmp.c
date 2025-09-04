@@ -44,22 +44,15 @@ static const struct mtk_smp_boot_info mtk_mt6589_boot = {
 	{ 0x38, 0x3c, 0x40 },
 };
 
-static const struct mtk_smp_boot_info mtk_mt7623_boot = {
-	0x10202000, 0x34,
-	{ 0x534c4131, 0x4c415332, 0x41534c33 },
-	{ 0x38, 0x3c, 0x40 },
-};
-
 static const struct of_device_id mtk_tz_smp_boot_infos[] __initconst = {
 	{ .compatible   = "mediatek,mt8135", .data = &mtk_mt8135_tz_boot },
 	{ .compatible   = "mediatek,mt8127", .data = &mtk_mt8135_tz_boot },
 	{ .compatible   = "mediatek,mt2701", .data = &mtk_mt8135_tz_boot },
+	{ .compatible   = "mediatek,mt7623", .data = &mtk_mt8135_tz_boot },
 };
 
 static const struct of_device_id mtk_smp_boot_infos[] __initconst = {
 	{ .compatible   = "mediatek,mt6589", .data = &mtk_mt6589_boot },
-	{ .compatible   = "mediatek,mt7623", .data = &mtk_mt7623_boot },
-	{ .compatible   = "mediatek,mt7623a", .data = &mtk_mt7623_boot },
 };
 
 static void __iomem *mtk_smp_base;
@@ -108,7 +101,10 @@ static void __init __mtk_smp_prepare_cpus(unsigned int max_cpus, int trustzone)
 	}
 
 	if (trustzone) {
-		/* smp_base(trustzone-bootinfo) is reserved by device tree */
+		if (memblock_reserve(mtk_smp_info->smp_base, MTK_SMP_REG_SIZE)) {
+			pr_err("%s: Can't reserve smp memory\n", __func__);
+			return;
+		}
 		mtk_smp_base = phys_to_virt(mtk_smp_info->smp_base);
 	} else {
 		mtk_smp_base = ioremap(mtk_smp_info->smp_base, MTK_SMP_REG_SIZE);
@@ -123,7 +119,7 @@ static void __init __mtk_smp_prepare_cpus(unsigned int max_cpus, int trustzone)
 	 * write the address of slave startup address into the system-wide
 	 * jump register
 	 */
-	writel_relaxed(__pa_symbol(secondary_startup_arm),
+	writel_relaxed(virt_to_phys(secondary_startup_arm),
 			mtk_smp_base + mtk_smp_info->jump_reg);
 }
 
@@ -137,13 +133,13 @@ static void __init mtk_smp_prepare_cpus(unsigned int max_cpus)
 	__mtk_smp_prepare_cpus(max_cpus, 0);
 }
 
-static const struct smp_operations mt81xx_tz_smp_ops __initconst = {
+static struct smp_operations mt81xx_tz_smp_ops __initdata = {
 	.smp_prepare_cpus = mtk_tz_smp_prepare_cpus,
 	.smp_boot_secondary = mtk_boot_secondary,
 };
 CPU_METHOD_OF_DECLARE(mt81xx_tz_smp, "mediatek,mt81xx-tz-smp", &mt81xx_tz_smp_ops);
 
-static const struct smp_operations mt6589_smp_ops __initconst = {
+static struct smp_operations mt6589_smp_ops __initdata = {
 	.smp_prepare_cpus = mtk_smp_prepare_cpus,
 	.smp_boot_secondary = mtk_boot_secondary,
 };

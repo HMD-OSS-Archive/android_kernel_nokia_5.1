@@ -1,15 +1,19 @@
 /*
- * Copyright (C) 2015 MediaTek Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ *  ffu.h
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- */
+ * Copyright (c) 2013 SanDisk Corp.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * This program was created by SanDisk Corp
+ * The ffu.h file is obtained under the GPL v2.0 license that is
+ * available via http://www.gnu.org/licenses/,
+ * or http://www.opensource.org/licenses/gpl-2.0.php
+*/
 
 #if !defined(_FFU_H_)
 #define _FFU_H_
@@ -20,7 +24,7 @@
 
 /*
  * eMMC5.0 Field Firmware Update (FFU) opcodes
- */
+*/
 #define MMC_FFU_DOWNLOAD_OP 302
 #define MMC_FFU_INSTALL_OP  303
 
@@ -40,7 +44,11 @@
 #define FFU_CONFIG(ffu_config) (ffu_config & MMC_FFU_CONFIG)
 #define FFU_FEATURES(ffu_fetures) (ffu_fetures & MMC_FFU_FEATURES)
 
-void mmc_wait_for_ffu_req(struct mmc_host *host, struct mmc_request *mrq);
+struct mmc_blk_ioc_data *mmc_ffu_ioctl_copy_from_user(
+	struct mmc_ioc_cmd __user *user);
+int mmc_ffu_download(struct mmc_card *card, struct mmc_command *cmd,
+	u8 *data, int buf_bytes);
+int mmc_ffu_install(struct mmc_card *card, u8 *ext_csd);
 
 #endif
 #endif /* FFU_H_ */

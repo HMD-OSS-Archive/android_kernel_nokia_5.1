@@ -33,8 +33,8 @@
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
 #include <linux/firmware.h>
-#include <linux/io.h>
 
+#include <asm/io.h>
 #include <uapi/sound/emu10k1.h>
 
 /* ------------------- DEFINES -------------------- */
@@ -1688,8 +1688,7 @@ struct snd_emu1010 {
 	unsigned int internal_clock; /* 44100 or 48000 */
 	unsigned int optical_in; /* 0:SPDIF, 1:ADAT */
 	unsigned int optical_out; /* 0:SPDIF, 1:ADAT */
-	struct delayed_work firmware_work;
-	u32 last_reg;
+	struct task_struct *firmware_thread;
 };
 
 struct snd_emu10k1 {
@@ -1814,17 +1813,17 @@ int snd_emu10k1_create(struct snd_card *card,
 		       uint subsystem,
 		       struct snd_emu10k1 ** remu);
 
-int snd_emu10k1_pcm(struct snd_emu10k1 *emu, int device);
-int snd_emu10k1_pcm_mic(struct snd_emu10k1 *emu, int device);
-int snd_emu10k1_pcm_efx(struct snd_emu10k1 *emu, int device);
-int snd_p16v_pcm(struct snd_emu10k1 *emu, int device);
+int snd_emu10k1_pcm(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
+int snd_emu10k1_pcm_mic(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
+int snd_emu10k1_pcm_efx(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
+int snd_p16v_pcm(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
 int snd_p16v_free(struct snd_emu10k1 * emu);
 int snd_p16v_mixer(struct snd_emu10k1 * emu);
-int snd_emu10k1_pcm_multi(struct snd_emu10k1 *emu, int device);
-int snd_emu10k1_fx8010_pcm(struct snd_emu10k1 *emu, int device);
+int snd_emu10k1_pcm_multi(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
+int snd_emu10k1_fx8010_pcm(struct snd_emu10k1 * emu, int device, struct snd_pcm ** rpcm);
 int snd_emu10k1_mixer(struct snd_emu10k1 * emu, int pcm_device, int multi_device);
 int snd_emu10k1_timer(struct snd_emu10k1 * emu, int device);
-int snd_emu10k1_fx8010_new(struct snd_emu10k1 *emu, int device);
+int snd_emu10k1_fx8010_new(struct snd_emu10k1 *emu, int device, struct snd_hwdep ** rhwdep);
 
 irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id);
 

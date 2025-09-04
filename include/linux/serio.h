@@ -18,8 +18,6 @@
 #include <linux/mod_devicetable.h>
 #include <uapi/linux/serio.h>
 
-extern struct bus_type serio_bus;
-
 struct serio {
 	void *port_data;
 
@@ -77,7 +75,6 @@ struct serio_driver {
 	irqreturn_t (*interrupt)(struct serio *, unsigned char, unsigned int);
 	int  (*connect)(struct serio *, struct serio_driver *drv);
 	int  (*reconnect)(struct serio *);
-	int  (*fast_reconnect)(struct serio *);
 	void (*disconnect)(struct serio *);
 	void (*cleanup)(struct serio *);
 

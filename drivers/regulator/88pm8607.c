@@ -220,7 +220,7 @@ static int pm8607_list_voltage(struct regulator_dev *rdev, unsigned index)
 	return ret;
 }
 
-static const struct regulator_ops pm8607_regulator_ops = {
+static struct regulator_ops pm8607_regulator_ops = {
 	.list_voltage	= pm8607_list_voltage,
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
@@ -229,7 +229,7 @@ static const struct regulator_ops pm8607_regulator_ops = {
 	.is_enabled = regulator_is_enabled_regmap,
 };
 
-static const struct regulator_ops pm8606_preg_ops = {
+static struct regulator_ops pm8606_preg_ops = {
 	.enable		= regulator_enable_regmap,
 	.disable	= regulator_disable_regmap,
 	.is_enabled	= regulator_is_enabled_regmap,
@@ -330,8 +330,7 @@ static int pm8607_regulator_dt_init(struct platform_device *pdev,
 	for_each_child_of_node(nproot, np) {
 		if (!of_node_cmp(np->name, info->desc.name)) {
 			config->init_data =
-				of_get_regulator_init_data(&pdev->dev, np,
-							   &info->desc);
+				of_get_regulator_init_data(&pdev->dev, np);
 			config->of_node = np;
 			break;
 		}
@@ -404,7 +403,7 @@ static int pm8607_regulator_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct platform_device_id pm8607_regulator_driver_ids[] = {
+static struct platform_device_id pm8607_regulator_driver_ids[] = {
 	{
 		.name	= "88pm860x-regulator",
 		.driver_data	= 0,
@@ -419,6 +418,7 @@ MODULE_DEVICE_TABLE(platform, pm8607_regulator_driver_ids);
 static struct platform_driver pm8607_regulator_driver = {
 	.driver		= {
 		.name	= "88pm860x-regulator",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= pm8607_regulator_probe,
 	.id_table	= pm8607_regulator_driver_ids,

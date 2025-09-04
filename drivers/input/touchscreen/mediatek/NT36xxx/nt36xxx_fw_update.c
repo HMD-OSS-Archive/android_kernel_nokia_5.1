@@ -1,8 +1,8 @@
 /*
  * Copyright (C) 2010 - 2017 Novatek, Inc.
  *
- * $Revision: 20544 $
- * $Date: 2017-12-20 11:08:15 +0800 (?±‰?, 20 ?Å‰???2017) $
+ * $Revision: 18659 $
+ * $Date: 2017-11-10 11:16:31 +0800 (ÈÄ±‰∫î, 10 ÂçÅ‰∏ÄÊúà 2017) $
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,6 @@
 #include <linux/firmware.h>
 
 #include "nt36xxx.h"
-#include "../../../../misc/mediatek/lcm/inc/lcm_drv.h"
 
 #if BOOT_UPDATE_FIRMWARE
 
@@ -31,11 +30,9 @@
 #define FLASH_SECTOR_SIZE 4096
 #define SIZE_64KB 65536
 #define BLOCK_64KB_NUM 4
-extern char mtkfb_lcm_name[256];
-extern unsigned int g_fih_panelid;
 
 const struct firmware *fw_entry = NULL;
-#define BBOX_TOUCH_FW_UPGRADE_FAIL    do {printk("BBox;%s: touch fw upgrade  fail!\n", __func__); printk("BBox::UEC;7::6\n");} while (0);
+
 /*******************************************************
 Description:
 	Novatek touchscreen request update firmware function.
@@ -819,7 +816,7 @@ int32_t Verify_Flash(void)
 		}
 	}
 
-	NVT_ERR("Verify OK \n");
+	NVT_LOG("Verify OK \n");
 	return 0;
 }
 
@@ -834,46 +831,33 @@ int32_t Update_Firmware(void)
 {
 	int32_t ret = 0;
 
-	//---Stop CRC check to prevent IC auto reboot---
-	nvt_stop_crc_reboot();
-
 	// Step 1 : initial bootloader
 	ret = Init_BootLoader();
 	if (ret) {
-		BBOX_TOUCH_FW_UPGRADE_FAIL;
-		NVT_ERR("Update_Firmware failed1. (%d)\n", ret);
 		return ret;
 	}
 
 	// Step 2 : Resume PD
 	ret = Resume_PD();
 	if (ret) {
-		BBOX_TOUCH_FW_UPGRADE_FAIL;
-		NVT_ERR("Update_Firmware failed2. (%d)\n", ret);
 		return ret;
 	}
 
 	// Step 3 : Erase
 	ret = Erase_Flash();
 	if (ret) {
-		BBOX_TOUCH_FW_UPGRADE_FAIL;
-		NVT_ERR("Update_Firmware failed3. (%d)\n", ret);
 		return ret;
 	}
 
 	// Step 4 : Program
 	ret = Write_Flash();
 	if (ret) {
-		BBOX_TOUCH_FW_UPGRADE_FAIL;
-		NVT_ERR("Update_Firmware failed4. (%d)\n", ret);
 		return ret;
 	}
 
 	// Step 5 : Verify
 	ret = Verify_Flash();
 	if (ret) {
-		BBOX_TOUCH_FW_UPGRADE_FAIL;
-		NVT_ERR("Update_Firmware failed5. (%d)\n", ret);
 		return ret;
 	}
 
@@ -995,25 +979,8 @@ void Boot_Update_Firmware(struct work_struct *work)
 	int32_t ret = 0;
 
 	char firmware_name[256] = "";
-	int build = (g_fih_panelid & FIH_LCM_PANEL_ID_SWID_BUILD_MASK) >> FIH_LCM_PANEL_ID_SWID_BUILD_SHIFT;
-	int version = (g_fih_panelid & FIH_LCM_PANEL_ID_SWID_VERSION_MASK) >> FIH_LCM_PANEL_ID_SWID_VERSION_SHIFT;
-	pr_err("[LCM-truly] PDA evt or newer, panel build=0x%02X version=0x%02X\n", build, version);
+	sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME);
 
-	if (strcmp(mtkfb_lcm_name, "nt36525_hdplus_dsi_vdo_tianma_rt5081_drv") == 0)
-	    sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME_tianma);
-	else if (strcmp(mtkfb_lcm_name, "nt36525_hdplus_dsi_vdo_truly_rt5081_drv") == 0){
-	    if ( (build == FIH_LCM_SWID3_NVT_TRULY_OLD) && (version != FIH_LCM_SWID2_NVT_TRULY2) ) {
-		sprintf(firmware_name, "novatek_ts_fw_truly.bin");
-		NVT_ERR("firmware_name = %s\n", firmware_name);
-	    }
-	    else{
-		sprintf(firmware_name, "novatek_ts_fw_truly2.bin");
-		NVT_ERR("firmware_name = %s\n", firmware_name);
-	    }
-	    //sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME_truly);
-		}
-	NVT_ERR("Enter Boot_Update_Firmware\n");
-    	NVT_ERR(" mtkfb_lcm_name %s\n",mtkfb_lcm_name);
 	// request bin file in "/etc/firmware"
 	ret = update_firmware_request(firmware_name);
 	if (ret) {
@@ -1022,10 +989,6 @@ void Boot_Update_Firmware(struct work_struct *work)
 	}
 
 	mutex_lock(&ts->lock);
-
-#if NVT_TOUCH_ESD_PROTECT
-	nvt_esd_check_enable(false);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
 
 	nvt_sw_reset_idle();
 

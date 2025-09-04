@@ -20,7 +20,6 @@
 
 #else
 
-#define __ARCH_USE_5LEVEL_HACK
 #include <asm-generic/pgtable-nopud.h>
 #include <asm/memory.h>
 #include <asm/pgtable-hwdef.h>
@@ -44,7 +43,7 @@
  */
 #define VMALLOC_OFFSET		(8*1024*1024)
 #define VMALLOC_START		(((unsigned long)high_memory + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1))
-#define VMALLOC_END		0xff800000UL
+#define VMALLOC_END		0xff000000UL
 
 #define LIBRARY_TEXT_START	0x0c000000
 
@@ -98,9 +97,7 @@ extern pgprot_t		pgprot_s2_device;
 #define PAGE_READONLY_EXEC	_MOD_PROT(pgprot_user, L_PTE_USER | L_PTE_RDONLY)
 #define PAGE_KERNEL		_MOD_PROT(pgprot_kernel, L_PTE_XN)
 #define PAGE_KERNEL_EXEC	pgprot_kernel
-#define PAGE_HYP		_MOD_PROT(pgprot_kernel, L_PTE_HYP | L_PTE_XN)
-#define PAGE_HYP_EXEC		_MOD_PROT(pgprot_kernel, L_PTE_HYP | L_PTE_RDONLY)
-#define PAGE_HYP_RO		_MOD_PROT(pgprot_kernel, L_PTE_HYP | L_PTE_RDONLY | L_PTE_XN)
+#define PAGE_HYP		_MOD_PROT(pgprot_kernel, L_PTE_HYP)
 #define PAGE_HYP_DEVICE		_MOD_PROT(pgprot_hyp_device, L_PTE_HYP)
 #define PAGE_S2			_MOD_PROT(pgprot_s2, L_PTE_S2_RDONLY)
 #define PAGE_S2_DEVICE		_MOD_PROT(pgprot_s2_device, L_PTE_S2_RDONLY)
@@ -228,7 +225,6 @@ static inline pte_t *pmd_page_vaddr(pmd_t pmd)
 #define pte_dirty(pte)		(pte_isset((pte), L_PTE_DIRTY))
 #define pte_young(pte)		(pte_isset((pte), L_PTE_YOUNG))
 #define pte_exec(pte)		(pte_isclear((pte), L_PTE_XN))
-#define pte_special(pte)	(pte_isset((pte), L_PTE_SPECIAL))
 
 #define pte_valid_user(pte)	\
 	(pte_valid(pte) && pte_isset((pte), L_PTE_USER) && pte_young(pte))
@@ -255,62 +251,17 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 	set_pte_ext(ptep, pteval, ext);
 }
 
-static inline pte_t clear_pte_bit(pte_t pte, pgprot_t prot)
-{
-	pte_val(pte) &= ~pgprot_val(prot);
-	return pte;
-}
+#define PTE_BIT_FUNC(fn,op) \
+static inline pte_t pte_##fn(pte_t pte) { pte_val(pte) op; return pte; }
 
-static inline pte_t set_pte_bit(pte_t pte, pgprot_t prot)
-{
-	pte_val(pte) |= pgprot_val(prot);
-	return pte;
-}
-
-static inline pte_t pte_wrprotect(pte_t pte)
-{
-	return set_pte_bit(pte, __pgprot(L_PTE_RDONLY));
-}
-
-static inline pte_t pte_mkwrite(pte_t pte)
-{
-	return clear_pte_bit(pte, __pgprot(L_PTE_RDONLY));
-}
-
-static inline pte_t pte_mkclean(pte_t pte)
-{
-	return clear_pte_bit(pte, __pgprot(L_PTE_DIRTY));
-}
-
-static inline pte_t pte_mkdirty(pte_t pte)
-{
-	return set_pte_bit(pte, __pgprot(L_PTE_DIRTY));
-}
-
-static inline pte_t pte_mkold(pte_t pte)
-{
-	return clear_pte_bit(pte, __pgprot(L_PTE_YOUNG));
-}
-
-static inline pte_t pte_mkyoung(pte_t pte)
-{
-	return set_pte_bit(pte, __pgprot(L_PTE_YOUNG));
-}
-
-static inline pte_t pte_mkexec(pte_t pte)
-{
-	return clear_pte_bit(pte, __pgprot(L_PTE_XN));
-}
-
-static inline pte_t pte_mknexec(pte_t pte)
-{
-	return set_pte_bit(pte, __pgprot(L_PTE_XN));
-}
-
-static inline pte_t pte_mkspecial(pte_t pte)
-{
-	return set_pte_bit(pte, __pgprot(L_PTE_SPECIAL));
-}
+PTE_BIT_FUNC(wrprotect, |= L_PTE_RDONLY);
+PTE_BIT_FUNC(mkwrite,   &= ~L_PTE_RDONLY);
+PTE_BIT_FUNC(mkclean,   &= ~L_PTE_DIRTY);
+PTE_BIT_FUNC(mkdirty,   |= L_PTE_DIRTY);
+PTE_BIT_FUNC(mkold,     &= ~L_PTE_YOUNG);
+PTE_BIT_FUNC(mkyoung,   |= L_PTE_YOUNG);
+PTE_BIT_FUNC(mkexec,   &= ~L_PTE_XN);
+PTE_BIT_FUNC(mknexec,   |= L_PTE_XN);
 
 static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 {
@@ -326,12 +277,12 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
  *
  *   3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
  *   1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
- *   <--------------- offset ------------------------> < type -> 0 0
+ *   <--------------- offset ----------------------> < type -> 0 0 0
  *
- * This gives us up to 31 swap files and 128GB per swap file.  Note that
+ * This gives us up to 31 swap files and 64GB per swap file.  Note that
  * the offset field is always non-zero.
  */
-#define __SWP_TYPE_SHIFT	2
+#define __SWP_TYPE_SHIFT	3
 #define __SWP_TYPE_BITS		5
 #define __SWP_TYPE_MASK		((1 << __SWP_TYPE_BITS) - 1)
 #define __SWP_OFFSET_SHIFT	(__SWP_TYPE_BITS + __SWP_TYPE_SHIFT)
@@ -350,6 +301,20 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
  */
 #define MAX_SWAPFILES_CHECK() BUILD_BUG_ON(MAX_SWAPFILES_SHIFT > __SWP_TYPE_BITS)
 
+/*
+ * Encode and decode a file entry.  File entries are stored in the Linux
+ * page tables as follows:
+ *
+ *   3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
+ *   1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+ *   <----------------------- offset ------------------------> 1 0 0
+ */
+#define pte_file(pte)		(pte_val(pte) & L_PTE_FILE)
+#define pte_to_pgoff(x)		(pte_val(x) >> 3)
+#define pgoff_to_pte(x)		__pte(((x) << 3) | L_PTE_FILE)
+
+#define PTE_FILE_MAX_BITS	29
+
 /* Needs to be defined here and not in linux/mm.h, as it is arch dependent */
 /* FIXME: this is not correct */
 #define kern_addr_valid(addr)	(1)
@@ -363,24 +328,6 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 #define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
 
 #define pgtable_cache_init() do { } while (0)
-
-#if defined(CONFIG_ARCH_HAS_PTE_SPECIAL) && !defined(CONFIG_ARM_LPAE)
-#define spf_pxd_flunked spf_pxd_flunked
-static inline bool spf_pgd_flunked(pgd_t *pgd)
-{
-	if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
-		return true;
-
-	return false;
-}
-static inline bool spf_p4d_flunked(p4d_t *p4d)
-{
-	if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d)))
-		return true;
-
-	return false;
-}
-#endif
 
 #endif /* !__ASSEMBLY__ */
 

@@ -612,7 +612,7 @@ PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 				IMG_UINT32 uiIdx = pui32MappingTable[i] * uiPagesPerChunk + j;
 	
 				psPrivData->pasDevPhysAddr[uiIdx].uiAddr =
-						sg_phys(sg) + uiSglOffset;
+						sg_dma_address(sg) + uiSglOffset;
 	
 				/* Get the next offset for the current sgl or the next sgl */
 				uiSglOffset += PAGE_SIZE;

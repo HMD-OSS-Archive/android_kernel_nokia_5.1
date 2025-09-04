@@ -26,7 +26,7 @@
  *
  */      
 
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
@@ -40,8 +40,12 @@
 #include <sound/initval.h>
 /* for 440MX workaround */
 #include <asm/pgtable.h>
-#ifdef CONFIG_X86
-#include <asm/set_memory.h>
+#include <asm/cacheflush.h>
+
+#ifdef CONFIG_KVM_GUEST
+#include <linux/kvm_para.h>
+#else
+#define kvm_para_available() (0)
 #endif
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
@@ -1115,7 +1119,7 @@ static snd_pcm_uframes_t snd_intel8x0_pcm_pointer(struct snd_pcm_substream *subs
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static const struct snd_pcm_hardware snd_intel8x0_stream =
+static struct snd_pcm_hardware snd_intel8x0_stream =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -1136,31 +1140,31 @@ static const struct snd_pcm_hardware snd_intel8x0_stream =
 	.fifo_size =		0,
 };
 
-static const unsigned int channels4[] = {
+static unsigned int channels4[] = {
 	2, 4,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels4 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels4 = {
 	.count = ARRAY_SIZE(channels4),
 	.list = channels4,
 	.mask = 0,
 };
 
-static const unsigned int channels6[] = {
+static unsigned int channels6[] = {
 	2, 4, 6,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels6 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels6 = {
 	.count = ARRAY_SIZE(channels6),
 	.list = channels6,
 	.mask = 0,
 };
 
-static const unsigned int channels8[] = {
+static unsigned int channels8[] = {
 	2, 4, 6, 8,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels8 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels8 = {
 	.count = ARRAY_SIZE(channels8),
 	.list = channels8,
 	.mask = 0,
@@ -1367,7 +1371,7 @@ static int snd_intel8x0_ali_spdifout_close(struct snd_pcm_substream *substream)
 }
 #endif
 
-static const struct snd_pcm_ops snd_intel8x0_playback_ops = {
+static struct snd_pcm_ops snd_intel8x0_playback_ops = {
 	.open =		snd_intel8x0_playback_open,
 	.close =	snd_intel8x0_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1378,7 +1382,7 @@ static const struct snd_pcm_ops snd_intel8x0_playback_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_ops = {
 	.open =		snd_intel8x0_capture_open,
 	.close =	snd_intel8x0_capture_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1389,7 +1393,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
 	.open =		snd_intel8x0_mic_open,
 	.close =	snd_intel8x0_mic_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1400,7 +1404,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
 	.open =		snd_intel8x0_mic2_open,
 	.close =	snd_intel8x0_mic2_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1411,7 +1415,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture2_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture2_ops = {
 	.open =		snd_intel8x0_capture2_open,
 	.close =	snd_intel8x0_capture2_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1422,7 +1426,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture2_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_spdif_ops = {
+static struct snd_pcm_ops snd_intel8x0_spdif_ops = {
 	.open =		snd_intel8x0_spdif_open,
 	.close =	snd_intel8x0_spdif_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1433,7 +1437,7 @@ static const struct snd_pcm_ops snd_intel8x0_spdif_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
 	.open =		snd_intel8x0_playback_open,
 	.close =	snd_intel8x0_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1444,7 +1448,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
 	.open =		snd_intel8x0_capture_open,
 	.close =	snd_intel8x0_capture_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1455,7 +1459,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
 	.open =		snd_intel8x0_mic_open,
 	.close =	snd_intel8x0_mic_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1466,7 +1470,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_ac97spdifout_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_ac97spdifout_ops = {
 	.open =		snd_intel8x0_ali_ac97spdifout_open,
 	.close =	snd_intel8x0_ali_ac97spdifout_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1503,8 +1507,8 @@ static struct snd_pcm_ops snd_intel8x0_ali_spdifout_ops = {
 
 struct ich_pcm_table {
 	char *suffix;
-	const struct snd_pcm_ops *playback_ops;
-	const struct snd_pcm_ops *capture_ops;
+	struct snd_pcm_ops *playback_ops;
+	struct snd_pcm_ops *capture_ops;
 	size_t prealloc_size;
 	size_t prealloc_max_size;
 	int ac97_idx;
@@ -1721,7 +1725,7 @@ static void snd_intel8x0_mixer_free_ac97(struct snd_ac97 *ac97)
 	chip->ac97[ac97->num] = NULL;
 }
 
-static const struct ac97_pcm ac97_pcm_defs[] = {
+static struct ac97_pcm ac97_pcm_defs[] = {
 	/* front PCM */
 	{
 		.exclusive = 1,
@@ -1791,7 +1795,7 @@ static const struct ac97_pcm ac97_pcm_defs[] = {
 	},
 };
 
-static const struct ac97_quirk ac97_quirks[] = {
+static struct ac97_quirk ac97_quirks[] = {
         {
 		.subvendor = 0x0e11,
 		.subdevice = 0x000e,
@@ -2650,6 +2654,7 @@ static int snd_intel8x0_free(struct intel8x0 *chip)
  */
 static int intel8x0_suspend(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct intel8x0 *chip = card->private_data;
 	int i;
@@ -2677,6 +2682,12 @@ static int intel8x0_suspend(struct device *dev)
 		free_irq(chip->irq, chip);
 		chip->irq = -1;
 	}
+	pci_disable_device(pci);
+	pci_save_state(pci);
+	/* The call below may disable built-in speaker on some laptops
+	 * after S2RAM.  So, don't touch it.
+	 */
+	/* pci_set_power_state(pci, PCI_D3hot); */
 	return 0;
 }
 
@@ -2687,6 +2698,14 @@ static int intel8x0_resume(struct device *dev)
 	struct intel8x0 *chip = card->private_data;
 	int i;
 
+	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		dev_err(dev, "pci_enable_device failed, disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+	pci_set_master(pci);
 	snd_intel8x0_chip_init(chip, 0);
 	if (request_irq(pci->irq, snd_intel8x0_interrupt,
 			IRQF_SHARED, KBUILD_MODNAME, chip)) {
@@ -2897,6 +2916,7 @@ static int intel8x0_in_clock_list(struct intel8x0 *chip)
 	return 1;
 }
 
+#ifdef CONFIG_PROC_FS
 static void snd_intel8x0_proc_read(struct snd_info_entry * entry,
 				   struct snd_info_buffer *buffer)
 {
@@ -2938,6 +2958,9 @@ static void snd_intel8x0_proc_init(struct intel8x0 *chip)
 	if (! snd_card_proc_new(chip->card, "intel8x0", &entry))
 		snd_info_set_text_ops(entry, chip, snd_intel8x0_proc_read);
 }
+#else
+#define snd_intel8x0_proc_init(x)
+#endif
 
 static int snd_intel8x0_dev_free(struct snd_device *device)
 {
@@ -2968,17 +2991,25 @@ static int snd_intel8x0_inside_vm(struct pci_dev *pci)
 		goto fini;
 	}
 
+	/* detect KVM and Parallels virtual environments */
+	result = kvm_para_available();
+#ifdef X86_FEATURE_HYPERVISOR
+	result = result || boot_cpu_has(X86_FEATURE_HYPERVISOR);
+#endif
+	if (!result)
+		goto fini;
+
 	/* check for known (emulated) devices */
-	result = 0;
-	if (pci->subsystem_vendor == PCI_SUBVENDOR_ID_REDHAT_QUMRANET &&
-	    pci->subsystem_device == PCI_SUBDEVICE_ID_QEMU) {
+	if (pci->subsystem_vendor == 0x1af4 &&
+	    pci->subsystem_device == 0x1100) {
 		/* KVM emulated sound, PCI SSID: 1af4:1100 */
 		msg = "enable KVM";
-		result = 1;
 	} else if (pci->subsystem_vendor == 0x1ab8) {
 		/* Parallels VM emulated sound, PCI SSID: 1ab8:xxxx */
 		msg = "enable Parallels VM";
-		result = 1;
+	} else {
+		msg = "disable (unknown or VT-d) VM";
+		result = 0;
 	}
 
 fini:
@@ -3086,13 +3117,13 @@ static int snd_intel8x0_create(struct snd_card *card,
 		chip->bmaddr = pci_iomap(pci, 3, 0);
 	else
 		chip->bmaddr = pci_iomap(pci, 1, 0);
-
- port_inited:
 	if (!chip->bmaddr) {
 		dev_err(card->dev, "Controller space ioremap problem\n");
 		snd_intel8x0_free(chip);
 		return -EIO;
 	}
+
+ port_inited:
 	chip->bdbars_count = bdbars[device_type];
 
 	/* initialize offsets */

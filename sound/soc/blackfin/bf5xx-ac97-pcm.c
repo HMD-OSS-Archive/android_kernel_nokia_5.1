@@ -279,36 +279,26 @@ static int bf5xx_pcm_mmap(struct snd_pcm_substream *substream,
 	return 0 ;
 }
 #else
-static	int bf5xx_pcm_copy(struct snd_pcm_substream *substream,
-			   int channel, unsigned long pos,
-			   void *buf, unsigned long count)
+static	int bf5xx_pcm_copy(struct snd_pcm_substream *substream, int channel,
+		    snd_pcm_uframes_t pos,
+		    void __user *buf, snd_pcm_uframes_t count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned int chan_mask = ac97_chan_mask[runtime->channels - 1];
-	struct ac97_frame *dst;
-
 	pr_debug("%s copy pos:0x%lx count:0x%lx\n",
 			substream->stream ? "Capture" : "Playback", pos, count);
-	dst = (struct ac97_frame *)runtime->dma_area +
-		bytes_to_frames(runtime, pos);
-	count = bytes_to_frames(runtime, count);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		bf5xx_pcm_to_ac97(dst, buf, count, chan_mask);
+		bf5xx_pcm_to_ac97((struct ac97_frame *)runtime->dma_area + pos,
+			(__u16 *)buf, count, chan_mask);
 	else
-		bf5xx_ac97_to_pcm(dst, buf, count);
+		bf5xx_ac97_to_pcm((struct ac97_frame *)runtime->dma_area + pos,
+			(__u16 *)buf, count);
 	return 0;
-}
-
-static	int bf5xx_pcm_copy_user(struct snd_pcm_substream *substream,
-				int channel, unsigned long pos,
-				void __user *buf, unsigned long count)
-{
-	return bf5xx_pcm_copy(substream, channel, pos, (void *)buf, count);
 }
 #endif
 
-static const struct snd_pcm_ops bf5xx_pcm_ac97_ops = {
+static struct snd_pcm_ops bf5xx_pcm_ac97_ops = {
 	.open		= bf5xx_pcm_open,
 	.ioctl		= snd_pcm_lib_ioctl,
 	.hw_params	= bf5xx_pcm_hw_params,
@@ -319,8 +309,7 @@ static const struct snd_pcm_ops bf5xx_pcm_ac97_ops = {
 #if defined(CONFIG_SND_BF5XX_MMAP_SUPPORT)
 	.mmap		= bf5xx_pcm_mmap,
 #else
-	.copy_user	= bf5xx_pcm_copy_user,
-	.copy_kernel	= bf5xx_pcm_copy,
+	.copy		= bf5xx_pcm_copy,
 #endif
 };
 
@@ -461,16 +450,23 @@ static struct snd_soc_platform_driver bf5xx_ac97_soc_platform = {
 
 static int bf5xx_soc_platform_probe(struct platform_device *pdev)
 {
-	return devm_snd_soc_register_platform(&pdev->dev,
-					      &bf5xx_ac97_soc_platform);
+	return snd_soc_register_platform(&pdev->dev, &bf5xx_ac97_soc_platform);
+}
+
+static int bf5xx_soc_platform_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_platform(&pdev->dev);
+	return 0;
 }
 
 static struct platform_driver bf5xx_pcm_driver = {
 	.driver = {
 			.name = "bfin-ac97-pcm-audio",
+			.owner = THIS_MODULE,
 	},
 
 	.probe = bf5xx_soc_platform_probe,
+	.remove = bf5xx_soc_platform_remove,
 };
 
 module_platform_driver(bf5xx_pcm_driver);

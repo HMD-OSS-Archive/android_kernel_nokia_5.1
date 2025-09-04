@@ -32,7 +32,7 @@
  * timer and 180 seconds for the margin of error.  IOW, a timer is set
  * for 60 seconds.  When the timer fires, the callback checks the
  * actual duration that the timer waited.  If the duration exceeds the
- * allotted time and margin (here 60 + 180, or 240 seconds), the machine
+ * alloted time and margin (here 60 + 180, or 240 seconds), the machine
  * is restarted.  A healthy machine will have the duration match the
  * expected timeout very closely.
  */
@@ -46,7 +46,7 @@
 #include <linux/reboot.h>
 #include <linux/init.h>
 #include <linux/delay.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/sysrq.h>
 #include <linux/timer.h>
 #include <linux/hrtimer.h>
@@ -168,8 +168,8 @@ static int __init hangcheck_init(void)
 	printk("Hangcheck: starting hangcheck timer %s (tick is %d seconds, margin is %d seconds).\n",
 	       VERSION_STR, hangcheck_tick, hangcheck_margin);
 	hangcheck_tsc_margin =
-		(unsigned long long)hangcheck_margin + hangcheck_tick;
-	hangcheck_tsc_margin *= TIMER_FREQ;
+		(unsigned long long)(hangcheck_margin + hangcheck_tick);
+	hangcheck_tsc_margin *= (unsigned long long)TIMER_FREQ;
 
 	hangcheck_tsc = ktime_get_ns();
 	mod_timer(&hangcheck_ticktock, jiffies + (hangcheck_tick*HZ));

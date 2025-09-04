@@ -13,6 +13,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *
  *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifndef __MT2131_H__
@@ -43,3 +47,8 @@ static inline struct dvb_frontend* mt2131_attach(struct dvb_frontend *fe,
 #endif /* CONFIG_MEDIA_TUNER_MT2131 */
 
 #endif /* __MT2131_H__ */
+
+/*
+ * Local variables:
+ * c-basic-offset: 8
+ */

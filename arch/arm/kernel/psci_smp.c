@@ -17,12 +17,17 @@
 #include <linux/smp.h>
 #include <linux/of.h>
 #include <linux/delay.h>
-#include <linux/psci.h>
-
 #include <uapi/linux/psci.h>
 
 #include <asm/psci.h>
 #include <asm/smp_plat.h>
+
+#if defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || \
+	defined(CONFIG_ARCH_MT6753) || defined(CONFIG_ARCH_MT6755) || \
+	defined(CONFIG_ARCH_MT8163)
+#include <mt-smp.h>
+#include <hotplug.h>
+#endif
 
 /*
  * psci_smp assumes that the following is true about PSCI:
@@ -51,39 +56,57 @@ extern void secondary_startup(void);
 
 static int psci_boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
+#if defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || \
+	defined(CONFIG_ARCH_MT6753) || defined(CONFIG_ARCH_MT6755) || \
+	defined(CONFIG_ARCH_MT8163)
+	int ret = -1;
+
+	if (psci_ops.cpu_on)
+		ret = psci_ops.cpu_on(cpu_logical_map(cpu),
+				       __pa(secondary_startup));
+
+	if (ret < 0) {
+		pr_err("psci cpu_on failed\n");
+		return -ENODEV;
+	}
+
+	ret = mt_smp_boot_secondary(cpu, idle);
+	if (ret < 0) {
+		pr_err("mt_smp_boot_secondary failed\n");
+		return -ENODEV;
+	}
+	return 0;
+#else
 	if (psci_ops.cpu_on)
 		return psci_ops.cpu_on(cpu_logical_map(cpu),
-					virt_to_idmap(&secondary_startup));
+				       __pa(secondary_startup));
 	return -ENODEV;
+#endif
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
-int psci_cpu_disable(unsigned int cpu)
+void __ref psci_cpu_die(unsigned int cpu)
 {
-	/* Fail early if we don't have CPU_OFF support */
-	if (!psci_ops.cpu_off)
-		return -EOPNOTSUPP;
+       const struct psci_power_state ps = {
+               .type = PSCI_POWER_STATE_TYPE_POWER_DOWN,
+       };
 
-	/* Trusted OS will deny CPU_OFF */
-	if (psci_tos_resident_on(cpu))
-		return -EPERM;
+       if (psci_ops.cpu_off)
+               psci_ops.cpu_off(ps);
 
-	return 0;
+       /* We should never return */
+       panic("psci: cpu %d failed to shutdown\n", cpu);
 }
 
-void psci_cpu_die(unsigned int cpu)
+#if defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || \
+	defined(CONFIG_ARCH_MT6753) || defined(CONFIG_ARCH_MT6755) || \
+	defined(CONFIG_ARCH_MT8163)
+int __ref psci_cpu_kill(unsigned int cpu)
 {
-	u32 state = PSCI_POWER_STATE_TYPE_POWER_DOWN <<
-		    PSCI_0_2_POWER_STATE_TYPE_SHIFT;
-
-	if (psci_ops.cpu_off)
-		psci_ops.cpu_off(state);
-
-	/* We should never return */
-	panic("psci: cpu %d failed to shutdown\n", cpu);
+	return mt_cpu_kill(cpu);
 }
-
-int psci_cpu_kill(unsigned int cpu)
+#else
+int __ref psci_cpu_kill(unsigned int cpu)
 {
 	int err, i;
 
@@ -111,6 +134,7 @@ int psci_cpu_kill(unsigned int cpu)
 	/* Make platform_cpu_kill() fail. */
 	return 0;
 }
+#endif
 
 #endif
 
@@ -120,11 +144,23 @@ bool __init psci_smp_available(void)
 	return (psci_ops.cpu_on != NULL);
 }
 
-const struct smp_operations psci_smp_ops __initconst = {
+struct smp_operations __initdata psci_smp_ops = {
+#if defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || \
+	defined(CONFIG_ARCH_MT6753) || defined(CONFIG_ARCH_MT6755) || \
+	defined(CONFIG_ARCH_MT8163)
+	.smp_prepare_cpus       = mt_smp_prepare_cpus,
+#endif
 	.smp_boot_secondary	= psci_boot_secondary,
+#if defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || \
+	defined(CONFIG_ARCH_MT6753) || defined(CONFIG_ARCH_MT6755) || \
+	defined(CONFIG_ARCH_MT8163)
+	.smp_secondary_init     = mt_smp_secondary_init,
+#endif
 #ifdef CONFIG_HOTPLUG_CPU
-	.cpu_disable		= psci_cpu_disable,
 	.cpu_die		= psci_cpu_die,
 	.cpu_kill		= psci_cpu_kill,
+#if defined(CONFIG_ARCH_MT6755)
+	.cpu_disable		= mt_cpu_disable,
+#endif
 #endif
 };

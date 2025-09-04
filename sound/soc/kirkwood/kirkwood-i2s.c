@@ -538,9 +538,10 @@ static int kirkwood_i2s_dev_probe(struct platform_device *pdev)
 	int err;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
+	if (!priv) {
+		dev_err(&pdev->dev, "allocation failed\n");
 		return -ENOMEM;
-
+	}
 	dev_set_drvdata(&pdev->dev, priv);
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -549,9 +550,9 @@ static int kirkwood_i2s_dev_probe(struct platform_device *pdev)
 		return PTR_ERR(priv->io);
 
 	priv->irq = platform_get_irq(pdev, 0);
-	if (priv->irq < 0) {
-		dev_err(&pdev->dev, "platform_get_irq failed: %d\n", priv->irq);
-		return priv->irq;
+	if (priv->irq <= 0) {
+		dev_err(&pdev->dev, "platform_get_irq failed\n");
+		return -ENXIO;
 	}
 
 	if (np) {
@@ -578,7 +579,7 @@ static int kirkwood_i2s_dev_probe(struct platform_device *pdev)
 		if (PTR_ERR(priv->extclk) == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
 	} else {
-		if (clk_is_match(priv->extclk, priv->clk)) {
+		if (priv->extclk == priv->clk) {
 			devm_clk_put(&pdev->dev, priv->extclk);
 			priv->extclk = ERR_PTR(-EINVAL);
 		} else {
@@ -642,7 +643,7 @@ static int kirkwood_i2s_dev_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_OF
-static const struct of_device_id mvebu_audio_of_match[] = {
+static struct of_device_id mvebu_audio_of_match[] = {
 	{ .compatible = "marvell,kirkwood-audio" },
 	{ .compatible = "marvell,dove-audio" },
 	{ .compatible = "marvell,armada370-audio" },
@@ -656,6 +657,7 @@ static struct platform_driver kirkwood_i2s_driver = {
 	.remove = kirkwood_i2s_dev_remove,
 	.driver = {
 		.name = DRV_NAME,
+		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(mvebu_audio_of_match),
 	},
 };

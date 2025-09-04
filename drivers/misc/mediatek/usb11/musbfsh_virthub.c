@@ -311,6 +311,14 @@ static void musbfsh_port_reset(struct musbfsh *musbfsh, bool do_reset)
 
 		if (resistor_control_attr.value) {
 			/* improve signal quality, from Dingjun */
+#if 0
+			/* FS_DISC_DISABLE */
+			u32 TM1;
+
+			TM1 = musbfsh_readl(mbase, 0x604);
+			musbfsh_writel(mbase, 0x604, TM1 | 0x4);
+			MYDBG("set FS_DISC_DISABLE\n");
+#endif
 
 			/* original flow from SS5 */
 			USB11PHY_SET8(U1PHTCR2,
@@ -371,6 +379,23 @@ static void musbfsh_port_reset(struct musbfsh *musbfsh, bool do_reset)
 			INFO("high-speed device connected\n");
 			musbfsh->port1_status |= USB_PORT_STAT_HIGH_SPEED;
 		}
+#if 0				/* IC_USB from SS5 */
+#ifdef IC_USB
+		USB11PHY_SET8(U1PHTCR2,
+			      force_usb11_dm_rpd | force_usb11_dp_rpd);
+
+		/* disconnect host port's pull down resistors on D+ and D- */
+		USB11PHY_CLR8(U1PHTCR2, RG_USB11_DM_RPD | RG_USB11_DP_RPD);
+
+		/*
+		 * tell MAC there still is a device attached,
+		 * ohterwise we will get disconnect interrupt
+		 */
+		USB11PHY_SET8(U1PHTCR2, force_usb11_dp_rpu | RG_USB11_DP_RPU);
+		WARNING("USB1.1 PHY special config for IC-USB 0x%X=%x\n",
+			U1PHTCR2, USB11PHY_READ8(U1PHTCR2));
+#endif
+#endif
 		musbfsh->port1_status &= ~USB_PORT_STAT_RESET;
 		musbfsh->port1_status |=
 			USB_PORT_STAT_ENABLE | (USB_PORT_STAT_C_RESET << 16) |
@@ -402,7 +427,7 @@ int musbfsh_hub_status_data(struct usb_hcd *hcd, char *buf)
 	struct musbfsh *musbfsh = hcd_to_musbfsh(hcd);
 	int retval = 0;
 
-	INFO("called++\r\n");
+	INFO("musbfsh_hub_status_data++\r\n");
 	/* called in_irq() via usb_hcd_poll_rh_status() */
 	if (musbfsh->port1_status & 0xffff0000) {
 		*buf = 0x02;
@@ -561,7 +586,7 @@ int musbfsh_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 					  (__le32 *)buf);
 
 		/* port change status is more interesting */
-		WARNING("port status %08x,devctl=0x%x\n", musbfsh->port1_status,
+		INFO("port status %08x,devctl=0x%x\n", musbfsh->port1_status,
 			musbfsh_readb(musbfsh->mregs, MUSBFSH_DEVCTL));
 		break;
 	case SetPortFeature:
@@ -598,6 +623,46 @@ int musbfsh_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			musbfsh_port_suspend(musbfsh, true);
 			break;
 		case USB_PORT_FEAT_TEST:
+#if 0
+			if (unlikely(is_host_active(musbfsh)))
+				goto error;
+
+			wIndex >>= 8;
+			switch (wIndex) {
+			case 1:
+				pr_debug("TEST_J\n");
+				temp = MUSBFSH_TEST_J;
+				break;
+			case 2:
+				pr_debug("TEST_K\n");
+				temp = MUSBFSH_TEST_K;
+				break;
+			case 3:
+				pr_debug("TEST_SE0_NAK\n");
+				temp = MUSBFSH_TEST_SE0_NAK;
+				break;
+			case 4:
+				pr_debug("TEST_PACKET\n");
+				temp = MUSBFSH_TEST_PACKET;
+				musbfsh_load_testpacket(musbfsh);
+				break;
+			case 5:
+				pr_debug("TEST_FORCE_ENABLE\n");
+				temp = MUSBFSH_TEST_FORCE_HOST |
+				       MUSBFSH_TEST_FORCE_FS;
+
+				musbfsh_writeb(musbfsh->mregs, MUSBFSH_DEVCTL,
+					       MUSBFSH_DEVCTL_SESSION);
+				break;
+			case 6:
+				pr_debug("TEST_FIFO_ACCESS\n");
+				temp = MUSBFSH_TEST_FIFO_ACCESS;
+				break;
+			default:
+				goto error;
+			}
+			musbfsh_writeb(musbfsh->mregs, MUSBFSH_TESTMODE, temp);
+#endif
 			break;
 		default:
 			goto error;

@@ -16,22 +16,24 @@
 
 #include "cmdq_def.h"
 #include "cmdq_core.h"
-#include "cmdq_virtual.h"
 
 #include <linux/types.h>
 
-#if defined(CMDQ_USE_LEGACY)
+#if defined(CMDQ_USE_CCF) && defined(CMDQ_USE_LEGACY)
 #include <linux/clk.h>
 #endif
+
+/* dump mmsys config */
+typedef void (*CmdqDumpMMSYSConfig) (void);
 
 /* VENC callback function */
 typedef int32_t(*CmdqVEncDumpInfo) (uint64_t engineFlag, int level);
 
 /* query MDP clock is on  */
-typedef bool(*CmdqMdpClockIsOn) (enum CMDQ_ENG_ENUM engine);
+typedef bool(*CmdqMdpClockIsOn) (CMDQ_ENG_ENUM engine);
 
 /* enable MDP clock  */
-typedef void (*CmdqEnableMdpClock) (bool enable, enum CMDQ_ENG_ENUM engine);
+typedef void (*CmdqEnableMdpClock) (bool enable, CMDQ_ENG_ENUM engine);
 
 /* Common Clock Framework */
 typedef void (*CmdqMdpInitModuleClk) (void);
@@ -71,10 +73,9 @@ typedef const char*(*CmdqDispatchModule) (uint64_t engineFlag);
 
 typedef void (*CmdqTrackTask) (const struct TaskStruct *pTask);
 
-#if defined(CMDQ_USE_LEGACY)
+#if defined(CMDQ_USE_CCF) && defined(CMDQ_USE_LEGACY)
 typedef void (*CmdqMdpInitModuleClkMutex32K) (void);
-#endif
-#ifdef CONFIG_MTK_CMDQ_TAB
+
 typedef void (*CmdqMdpSmiLarbEnableClock) (bool enable);
 #endif
 
@@ -86,7 +87,7 @@ typedef void (*CmdqMdpGetModulePa) (long *startPA, long *endPA);
 typedef void (*CmdqMdpEnableClockMutex32k) (bool enable);
 #endif
 
-struct cmdqMDPFuncStruct {
+typedef struct cmdqMDPFuncStruct {
 	CmdqDumpMMSYSConfig dumpMMSYSConfig;
 	CmdqVEncDumpInfo vEncDumpInfo;
 	CmdqMdpInitModuleBaseVA initModuleBaseVA;
@@ -107,10 +108,8 @@ struct cmdqMDPFuncStruct {
 	CmdqTestcaseClkmgrMdp testcaseClkmgrMdp;
 	CmdqDispatchModule dispatchModule;
 	CmdqTrackTask trackTask;
-#if defined(CMDQ_USE_LEGACY)
+#if defined(CMDQ_USE_CCF) && defined(CMDQ_USE_LEGACY)
 	CmdqMdpInitModuleClkMutex32K mdpInitModuleClkMutex32K;
-#endif
-#ifdef CONFIG_MTK_CMDQ_TAB
 	CmdqMdpSmiLarbEnableClock mdpSmiLarbEnableClock;
 #endif
 #ifdef CMDQ_OF_SUPPORT
@@ -119,65 +118,54 @@ struct cmdqMDPFuncStruct {
 #ifdef CMDQ_USE_LEGACY
 	CmdqMdpEnableClockMutex32k mdpEnableClockMutex32k;
 #endif
-};
+} cmdqMDPFuncStruct;
 
 /* track MDP task */
 #define DEBUG_STR_LEN 1024 /* debug str length */
 #define MDP_MAX_TASK_NUM 5 /* num of tasks to be keep */
 #define MDP_MAX_PLANE_NUM 3 /* max color format plane num */
-/* each plane has 2 info address and size */
-#define MDP_PORT_BUF_INFO_NUM (MDP_MAX_PLANE_NUM * 2)
+#define MDP_PORT_BUF_INFO_NUM (MDP_MAX_PLANE_NUM * 2) /* each plane has 2 info address and size */
 #define MDP_BUF_INFO_STR_LEN 8 /* each buf info length */
-/* dispatch key format is MDP_(ThreadName) */
-#define MDP_DISPATCH_KEY_STR_LEN (TASK_COMM_LEN + 5)
+#define MDP_DISPATCH_KEY_STR_LEN (TASK_COMM_LEN + 5) /* dispatch key format is MDP_(ThreadName) */
 
-struct cmdqMDPTaskStruct {
+typedef struct cmdqMDPTaskStruct {
 	char callerName[TASK_COMM_LEN];
 	char userDebugStr[DEBUG_STR_LEN];
-};
+} cmdqMDPTaskStruct;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 	void cmdq_mdp_virtual_function_setting(void);
-	struct cmdqMDPFuncStruct *cmdq_mdp_get_func(void);
+	cmdqMDPFuncStruct *cmdq_mdp_get_func(void);
 
-	void cmdq_mdp_enable(uint64_t engineFlag,
-		enum CMDQ_ENG_ENUM engine);
+	void cmdq_mdp_enable(uint64_t engineFlag, CMDQ_ENG_ENUM engine);
 
-	int cmdq_mdp_loop_reset(enum CMDQ_ENG_ENUM engine,
+	int cmdq_mdp_loop_reset(CMDQ_ENG_ENUM engine,
 				const unsigned long resetReg,
 				const unsigned long resetStateReg,
 				const uint32_t resetMask,
-				const uint32_t resetValue,
-				const bool pollInitResult);
+				const uint32_t resetValue, const bool pollInitResult);
 
-	void cmdq_mdp_loop_off(enum CMDQ_ENG_ENUM engine,
+	void cmdq_mdp_loop_off(CMDQ_ENG_ENUM engine,
 			       const unsigned long resetReg,
 			       const unsigned long resetStateReg,
 			       const uint32_t resetMask,
-			       const uint32_t resetValue,
-			       const bool pollInitResult);
+			       const uint32_t resetValue, const bool pollInitResult);
 
 	const char *cmdq_mdp_get_rsz_state(const uint32_t state);
 
-	void cmdq_mdp_dump_venc(const unsigned long base,
-		const char *label);
-	void cmdq_mdp_dump_rdma(const unsigned long base,
-		const char *label);
-	void cmdq_mdp_dump_rot(const unsigned long base,
-		const char *label);
-	void cmdq_mdp_dump_color(const unsigned long base,
-		const char *label);
-	void cmdq_mdp_dump_wdma(const unsigned long base,
-		const char *label);
+	void cmdq_mdp_dump_venc(const unsigned long base, const char *label);
+	void cmdq_mdp_dump_rdma(const unsigned long base, const char *label);
+	void cmdq_mdp_dump_rot(const unsigned long base, const char *label);
+	void cmdq_mdp_dump_color(const unsigned long base, const char *label);
+	void cmdq_mdp_dump_wdma(const unsigned long base, const char *label);
 
-	void cmdq_mdp_check_TF_address(unsigned int mva,
-		char *module);
+	void cmdq_mdp_check_TF_address(unsigned int mva, char *module);
 
-/******************************************/
-/*********                    Platform dependent function               ******/
-/***********************************************************/
+/**************************************************************************************/
+/*******************                    Platform dependent function                    ********************/
+/**************************************************************************************/
 
 	int32_t cmdqMdpClockOn(uint64_t engineFlag);
 
@@ -194,9 +182,6 @@ extern "C" {
 	uint32_t cmdq_mdp_wdma_get_reg_offset_dst_addr(void);
 
 	void testcase_clkmgr_mdp(void);
-
-	u32 cmdq_mdp_get_hw_reg(enum MDP_ENG_BASE base, u16 offset);
-	u32 cmdq_mdp_get_hw_port(enum MDP_ENG_BASE base);
 
 	/* Platform virtual function setting */
 	void cmdq_mdp_platform_function_setting(void);

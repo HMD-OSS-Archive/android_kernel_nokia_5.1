@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  *  bttv - Bt848 frame grabber driver
@@ -379,3 +378,8 @@ extern void bttv_input_fini(struct bttv *dev);
 extern void bttv_input_irq(struct bttv *dev);
 
 #endif /* _BTTV_H_ */
+/*
+ * Local variables:
+ * c-basic-offset: 8
+ * End:
+ */

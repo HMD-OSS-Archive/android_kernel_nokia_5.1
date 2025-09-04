@@ -18,7 +18,7 @@
 /* TEST CHIP PHY define, edit this in different platform */
 #define U3_PHY_I2C_DEV			0x60
 #define U3_PHY_PAGE			0xff
-#define GPIO_BASE			(u3_ippc_base)
+#define GPIO_BASE			(u3_sif_base + 0x700) /* 0xf0044700 */
 #define SSUSB_I2C_OUT			(GPIO_BASE + 0xd0)
 #define SSUSB_I2C_IN			(GPIO_BASE + 0xd4)
 
@@ -307,7 +307,11 @@ PHY_INT32 I2cReadReg(PHY_UINT8 dev_id, PHY_UINT8 Addr, PHY_UINT8 *Data)
 #define REG_I2C_START_BIT	    0x1
 #define I2C_READ_BIT         0x1
 
+#ifdef USB_ELBRUS
 #define PHY_I2C_BASE      (i2c_base)
+#else
+#define PHY_I2C_BASE      (i2c1_base)
+#endif
 
 /* "volatile" type class should not be used, see volatile-considered-harmful.txt */
 #define REG_I2C_DATA_PORT    (*((volatile unsigned short int *) (PHY_I2C_BASE + 0x00)))
@@ -315,38 +319,24 @@ PHY_INT32 I2cReadReg(PHY_UINT8 dev_id, PHY_UINT8 Addr, PHY_UINT8 *Data)
 #define REG_I2C_TRANSFER_LEN (*((volatile unsigned short int *) (PHY_I2C_BASE + 0x14)))
 #define REG_I2C_START        (*((volatile unsigned short int *) (PHY_I2C_BASE + 0x24)))
 #define REG_I2C_SOFT_RESET   (*((volatile unsigned short int *) (PHY_I2C_BASE + 0x50)))
-#define REG_I2C_CONTROL		 (*((unsigned short int *) (PHY_I2C_BASE + 0x10)))
-/* ADDITIONAL CONTROL */
-#define REG_I2C_TRANSAC_LEN  (PHY_I2C_BASE + 0x18)
-#define REG_I2C_HTIMING      (PHY_I2C_BASE + 0x20)
-#define REG_I2C_LTIMING      (PHY_I2C_BASE + 0x2C)
+#define REG_I2C_CONTROL		 (*((volatile unsigned short int *) (PHY_I2C_BASE + 0x10)))
 
-#define ADDR_I2C_DATA_PORT   (PHY_I2C_BASE + 0x00)
-#define ADDR_I2C_SLAVE_ADDR  (PHY_I2C_BASE + 0x04)
-#define ADDR_I2C_TRANSFER_LEN (PHY_I2C_BASE + 0x14)
-#define ADDR_I2C_START        (PHY_I2C_BASE + 0x24)
-
-#define IS_PRINT 1
+#define IS_PRINT 0
 
 PHY_INT32 I2cWriteReg(PHY_UINT8 dev_id, PHY_UINT8 addr, PHY_UINT8 val)
 {
 	if (IS_PRINT)
 		pr_info("I2C Write@%x [%x]=%x\n", dev_id, addr, val);
 
-	writew((dev_id << 1), ADDR_I2C_SLAVE_ADDR);
-	writew(2, ADDR_I2C_TRANSFER_LEN);
+	REG_I2C_SLAVE_ADDR = dev_id << 1;
+	REG_I2C_TRANSFER_LEN = 2;
 
-	/* ADDITIONAL CONTROL */
-	writew(0x1, REG_I2C_TRANSAC_LEN);
-	writew(0x1303, REG_I2C_HTIMING);
-	writew(0x13C3, REG_I2C_LTIMING);
+	REG_I2C_DATA_PORT = addr;
+	REG_I2C_DATA_PORT = val;
 
-	writew(addr, ADDR_I2C_DATA_PORT);
-	writew(val, ADDR_I2C_DATA_PORT);
+	REG_I2C_START = REG_I2C_START_BIT;
 
-	writew(REG_I2C_START_BIT, ADDR_I2C_START);
-
-	while ((readw(ADDR_I2C_START) & REG_I2C_START_BIT))
+	while ((REG_I2C_START & REG_I2C_START_BIT))
 		;
 
 	return PHY_TRUE;
@@ -357,34 +347,22 @@ PHY_INT32 I2cReadReg(PHY_UINT8 dev_id, PHY_UINT8 addr, PHY_UINT8 *data)
 	if (IS_PRINT)
 		pr_info("I2C Read@%x [%x]\n", dev_id, addr);
 
-	writew((dev_id << 1), ADDR_I2C_SLAVE_ADDR);
-	writew(1, ADDR_I2C_TRANSFER_LEN);
+	REG_I2C_SLAVE_ADDR = dev_id << 1;
+	REG_I2C_TRANSFER_LEN = 0x01;
+	REG_I2C_DATA_PORT = addr;
+	REG_I2C_START = REG_I2C_START_BIT;
 
-	/* ADDITIONAL CONTROL */
-	writew(0x1, REG_I2C_TRANSAC_LEN);
-	writew(0x1303, REG_I2C_HTIMING);
-	writew(0x13C3, REG_I2C_LTIMING);
-
-	writew(addr, ADDR_I2C_DATA_PORT);
-	writew(REG_I2C_START_BIT, ADDR_I2C_START);
-
-	while ((readw(ADDR_I2C_START) & REG_I2C_START_BIT))
+	while ((REG_I2C_START & REG_I2C_START_BIT))
 		;
 
-	writew((dev_id << 1) | I2C_READ_BIT, ADDR_I2C_SLAVE_ADDR);
-	writew(1, ADDR_I2C_TRANSFER_LEN);
+	REG_I2C_SLAVE_ADDR = (dev_id << 1) | I2C_READ_BIT;
+	REG_I2C_TRANSFER_LEN = 0x01;
+	REG_I2C_START = REG_I2C_START_BIT;
 
-	/* ADDITIONAL CONTROL */
-	writew(0x1, REG_I2C_TRANSAC_LEN);
-	writew(0x1303, REG_I2C_HTIMING);
-	writew(0x13C3, REG_I2C_LTIMING);
-
-	writew(REG_I2C_START_BIT, ADDR_I2C_START);
-
-	while ((readw(ADDR_I2C_START) & REG_I2C_START_BIT))
+	while ((REG_I2C_START & REG_I2C_START_BIT))
 		;
 
-	*data = readw(ADDR_I2C_DATA_PORT);
+	*data = REG_I2C_DATA_PORT;
 
 	if (IS_PRINT)
 		pr_info("I2C Read [%x]=%x\n", addr, *data);
@@ -410,21 +388,15 @@ PHY_INT32 _U3Read_Reg(PHY_INT32 address)
 	PHY_INT32 ret;
 
 	pu1Buf = kmalloc(1, GFP_NOIO);
-	if (!pu1Buf) {
-		ret = -ENOMEM;
-		pr_err("%s - NOMEM\n", __func__);
-		return ret;
-	}
-
 	ret = I2cReadReg(U3_PHY_I2C_DEV, address, pu1Buf);
 	if (ret == PHY_FALSE) {
 		pr_err("Read failed\n");
 		return PHY_FALSE;
 	}
-
 	ret = (char)pu1Buf[0];
 	kfree(pu1Buf);
 	return ret;
+
 }
 
 PHY_INT32 U3PhyWriteReg32(PHY_UINT32 addr, PHY_UINT32 data)

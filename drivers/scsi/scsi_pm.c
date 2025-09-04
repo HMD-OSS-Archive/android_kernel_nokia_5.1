@@ -16,10 +16,6 @@
 
 #include "scsi_priv.h"
 
-/* MTK PATCH */
-static int do_scsi_runtime_resume(struct device *dev,
-				   const struct dev_pm_ops *pm);
-
 #ifdef CONFIG_PM_SLEEP
 
 static int do_scsi_suspend(struct device *dev, const struct dev_pm_ops *pm)
@@ -81,31 +77,10 @@ static int scsi_dev_type_resume(struct device *dev,
 	scsi_device_resume(to_scsi_device(dev));
 	dev_dbg(dev, "scsi resume: %d\n", err);
 
-	/* MTK PATCH:
-	 *
-	 * For scsi device with runtime PM enabled and managed by block layer,
-	 * we should update request queue's runtime status after system resume.
-	 *
-	 * Note. (cb != do_scsi_runtime_resume) allows system resume path only.
-	 */
-	if (err == 0 && (cb != do_scsi_runtime_resume)) {
+	if (err == 0) {
 		pm_runtime_disable(dev);
-		err = pm_runtime_set_active(dev);
+		pm_runtime_set_active(dev);
 		pm_runtime_enable(dev);
-
-		/*
-		 * Forcibly set runtime PM status of request queue to "active"
-		 * to make sure we can again get requests from the queue
-		 * (see also blk_pm_peek_request()).
-		 *
-		 * The resume hook will correct runtime PM status of the disk.
-		 */
-		if (!err && scsi_is_sdev_device(dev)) {
-			struct scsi_device *sdev = to_scsi_device(dev);
-
-			if (sdev->request_queue->dev)
-				blk_set_runtime_active(sdev->request_queue);
-		}
 	}
 
 	return err;
@@ -238,19 +213,7 @@ static int scsi_bus_restore(struct device *dev)
 
 #endif /* CONFIG_PM_SLEEP */
 
-/* MTK PATCH */
-#ifdef CONFIG_PM
-static int do_scsi_runtime_suspend(struct device *dev,
-				   const struct dev_pm_ops *pm)
-{
-	return pm && pm->runtime_suspend ? pm->runtime_suspend(dev) : 0;
-}
-
-static int do_scsi_runtime_resume(struct device *dev,
-				   const struct dev_pm_ops *pm)
-{
-	return pm && pm->runtime_resume ? pm->runtime_resume(dev) : 0;
-}
+#ifdef CONFIG_PM_RUNTIME
 
 static int sdev_runtime_suspend(struct device *dev)
 {
@@ -258,30 +221,13 @@ static int sdev_runtime_suspend(struct device *dev)
 	struct scsi_device *sdev = to_scsi_device(dev);
 	int err = 0;
 
-	/*
-	 * MTK PATCH:
-	 *
-	 * Note that some scsi devices' runtime PMs are NOT managed by block
-	 * layer.
-	 *
-	 * For such scsi device, prevent invoking block layer runtime PM API.
-	 * Invoke scsi runtime PM API only.
-	 */
-	if (!sdev->request_queue->dev) {
-		err = scsi_dev_type_suspend(dev, do_scsi_runtime_suspend);
-		if (err == -EAGAIN)
-			pm_schedule_suspend(dev, jiffies_to_msecs(
-					round_jiffies_up_relative(HZ/10)));
-		return err;
-	}
-
-	err = blk_pre_runtime_suspend(sdev->request_queue);
-	if (err)
-		return err;
-	if (pm && pm->runtime_suspend)
+	if (pm && pm->runtime_suspend) {
+		err = blk_pre_runtime_suspend(sdev->request_queue);
+		if (err)
+			return err;
 		err = pm->runtime_suspend(dev);
-	blk_post_runtime_suspend(sdev->request_queue, err);
-
+		blk_post_runtime_suspend(sdev->request_queue, err);
+	}
 	return err;
 }
 
@@ -304,23 +250,11 @@ static int sdev_runtime_resume(struct device *dev)
 	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
 	int err = 0;
 
-	/*
-	 * MTK PATCH:
-	 *
-	 * Note that some scsi devices' runtime PMs are NOT managed by block
-	 * layer.
-	 *
-	 * For such scsi device, prevent invoking block layer runtime PM API.
-	 * Invoke scsi runtime PM API only.
-	 */
-	if (!sdev->request_queue->dev)
-		return scsi_dev_type_resume(dev, do_scsi_runtime_resume);
-
-	blk_pre_runtime_resume(sdev->request_queue);
-	if (pm && pm->runtime_resume)
+	if (pm && pm->runtime_resume) {
+		blk_pre_runtime_resume(sdev->request_queue);
 		err = pm->runtime_resume(dev);
-	blk_post_runtime_resume(sdev->request_queue, err);
-
+		blk_post_runtime_resume(sdev->request_queue, err);
+	}
 	return err;
 }
 
@@ -400,17 +334,11 @@ void scsi_autopm_put_host(struct Scsi_Host *shost)
 
 #else
 
-static int do_scsi_runtime_resume(struct device *dev,
-				   const struct dev_pm_ops *pm)
-{
-	return 0;
-}
-
 #define scsi_runtime_suspend	NULL
 #define scsi_runtime_resume	NULL
 #define scsi_runtime_idle	NULL
 
-#endif /* CONFIG_PM */
+#endif /* CONFIG_PM_RUNTIME */
 
 const struct dev_pm_ops scsi_bus_pm_ops = {
 	.prepare =		scsi_bus_prepare,

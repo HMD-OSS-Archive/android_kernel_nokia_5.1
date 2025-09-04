@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_IDLE_H
 #define __ASM_IDLE_H
 
@@ -23,6 +22,7 @@ extern int mips_cpuidle_wait_enter(struct cpuidle_device *dev,
 	.exit_latency		= 1,\
 	.target_residency	= 1,\
 	.power_usage		= UINT_MAX,\
+	.flags			= CPUIDLE_FLAG_TIME_VALID,\
 	.name			= "wait",\
 	.desc			= "MIPS wait",\
 }

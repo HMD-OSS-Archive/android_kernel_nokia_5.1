@@ -1,8 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Access vector cache interface for object managers.
  *
- * Author : Stephen Smalley, <sds@tycho.nsa.gov>
+ * Author : Stephen Smalley, <sds@epoch.ncsc.mil>
  */
 #ifndef _SELINUX_AVC_H_
 #define _SELINUX_AVC_H_
@@ -131,8 +130,7 @@ static inline int avc_audit(u32 ssid, u32 tsid,
 			    u16 tclass, u32 requested,
 			    struct av_decision *avd,
 			    int result,
-			    struct common_audit_data *a,
-			    int flags)
+			    struct common_audit_data *a)
 {
 	u32 audited, denied;
 	audited = avc_audit_required(requested, avd, result, 0, &denied);
@@ -140,7 +138,7 @@ static inline int avc_audit(u32 ssid, u32 tsid,
 		return 0;
 	return slow_avc_audit(ssid, tsid, tclass,
 			      requested, audited, denied, result,
-			      a, flags);
+			      a, 0);
 }
 
 #define AVC_STRICT 1 /* Ignore permissive mode. */
@@ -153,14 +151,9 @@ int avc_has_perm_noaudit(u32 ssid, u32 tsid,
 int avc_has_perm(u32 ssid, u32 tsid,
 		 u16 tclass, u32 requested,
 		 struct common_audit_data *auditdata);
-int avc_has_perm_flags(u32 ssid, u32 tsid,
-		       u16 tclass, u32 requested,
-		       struct common_audit_data *auditdata,
-		       int flags);
 
 int avc_has_extended_perms(u32 ssid, u32 tsid, u16 tclass, u32 requested,
 		u8 driver, u8 perm, struct common_audit_data *ad);
-
 
 u32 avc_policy_seqno(void);
 
@@ -187,8 +180,7 @@ void avc_disable(void);
 DECLARE_PER_CPU(struct avc_cache_stats, avc_cache_stats);
 #endif
 
-#if defined(CONFIG_MTK_SELINUX_AEE_WARNING) &&\
-	defined(MTK_SELINUX_WARNING_ENABLE)
+#ifdef CONFIG_MTK_AEE_FEATURE
 extern struct sk_buff *audit_get_skb(struct audit_buffer *ab);
 extern void mtk_audit_hook(char *data);
 #endif

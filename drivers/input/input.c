@@ -100,24 +100,23 @@ static unsigned int input_to_handler(struct input_handle *handle,
 	struct input_value *end = vals;
 	struct input_value *v;
 
-	if (handler->filter) {
-		for (v = vals; v != vals + count; v++) {
-			if (handler->filter(handle, v->type, v->code, v->value))
-				continue;
-			if (end != v)
-				*end = *v;
-			end++;
-		}
-		count = end - vals;
+	for (v = vals; v != vals + count; v++) {
+		if (handler->filter &&
+		    handler->filter(handle, v->type, v->code, v->value))
+			continue;
+		if (end != v)
+			*end = *v;
+		end++;
 	}
 
+	count = end - vals;
 	if (!count)
 		return 0;
 
 	if (handler->events)
 		handler->events(handle, vals, count);
 	else if (handler->event)
-		for (v = vals; v != vals + count; v++)
+		for (v = vals; v != end; v++)
 			handler->event(handle, v->type, v->code, v->value);
 
 	return count;
@@ -144,24 +143,21 @@ static void input_pass_values(struct input_dev *dev,
 		count = input_to_handler(handle, vals, count);
 	} else {
 		list_for_each_entry_rcu(handle, &dev->h_list, d_node)
-			if (handle->open) {
+			if (handle->open)
 				count = input_to_handler(handle, vals, count);
-				if (!count)
-					break;
-			}
 	}
 
 	rcu_read_unlock();
 
+	add_input_randomness(vals->type, vals->code, vals->value);
+
 	/* trigger auto repeat for key events */
-	if (test_bit(EV_REP, dev->evbit) && test_bit(EV_KEY, dev->evbit)) {
-		for (v = vals; v != vals + count; v++) {
-			if (v->type == EV_KEY && v->value != 2) {
-				if (v->value)
-					input_start_autorepeat(dev, v->code);
-				else
-					input_stop_autorepeat(dev);
-			}
+	for (v = vals; v != vals + count; v++) {
+		if (v->type == EV_KEY && v->value != 2) {
+			if (v->value)
+				input_start_autorepeat(dev, v->code);
+			else
+				input_stop_autorepeat(dev);
 		}
 	}
 }
@@ -369,10 +365,9 @@ static int input_get_disposition(struct input_dev *dev,
 static void input_handle_event(struct input_dev *dev,
 			       unsigned int type, unsigned int code, int value)
 {
-	int disposition = input_get_disposition(dev, type, code, &value);
+	int disposition;
 
-	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
-		add_input_randomness(type, code, value);
+	disposition = input_get_disposition(dev, type, code, &value);
 
 	if ((disposition & INPUT_PASS_TO_DEVICE) && dev->event)
 		dev->event(dev, type, code, value);
@@ -480,19 +475,11 @@ EXPORT_SYMBOL(input_inject_event);
  */
 void input_alloc_absinfo(struct input_dev *dev)
 {
-	if (dev->absinfo)
-		return;
+	if (!dev->absinfo)
+		dev->absinfo = kcalloc(ABS_CNT, sizeof(struct input_absinfo),
+					GFP_KERNEL);
 
-	dev->absinfo = kcalloc(ABS_CNT, sizeof(*dev->absinfo), GFP_KERNEL);
-	if (!dev->absinfo) {
-		dev_err(dev->dev.parent ?: &dev->dev,
-			"%s: unable to allocate memory\n", __func__);
-		/*
-		 * We will handle this allocation failure in
-		 * input_register_device() when we refuse to register input
-		 * device with ABS bits but without absinfo.
-		 */
-	}
+	WARN(!dev->absinfo, "%s(): kcalloc() failed?\n", __func__);
 }
 EXPORT_SYMBOL(input_alloc_absinfo);
 
@@ -685,15 +672,15 @@ static void input_dev_release_keys(struct input_dev *dev)
 	int code;
 
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
-		for_each_set_bit(code, dev->key, KEY_CNT) {
-			input_pass_event(dev, EV_KEY, code, 0);
-			need_sync = true;
+		for (code = 0; code <= KEY_MAX; code++) {
+			if (is_event_supported(code, dev->keybit, KEY_MAX) &&
+			    __test_and_clear_bit(code, dev->key)) {
+				input_pass_event(dev, EV_KEY, code, 0);
+				need_sync = true;
+			}
 		}
-
 		if (need_sync)
 			input_pass_event(dev, EV_SYN, SYN_REPORT, 1);
-
-		memset(dev->key, 0, sizeof(dev->key));
 	}
 }
 
@@ -858,18 +845,16 @@ static int input_default_setkeycode(struct input_dev *dev,
 		}
 	}
 
-	if (*old_keycode <= KEY_MAX) {
-		__clear_bit(*old_keycode, dev->keybit);
-		for (i = 0; i < dev->keycodemax; i++) {
-			if (input_fetch_keycode(dev, i) == *old_keycode) {
-				__set_bit(*old_keycode, dev->keybit);
-				/* Setting the bit twice is useless, so break */
-				break;
-			}
+	__clear_bit(*old_keycode, dev->keybit);
+	__set_bit(ke->keycode, dev->keybit);
+
+	for (i = 0; i < dev->keycodemax; i++) {
+		if (input_fetch_keycode(dev, i) == *old_keycode) {
+			__set_bit(*old_keycode, dev->keybit);
+			break; /* Setting the bit twice is useless, so break */
 		}
 	}
 
-	__set_bit(ke->keycode, dev->keybit);
 	return 0;
 }
 
@@ -925,13 +910,9 @@ int input_set_keycode(struct input_dev *dev,
 	 * Simulate keyup event if keycode is not present
 	 * in the keymap anymore
 	 */
-	if (old_keycode > KEY_MAX) {
-		dev_warn(dev->dev.parent ?: &dev->dev,
-			 "%s: got too big old keycode %#x\n",
-			 __func__, old_keycode);
-	} else if (test_bit(EV_KEY, dev->evbit) &&
-		   !is_event_supported(old_keycode, dev->keybit, KEY_MAX) &&
-		   __test_and_clear_bit(old_keycode, dev->key)) {
+	if (test_bit(EV_KEY, dev->evbit) &&
+	    !is_event_supported(old_keycode, dev->keybit, KEY_MAX) &&
+	    __test_and_clear_bit(old_keycode, dev->key)) {
 		struct input_value vals[] =  {
 			{ EV_KEY, old_keycode, 0 },
 			input_value_sync
@@ -947,52 +928,58 @@ int input_set_keycode(struct input_dev *dev,
 }
 EXPORT_SYMBOL(input_set_keycode);
 
-bool input_match_device_id(const struct input_dev *dev,
-			   const struct input_device_id *id)
-{
-	if (id->flags & INPUT_DEVICE_ID_MATCH_BUS)
-		if (id->bustype != dev->id.bustype)
-			return false;
-
-	if (id->flags & INPUT_DEVICE_ID_MATCH_VENDOR)
-		if (id->vendor != dev->id.vendor)
-			return false;
-
-	if (id->flags & INPUT_DEVICE_ID_MATCH_PRODUCT)
-		if (id->product != dev->id.product)
-			return false;
-
-	if (id->flags & INPUT_DEVICE_ID_MATCH_VERSION)
-		if (id->version != dev->id.version)
-			return false;
-
-	if (!bitmap_subset(id->evbit, dev->evbit, EV_MAX) ||
-	    !bitmap_subset(id->keybit, dev->keybit, KEY_MAX) ||
-	    !bitmap_subset(id->relbit, dev->relbit, REL_MAX) ||
-	    !bitmap_subset(id->absbit, dev->absbit, ABS_MAX) ||
-	    !bitmap_subset(id->mscbit, dev->mscbit, MSC_MAX) ||
-	    !bitmap_subset(id->ledbit, dev->ledbit, LED_MAX) ||
-	    !bitmap_subset(id->sndbit, dev->sndbit, SND_MAX) ||
-	    !bitmap_subset(id->ffbit, dev->ffbit, FF_MAX) ||
-	    !bitmap_subset(id->swbit, dev->swbit, SW_MAX) ||
-	    !bitmap_subset(id->propbit, dev->propbit, INPUT_PROP_MAX)) {
-		return false;
-	}
-
-	return true;
-}
-EXPORT_SYMBOL(input_match_device_id);
-
 static const struct input_device_id *input_match_device(struct input_handler *handler,
 							struct input_dev *dev)
 {
 	const struct input_device_id *id;
 
 	for (id = handler->id_table; id->flags || id->driver_info; id++) {
-		if (input_match_device_id(dev, id) &&
-		    (!handler->match || handler->match(handler, dev))) {
+
+		if (id->flags & INPUT_DEVICE_ID_MATCH_BUS)
+			if (id->bustype != dev->id.bustype)
+				continue;
+
+		if (id->flags & INPUT_DEVICE_ID_MATCH_VENDOR)
+			if (id->vendor != dev->id.vendor)
+				continue;
+
+		if (id->flags & INPUT_DEVICE_ID_MATCH_PRODUCT)
+			if (id->product != dev->id.product)
+				continue;
+
+		if (id->flags & INPUT_DEVICE_ID_MATCH_VERSION)
+			if (id->version != dev->id.version)
+				continue;
+
+		if (!bitmap_subset(id->evbit, dev->evbit, EV_MAX))
+			continue;
+
+		if (!bitmap_subset(id->keybit, dev->keybit, KEY_MAX))
+			continue;
+
+		if (!bitmap_subset(id->relbit, dev->relbit, REL_MAX))
+			continue;
+
+		if (!bitmap_subset(id->absbit, dev->absbit, ABS_MAX))
+			continue;
+
+		if (!bitmap_subset(id->mscbit, dev->mscbit, MSC_MAX))
+			continue;
+
+		if (!bitmap_subset(id->ledbit, dev->ledbit, LED_MAX))
+			continue;
+
+		if (!bitmap_subset(id->sndbit, dev->sndbit, SND_MAX))
+			continue;
+
+		if (!bitmap_subset(id->ffbit, dev->ffbit, FF_MAX))
+			continue;
+
+		if (!bitmap_subset(id->swbit, dev->swbit, SW_MAX))
+			continue;
+
+		if (!handler->match || handler->match(handler, dev))
 			return id;
-		}
 	}
 
 	return NULL;
@@ -1022,7 +1009,7 @@ static int input_bits_to_string(char *buf, int buf_size,
 {
 	int len = 0;
 
-	if (in_compat_syscall()) {
+	if (INPUT_COMPAT_TEST) {
 		u32 dword = bits >> 32;
 		if (dword || !skip_empty)
 			len += snprintf(buf, buf_size, "%x ", dword);
@@ -1134,7 +1121,7 @@ static void input_seq_print_bitmap(struct seq_file *seq, const char *name,
 	 * If no output was produced print a single 0.
 	 */
 	if (skip_empty)
-		seq_putc(seq, '0');
+		seq_puts(seq, "0");
 
 	seq_putc(seq, '\n');
 }
@@ -1152,7 +1139,7 @@ static int input_devices_seq_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "P: Phys=%s\n", dev->phys ? dev->phys : "");
 	seq_printf(seq, "S: Sysfs=%s\n", path ? path : "");
 	seq_printf(seq, "U: Uniq=%s\n", dev->uniq ? dev->uniq : "");
-	seq_puts(seq, "H: Handlers=");
+	seq_printf(seq, "H: Handlers=");
 
 	list_for_each_entry(handle, &dev->h_list, d_node)
 		seq_printf(seq, "%s ", handle->name);
@@ -1406,7 +1393,7 @@ static struct attribute *input_dev_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group input_dev_attr_group = {
+static struct attribute_group input_dev_attr_group = {
 	.attrs	= input_dev_attrs,
 };
 
@@ -1433,7 +1420,7 @@ static struct attribute *input_dev_id_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group input_dev_id_attr_group = {
+static struct attribute_group input_dev_id_attr_group = {
 	.name	= "id",
 	.attrs	= input_dev_id_attrs,
 };
@@ -1503,7 +1490,7 @@ static struct attribute *input_dev_caps_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group input_dev_caps_attr_group = {
+static struct attribute_group input_dev_caps_attr_group = {
 	.name	= "capabilities",
 	.attrs	= input_dev_caps_attrs,
 };
@@ -1636,7 +1623,10 @@ static int input_dev_uevent(struct device *device, struct kobj_uevent_env *env)
 		if (!test_bit(EV_##type, dev->evbit))			\
 			break;						\
 									\
-		for_each_set_bit(i, dev->bits##bit, type##_CNT) {	\
+		for (i = 0; i < type##_MAX; i++) {			\
+			if (!test_bit(i, dev->bits##bit))		\
+				continue;				\
+									\
 			active = test_bit(i, dev->bits);		\
 			if (!active && !on)				\
 				continue;				\
@@ -1757,7 +1747,7 @@ static const struct dev_pm_ops input_dev_pm_ops = {
 };
 #endif /* CONFIG_PM */
 
-static const struct device_type input_dev_type = {
+static struct device_type input_dev_type = {
 	.groups		= input_dev_attr_groups,
 	.release	= input_dev_release,
 	.uevent		= input_dev_uevent,
@@ -1788,10 +1778,10 @@ EXPORT_SYMBOL_GPL(input_class);
  */
 struct input_dev *input_allocate_device(void)
 {
-	static atomic_t input_no = ATOMIC_INIT(-1);
+	static atomic_t input_no = ATOMIC_INIT(0);
 	struct input_dev *dev;
 
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct input_dev), GFP_KERNEL);
 	if (dev) {
 		dev->dev.type = &input_dev_type;
 		dev->dev.class = &input_class;
@@ -1803,7 +1793,7 @@ struct input_dev *input_allocate_device(void)
 		INIT_LIST_HEAD(&dev->node);
 
 		dev_set_name(&dev->dev, "input%lu",
-			     (unsigned long)atomic_inc_return(&input_no));
+			     (unsigned long) atomic_inc_return(&input_no) - 1);
 
 		__module_get(THIS_MODULE);
 	}
@@ -1857,7 +1847,7 @@ struct input_dev *devm_input_allocate_device(struct device *dev)
 	struct input_devres *devres;
 
 	devres = devres_alloc(devm_input_device_release,
-			      sizeof(*devres), GFP_KERNEL);
+			      sizeof(struct input_devres), GFP_KERNEL);
 	if (!devres)
 		return NULL;
 
@@ -1987,12 +1977,18 @@ static unsigned int input_estimate_events_per_packet(struct input_dev *dev)
 
 	events = mt_slots + 1; /* count SYN_MT_REPORT and SYN_REPORT */
 
-	if (test_bit(EV_ABS, dev->evbit))
-		for_each_set_bit(i, dev->absbit, ABS_CNT)
-			events += input_is_mt_axis(i) ? mt_slots : 1;
+	for (i = 0; i < ABS_CNT; i++) {
+		if (test_bit(i, dev->absbit)) {
+			if (input_is_mt_axis(i))
+				events += mt_slots;
+			else
+				events++;
+		}
+	}
 
-	if (test_bit(EV_REL, dev->evbit))
-		events += bitmap_weight(dev->relbit, REL_CNT);
+	for (i = 0; i < REL_CNT; i++)
+		if (test_bit(i, dev->relbit))
+			events++;
 
 	/* Make room for KEY and MSC events */
 	events += 7;
@@ -2052,23 +2048,6 @@ static void devm_input_device_unregister(struct device *dev, void *res)
 }
 
 /**
- * input_enable_softrepeat - enable software autorepeat
- * @dev: input device
- * @delay: repeat delay
- * @period: repeat period
- *
- * Enable software autorepeat on the input device.
- */
-void input_enable_softrepeat(struct input_dev *dev, int delay, int period)
-{
-	dev->timer.data = (unsigned long) dev;
-	dev->timer.function = input_repeat_key;
-	dev->rep[REP_DELAY] = delay;
-	dev->rep[REP_PERIOD] = period;
-}
-EXPORT_SYMBOL(input_enable_softrepeat);
-
-/**
  * input_register_device - register device with input core
  * @dev: device to be registered
  *
@@ -2099,15 +2078,9 @@ int input_register_device(struct input_dev *dev)
 	const char *path;
 	int error;
 
-	if (test_bit(EV_ABS, dev->evbit) && !dev->absinfo) {
-		dev_err(&dev->dev,
-			"Absolute device without dev->absinfo, refusing to register\n");
-		return -EINVAL;
-	}
-
 	if (dev->devres_managed) {
 		devres = devres_alloc(devm_input_device_unregister,
-				      sizeof(*devres), GFP_KERNEL);
+				      sizeof(struct input_devres), GFP_KERNEL);
 		if (!devres)
 			return -ENOMEM;
 
@@ -2138,8 +2111,12 @@ int input_register_device(struct input_dev *dev)
 	 * If delay and period are pre-set by the driver, then autorepeating
 	 * is handled by the driver itself and we don't do it in input.c.
 	 */
-	if (!dev->rep[REP_DELAY] && !dev->rep[REP_PERIOD])
-		input_enable_softrepeat(dev, 250, 33);
+	if (!dev->rep[REP_DELAY] && !dev->rep[REP_PERIOD]) {
+		dev->timer.data = (long) dev;
+		dev->timer.function = input_repeat_key;
+		dev->rep[REP_DELAY] = 250;
+		dev->rep[REP_PERIOD] = 33;
+	}
 
 	if (!dev->getkeycode)
 		dev->getkeycode = input_default_getkeycode;
@@ -2278,7 +2255,7 @@ EXPORT_SYMBOL(input_unregister_handler);
  *
  * Iterate over @bus's list of devices, and call @fn for each, passing
  * it @data and stop when @fn returns a non-zero value. The function is
- * using RCU to traverse the list and therefore may be using in atomic
+ * using RCU to traverse the list and therefore may be usind in atonic
  * contexts. The @fn callback is invoked from RCU critical section and
  * thus must not sleep.
  */

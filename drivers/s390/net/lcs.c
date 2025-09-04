@@ -88,8 +88,10 @@ static debug_info_t *lcs_dbf_trace;
 static void
 lcs_unregister_debug_facility(void)
 {
-	debug_unregister(lcs_dbf_setup);
-	debug_unregister(lcs_dbf_trace);
+	if (lcs_dbf_setup)
+		debug_unregister(lcs_dbf_setup);
+	if (lcs_dbf_trace)
+		debug_unregister(lcs_dbf_trace);
 }
 
 static int
@@ -327,7 +329,8 @@ lcs_set_allowed_threads(struct lcs_card *card, unsigned long threads)
 	spin_unlock_irqrestore(&card->mask_lock, flags);
 	wake_up(&card->wait_q);
 }
-static int lcs_threads_running(struct lcs_card *card, unsigned long threads)
+static inline int
+lcs_threads_running(struct lcs_card *card, unsigned long threads)
 {
         unsigned long flags;
         int rc = 0;
@@ -345,7 +348,8 @@ lcs_wait_for_threads(struct lcs_card *card, unsigned long threads)
                         lcs_threads_running(card, threads) == 0);
 }
 
-static int lcs_set_thread_start_bit(struct lcs_card *card, unsigned long thread)
+static inline int
+lcs_set_thread_start_bit(struct lcs_card *card, unsigned long thread)
 {
         unsigned long flags;
 
@@ -371,7 +375,8 @@ lcs_clear_thread_running_bit(struct lcs_card *card, unsigned long thread)
         wake_up(&card->wait_q);
 }
 
-static int __lcs_do_run_thread(struct lcs_card *card, unsigned long thread)
+static inline int
+__lcs_do_run_thread(struct lcs_card *card, unsigned long thread)
 {
         unsigned long flags;
         int rc = 0;
@@ -441,7 +446,8 @@ lcs_setup_card(struct lcs_card *card)
 	INIT_LIST_HEAD(&card->lancmd_waiters);
 }
 
-static void lcs_clear_multicast_list(struct lcs_card *card)
+static inline void
+lcs_clear_multicast_list(struct lcs_card *card)
 {
 #ifdef	CONFIG_IP_MULTICAST
 	struct lcs_ipm_list *ipm;
@@ -652,7 +658,8 @@ __lcs_resume_channel(struct lcs_channel *channel)
 /**
  * Make a buffer ready for processing.
  */
-static void __lcs_ready_buffer_bits(struct lcs_channel *channel, int index)
+static inline void
+__lcs_ready_buffer_bits(struct lcs_channel *channel, int index)
 {
 	int prev, next;
 
@@ -1164,8 +1171,8 @@ lcs_get_mac_for_ipm(__be32 ipm, char *mac, struct net_device *dev)
 /**
  * function called by net device to handle multicast address relevant things
  */
-static void lcs_remove_mc_addresses(struct lcs_card *card,
-				    struct in_device *in4_dev)
+static inline void
+lcs_remove_mc_addresses(struct lcs_card *card, struct in_device *in4_dev)
 {
 	struct ip_mc_list *im4;
 	struct list_head *l;
@@ -1191,9 +1198,8 @@ static void lcs_remove_mc_addresses(struct lcs_card *card,
 	spin_unlock_irqrestore(&card->ipm_lock, flags);
 }
 
-static struct lcs_ipm_list *lcs_check_addr_entry(struct lcs_card *card,
-						 struct ip_mc_list *im4,
-						 char *buf)
+static inline struct lcs_ipm_list *
+lcs_check_addr_entry(struct lcs_card *card, struct ip_mc_list *im4, char *buf)
 {
 	struct lcs_ipm_list *tmp, *ipm = NULL;
 	struct list_head *l;
@@ -1214,8 +1220,8 @@ static struct lcs_ipm_list *lcs_check_addr_entry(struct lcs_card *card,
 	return ipm;
 }
 
-static void lcs_set_mc_addresses(struct lcs_card *card,
-				 struct in_device *in4_dev)
+static inline void
+lcs_set_mc_addresses(struct lcs_card *card, struct in_device *in4_dev)
 {
 
 	struct ip_mc_list *im4;
@@ -1757,8 +1763,8 @@ lcs_get_control(struct lcs_card *card, struct lcs_cmd *cmd)
 			lcs_schedule_recovery(card);
 			break;
 		case LCS_CMD_STOPLAN:
-			pr_warn("Stoplan for %s initiated by LGW\n",
-				card->dev->name);
+			pr_warning("Stoplan for %s initiated by LGW.\n",
+				   card->dev->name);
 			if (card->dev)
 				netif_carrier_off(card->dev);
 			break;
@@ -1792,7 +1798,7 @@ lcs_get_skb(struct lcs_card *card, char *skb_data, unsigned int skb_len)
 		card->stats.rx_dropped++;
 		return;
 	}
-	skb_put_data(skb, skb_data, skb_len);
+	memcpy(skb_put(skb, skb_len), skb_data, skb_len);
 	skb->protocol =	card->lan_type_trans(skb, card->dev);
 	card->stats.rx_bytes += skb_len;
 	card->stats.rx_packets++;
@@ -1884,7 +1890,7 @@ lcs_stop_device(struct net_device *dev)
 	rc = lcs_stopcard(card);
 	if (rc)
 		dev_err(&card->dev->dev,
-			" Shutting down the LCS device failed\n");
+			" Shutting down the LCS device failed\n ");
 	return rc;
 }
 
@@ -1937,16 +1943,15 @@ static ssize_t
 lcs_portno_store (struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
         struct lcs_card *card;
-	int rc;
-	s16 value;
+	int value, rc;
 
 	card = dev_get_drvdata(dev);
 
         if (!card)
                 return 0;
 
-	rc = kstrtos16(buf, 0, &value);
-	if (rc)
+	rc = sscanf(buf, "%d", &value);
+	if (rc != 1)
 		return -EINVAL;
         /* TODO: sanity checks */
         card->portno = value;
@@ -2002,8 +2007,8 @@ lcs_timeout_store (struct device *dev, struct device_attribute *attr, const char
         if (!card)
                 return 0;
 
-	rc = kstrtouint(buf, 0, &value);
-	if (rc)
+	rc = sscanf(buf, "%u", &value);
+	if (rc != 1)
 		return -EINVAL;
         /* TODO: sanity checks */
         card->lancmd_timeout = value;
@@ -2146,7 +2151,7 @@ lcs_new_device(struct ccwgroup_device *ccwgdev)
 	rc = lcs_detect(card);
 	if (rc) {
 		LCS_DBF_TEXT(2, setup, "dtctfail");
-		dev_err(&ccwgdev->dev,
+		dev_err(&card->dev->dev,
 			"Detecting a network adapter for LCS devices"
 			" failed with rc=%d (0x%x)\n", rc, rc);
 		lcs_stopcard(card);
@@ -2407,14 +2412,14 @@ static struct ccwgroup_driver lcs_group_driver = {
 	.restore     = lcs_restore,
 };
 
-static ssize_t group_store(struct device_driver *ddrv, const char *buf,
-			   size_t count)
+static ssize_t lcs_driver_group_store(struct device_driver *ddrv,
+				      const char *buf, size_t count)
 {
 	int err;
 	err = ccwgroup_create_dev(lcs_root_dev, &lcs_group_driver, 2, buf);
 	return err ? err : count;
 }
-static DRIVER_ATTR_WO(group);
+static DRIVER_ATTR(group, 0200, NULL, lcs_driver_group_store);
 
 static struct attribute *lcs_drv_attrs[] = {
 	&driver_attr_group.attr,

@@ -12,6 +12,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -69,13 +73,12 @@ static void ir_handle_key(struct bttv *btv)
 
 	if ((ir->mask_keydown && (gpio & ir->mask_keydown)) ||
 	    (ir->mask_keyup   && !(gpio & ir->mask_keyup))) {
-		rc_keydown_notimeout(ir->dev, RC_PROTO_UNKNOWN, data, 0);
+		rc_keydown_notimeout(ir->dev, RC_TYPE_UNKNOWN, data, 0);
 	} else {
 		/* HACK: Probably, ir->mask_keydown is missing
 		   for this board */
 		if (btv->c.type == BTTV_BOARD_WINFAST2000)
-			rc_keydown_notimeout(ir->dev, RC_PROTO_UNKNOWN, data,
-					     0);
+			rc_keydown_notimeout(ir->dev, RC_TYPE_UNKNOWN, data, 0);
 
 		rc_keyup(ir->dev);
 	}
@@ -100,7 +103,7 @@ static void ir_enltv_handle_key(struct bttv *btv)
 			gpio, data,
 			(gpio & ir->mask_keyup) ? " up" : "up/down");
 
-		rc_keydown_notimeout(ir->dev, RC_PROTO_UNKNOWN, data, 0);
+		rc_keydown_notimeout(ir->dev, RC_TYPE_UNKNOWN, data, 0);
 		if (keyup)
 			rc_keyup(ir->dev);
 	} else {
@@ -114,8 +117,7 @@ static void ir_enltv_handle_key(struct bttv *btv)
 		if (keyup)
 			rc_keyup(ir->dev);
 		else
-			rc_keydown_notimeout(ir->dev, RC_PROTO_UNKNOWN, data,
-					     0);
+			rc_keydown_notimeout(ir->dev, RC_TYPE_UNKNOWN, data, 0);
 	}
 
 	ir->last_gpio = data | keyup;
@@ -183,8 +185,8 @@ static u32 bttv_rc5_decode(unsigned int code)
 			return 0;
 		}
 	}
-	dprintk("code=%x, rc5=%x, start=%x, toggle=%x, address=%x, instr=%x\n",
-		rc5, org_code, RC5_START(rc5),
+	dprintk("code=%x, rc5=%x, start=%x, toggle=%x, address=%x, "
+		"instr=%x\n", rc5, org_code, RC5_START(rc5),
 		RC5_TOGGLE(rc5), RC5_ADDR(rc5), RC5_INSTR(rc5));
 	return rc5;
 }
@@ -192,18 +194,21 @@ static u32 bttv_rc5_decode(unsigned int code)
 static void bttv_rc5_timer_end(unsigned long data)
 {
 	struct bttv_ir *ir = (struct bttv_ir *)data;
-	ktime_t tv;
+	struct timeval tv;
 	u32 gap, rc5, scancode;
 	u8 toggle, command, system;
 
 	/* get time */
-	tv = ktime_get();
+	do_gettimeofday(&tv);
 
-	gap = ktime_to_us(ktime_sub(tv, ir->base_time));
 	/* avoid overflow with gap >1s */
-	if (gap > USEC_PER_SEC) {
+	if (tv.tv_sec - ir->base_time.tv_sec > 1) {
 		gap = 200000;
+	} else {
+		gap = 1000000 * (tv.tv_sec - ir->base_time.tv_sec) +
+		    tv.tv_usec - ir->base_time.tv_usec;
 	}
+
 	/* signal we're ready to start a new code */
 	ir->active = false;
 
@@ -237,14 +242,14 @@ static void bttv_rc5_timer_end(unsigned long data)
 	}
 
 	scancode = RC_SCANCODE_RC5(system, command);
-	rc_keydown(ir->dev, RC_PROTO_RC5, scancode, toggle);
+	rc_keydown(ir->dev, RC_TYPE_RC5, scancode, toggle);
 	dprintk("scancode %x, toggle %x\n", scancode, toggle);
 }
 
 static int bttv_rc5_irq(struct bttv *btv)
 {
 	struct bttv_ir *ir = btv->remote;
-	ktime_t tv;
+	struct timeval tv;
 	u32 gpio;
 	u32 gap;
 	unsigned long current_jiffies;
@@ -254,12 +259,14 @@ static int bttv_rc5_irq(struct bttv *btv)
 
 	/* get time of bit */
 	current_jiffies = jiffies;
-	tv = ktime_get();
+	do_gettimeofday(&tv);
 
-	gap = ktime_to_us(ktime_sub(tv, ir->base_time));
 	/* avoid overflow with gap >1s */
-	if (gap > USEC_PER_SEC) {
+	if (tv.tv_sec - ir->base_time.tv_sec > 1) {
 		gap = 200000;
+	} else {
+		gap = 1000000 * (tv.tv_sec - ir->base_time.tv_sec) +
+		    tv.tv_usec - ir->base_time.tv_usec;
 	}
 
 	dprintk("RC5 IRQ: gap %d us for %s\n",
@@ -329,7 +336,7 @@ static void bttv_ir_stop(struct bttv *btv)
  * Get_key functions used by I2C remotes
  */
 
-static int get_key_pv951(struct IR_i2c *ir, enum rc_proto *protocol,
+static int get_key_pv951(struct IR_i2c *ir, enum rc_type *protocol,
 			 u32 *scancode, u8 *toggle)
 {
 	unsigned char b;
@@ -357,7 +364,7 @@ static int get_key_pv951(struct IR_i2c *ir, enum rc_proto *protocol,
 	 * 	   the device is bound to the vendor-provided RC.
 	 */
 
-	*protocol = RC_PROTO_UNKNOWN;
+	*protocol = RC_TYPE_UNKNOWN;
 	*scancode = b;
 	*toggle = 0;
 	return 1;
@@ -422,7 +429,7 @@ int bttv_input_init(struct bttv *btv)
 		return -ENODEV;
 
 	ir = kzalloc(sizeof(*ir),GFP_KERNEL);
-	rc = rc_allocate_device(RC_DRIVER_SCANCODE);
+	rc = rc_allocate_device();
 	if (!ir || !rc)
 		goto err_out_free;
 
@@ -537,7 +544,7 @@ int bttv_input_init(struct bttv *btv)
 	snprintf(ir->phys, sizeof(ir->phys), "pci-%s/ir0",
 		 pci_name(btv->c.pci));
 
-	rc->device_name = ir->name;
+	rc->input_name = ir->name;
 	rc->input_phys = ir->phys;
 	rc->input_id.bustype = BUS_PCI;
 	rc->input_id.version = 1;

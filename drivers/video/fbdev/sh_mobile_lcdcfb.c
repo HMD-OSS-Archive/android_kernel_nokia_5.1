@@ -439,9 +439,9 @@ static unsigned long lcdc_sys_read_data(void *handle)
 }
 
 static struct sh_mobile_lcdc_sys_bus_ops sh_mobile_lcdc_sys_bus_ops = {
-	.write_index	= lcdc_sys_write_index,
-	.write_data	= lcdc_sys_write_data,
-	.read_data	= lcdc_sys_read_data,
+	lcdc_sys_write_index,
+	lcdc_sys_write_data,
+	lcdc_sys_read_data,
 };
 
 static int sh_mobile_lcdc_sginit(struct fb_info *info,
@@ -1461,7 +1461,7 @@ overlay_rop3_store(struct device *dev, struct device_attribute *attr,
 	unsigned int rop3;
 	char *endp;
 
-	rop3 = simple_strtoul(buf, &endp, 10);
+	rop3 = !!simple_strtoul(buf, &endp, 10);
 	if (isspace(*endp))
 		endp++;
 
@@ -2181,7 +2181,8 @@ sh_mobile_lcdc_channel_fb_cleanup(struct sh_mobile_lcdc_chan *ch)
 	if (!info || !info->device)
 		return;
 
-	vfree(ch->sglist);
+	if (ch->sglist)
+		vfree(ch->sglist);
 
 	fb_dealloc_cmap(&info->cmap);
 	framebuffer_release(info);
@@ -2301,7 +2302,7 @@ static int sh_mobile_lcdc_check_fb(struct backlight_device *bdev,
 	return (info->bl_dev == bdev);
 }
 
-static const struct backlight_ops sh_mobile_lcdc_bl_ops = {
+static struct backlight_ops sh_mobile_lcdc_bl_ops = {
 	.options	= BL_CORE_SUSPENDRESUME,
 	.update_status	= sh_mobile_lcdc_update_bl,
 	.get_brightness	= sh_mobile_lcdc_get_brightness,
@@ -2605,6 +2606,7 @@ sh_mobile_lcdc_channel_init(struct sh_mobile_lcdc_chan *ch)
 	unsigned int max_size;
 	unsigned int i;
 
+	mutex_init(&ch->open_lock);
 	ch->notify = sh_mobile_lcdc_display_notify;
 
 	/* Validate the format. */
@@ -2703,7 +2705,7 @@ static int sh_mobile_lcdc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int num_channels;
 	int error;
-	int irq, i;
+	int i;
 
 	if (!pdata) {
 		dev_err(&pdev->dev, "no platform data defined\n");
@@ -2711,8 +2713,8 @@ static int sh_mobile_lcdc_probe(struct platform_device *pdev)
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	irq = platform_get_irq(pdev, 0);
-	if (!res || irq < 0) {
+	i = platform_get_irq(pdev, 0);
+	if (!res || i < 0) {
 		dev_err(&pdev->dev, "cannot get platform resources\n");
 		return -ENOENT;
 	}
@@ -2725,18 +2727,16 @@ static int sh_mobile_lcdc_probe(struct platform_device *pdev)
 
 	priv->dev = &pdev->dev;
 	priv->meram_dev = pdata->meram_dev;
-	for (i = 0; i < ARRAY_SIZE(priv->ch); i++)
-		mutex_init(&priv->ch[i].open_lock);
 	platform_set_drvdata(pdev, priv);
 
-	error = request_irq(irq, sh_mobile_lcdc_irq, 0,
+	error = request_irq(i, sh_mobile_lcdc_irq, 0,
 			    dev_name(&pdev->dev), priv);
 	if (error) {
 		dev_err(&pdev->dev, "unable to request irq\n");
 		goto err1;
 	}
 
-	priv->irq = irq;
+	priv->irq = i;
 	atomic_set(&priv->hw_usecnt, -1);
 
 	for (i = 0, num_channels = 0; i < ARRAY_SIZE(pdata->ch); i++) {
@@ -2782,10 +2782,8 @@ static int sh_mobile_lcdc_probe(struct platform_device *pdev)
 		priv->forced_fourcc = pdata->ch[0].fourcc;
 
 	priv->base = ioremap_nocache(res->start, resource_size(res));
-	if (!priv->base) {
-		error = -ENOMEM;
+	if (!priv->base)
 		goto err1;
-	}
 
 	error = sh_mobile_lcdc_setup_clocks(priv, pdata->clock_source);
 	if (error) {
@@ -2851,6 +2849,7 @@ err1:
 static struct platform_driver sh_mobile_lcdc_driver = {
 	.driver		= {
 		.name		= "sh_mobile_lcdc_fb",
+		.owner		= THIS_MODULE,
 		.pm		= &sh_mobile_lcdc_dev_pm_ops,
 	},
 	.probe		= sh_mobile_lcdc_probe,

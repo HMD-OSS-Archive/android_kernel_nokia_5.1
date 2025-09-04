@@ -16,17 +16,26 @@
  * General Public License for more details.
  */
 
-#include <linux/debugfs.h>
-#include <linux/dma-mapping.h>
-#include <linux/firmware.h>
-#include <linux/interrupt.h>
-#include <linux/io.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
-#include <linux/of_irq.h>
-#include <linux/pm_runtime.h>
+#include <linux/device.h>
+#include <linux/clk.h>
+#include <linux/io.h>
+#include <linux/interrupt.h>
+#include <linux/bitops.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
+#include <linux/of.h>
+#include <linux/of_irq.h>
+#include <linux/of_device.h>
+#include <linux/of_address.h>
+#include <linux/pm_runtime.h>
+#include <linux/firmware.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+#include <linux/string.h>
 #include <linux/soc/ti/knav_qmss.h>
 
 #include "knav_qmss.h"
@@ -58,12 +67,6 @@ static DEFINE_MUTEX(knav_dev_lock);
 	for (idx = 0, inst = kdev->instances;		\
 	     idx < (kdev)->num_queues_in_use;			\
 	     idx++, inst = knav_queue_idx_to_inst(kdev, idx))
-
-/* All firmware file names end up here. List the firmware file names below.
- * Newest followed by older ones. Search is done from start of the array
- * until a firmware file is found.
- */
-const char *knav_acc_firmwares[] = {"ks2_qmss_pdsp_acc48.bin"};
 
 /**
  * knav_queue_notify: qmss queue notfier call
@@ -102,17 +105,19 @@ static int knav_queue_setup_irq(struct knav_range_info *range,
 			  struct knav_queue_inst *inst)
 {
 	unsigned queue = inst->id - range->queue_base;
+	unsigned long cpu_map;
 	int ret = 0, irq;
 
 	if (range->flags & RANGE_HAS_IRQ) {
 		irq = range->irqs[queue].irq;
+		cpu_map = range->irqs[queue].cpu_map;
 		ret = request_irq(irq, knav_queue_int_handler, 0,
 					inst->irq_name, inst);
 		if (ret)
 			return ret;
 		disable_irq(irq);
-		if (range->irqs[queue].cpu_mask) {
-			ret = irq_set_affinity_hint(irq, range->irqs[queue].cpu_mask);
+		if (cpu_map) {
+			ret = irq_set_affinity_hint(irq, to_cpumask(&cpu_map));
 			if (ret) {
 				dev_warn(range->kdev->dev,
 					 "Failed to set IRQ affinity\n");
@@ -621,7 +626,6 @@ int knav_queue_push(void *qhandle, dma_addr_t dma,
 	atomic_inc(&qh->stats.pushes);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(knav_queue_push);
 
 /**
  * knav_queue_pop()	- pop data (or descriptor) from the head of a queue
@@ -659,7 +663,6 @@ dma_addr_t knav_queue_pop(void *qhandle, unsigned *size)
 	atomic_inc(&qh->stats.pops);
 	return dma;
 }
-EXPORT_SYMBOL_GPL(knav_queue_pop);
 
 /* carve out descriptors and push into queue */
 static void kdesc_fill_pool(struct knav_pool *pool)
@@ -714,14 +717,12 @@ dma_addr_t knav_pool_desc_virt_to_dma(void *ph, void *virt)
 	struct knav_pool *pool = ph;
 	return pool->region->dma_start + (virt - pool->region->virt_start);
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_virt_to_dma);
 
 void *knav_pool_desc_dma_to_virt(void *ph, dma_addr_t dma)
 {
 	struct knav_pool *pool = ph;
 	return pool->region->virt_start + (dma - pool->region->dma_start);
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_dma_to_virt);
 
 /**
  * knav_pool_create()	- Create a pool of descriptors
@@ -742,9 +743,6 @@ void *knav_pool_create(const char *name,
 	unsigned last_offset;
 	bool slot_found;
 	int ret;
-
-	if (!kdev)
-		return ERR_PTR(-EPROBE_DEFER);
 
 	if (!kdev->dev)
 		return ERR_PTR(-ENODEV);
@@ -787,7 +785,7 @@ void *knav_pool_create(const char *name,
 		dev_err(kdev->dev, "out of descs in region(%d) for pool(%s)\n",
 			region_id, name);
 		ret = -ENOMEM;
-		goto err_unlock;
+		goto err;
 	}
 
 	/* Region maintains a sorted (by region offset) list of pools
@@ -817,16 +815,15 @@ void *knav_pool_create(const char *name,
 		dev_err(kdev->dev, "pool(%s) create failed: fragmented desc pool in region(%d)\n",
 			name, region_id);
 		ret = -ENOMEM;
-		goto err_unlock;
+		goto err;
 	}
 
 	mutex_unlock(&knav_dev_lock);
 	kdesc_fill_pool(pool);
 	return pool;
 
-err_unlock:
-	mutex_unlock(&knav_dev_lock);
 err:
+	mutex_unlock(&knav_dev_lock);
 	kfree(pool->name);
 	devm_kfree(kdev->dev, pool);
 	return ERR_PTR(ret);
@@ -880,7 +877,6 @@ void *knav_pool_desc_get(void *ph)
 	data = knav_pool_desc_dma_to_virt(pool, dma);
 	return data;
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_get);
 
 /**
  * knav_pool_desc_put()	- return a descriptor to the pool
@@ -893,7 +889,6 @@ void knav_pool_desc_put(void *ph, void *desc)
 	dma = knav_pool_desc_virt_to_dma(pool, desc);
 	knav_queue_push(pool->queue, dma, pool->region->desc_size, 0);
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_put);
 
 /**
  * knav_pool_desc_map()	- Map descriptor for DMA transfer
@@ -920,7 +915,6 @@ int knav_pool_desc_map(void *ph, void *desc, unsigned size,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_map);
 
 /**
  * knav_pool_desc_unmap()	- Unmap descriptor after DMA transfer
@@ -943,7 +937,6 @@ void *knav_pool_desc_unmap(void *ph, dma_addr_t dma, unsigned dma_sz)
 	prefetch(desc);
 	return desc;
 }
-EXPORT_SYMBOL_GPL(knav_pool_desc_unmap);
 
 /**
  * knav_pool_count()	- Get the number of descriptors in pool.
@@ -955,7 +948,6 @@ int knav_pool_count(void *ph)
 	struct knav_pool *pool = ph;
 	return knav_queue_get_count(pool->queue);
 }
-EXPORT_SYMBOL_GPL(knav_pool_count);
 
 static void knav_queue_setup_region(struct knav_device *kdev,
 					struct knav_region *region)
@@ -1015,9 +1007,9 @@ static void knav_queue_setup_region(struct knav_device *kdev,
 	list_add(&pool->region_inst, &region->pools);
 
 	dev_dbg(kdev->dev,
-		"region %s (%d): size:%d, link:%d@%d, dma:%pad-%pad, virt:%p-%p\n",
+		"region %s (%d): size:%d, link:%d@%d, phys:%08x-%08x, virt:%p-%p\n",
 		region->name, id, region->desc_size, region->num_desc,
-		region->link_index, &region->dma_start, &region->dma_end,
+		region->link_index, region->dma_start, region->dma_end,
 		region->virt_start, region->virt_end);
 
 	hw_desc_size = (region->desc_size / 16) - 1;
@@ -1025,7 +1017,7 @@ static void knav_queue_setup_region(struct knav_device *kdev,
 
 	for_each_qmgr(kdev, qmgr) {
 		regs = qmgr->reg_region + id;
-		writel_relaxed((u32)region->dma_start, &regs->base);
+		writel_relaxed(region->dma_start, &regs->base);
 		writel_relaxed(region->link_index, &regs->start_index);
 		writel_relaxed(hw_desc_size << 16 | hw_num_desc,
 			       &regs->size_count);
@@ -1137,14 +1129,14 @@ static int knav_get_link_ram(struct knav_device *kdev,
 			 * queue_base specified => using internal or onchip
 			 * link ram WARNING - we do not "reserve" this block
 			 */
-			block->dma = (dma_addr_t)temp[0];
+			block->phys = (dma_addr_t)temp[0];
 			block->virt = NULL;
 			block->size = temp[1];
 		} else {
 			block->size = temp[1];
 			/* queue_base not specific => allocate requested size */
 			block->virt = dmam_alloc_coherent(kdev->dev,
-						  8 * block->size, &block->dma,
+						  8 * block->size, &block->phys,
 						  GFP_KERNEL);
 			if (!block->virt) {
 				dev_err(kdev->dev, "failed to alloc linkram\n");
@@ -1164,18 +1156,18 @@ static int knav_queue_setup_link_ram(struct knav_device *kdev)
 
 	for_each_qmgr(kdev, qmgr) {
 		block = &kdev->link_rams[0];
-		dev_dbg(kdev->dev, "linkram0: dma:%pad, virt:%p, size:%x\n",
-			&block->dma, block->virt, block->size);
-		writel_relaxed((u32)block->dma, &qmgr->reg_config->link_ram_base0);
+		dev_dbg(kdev->dev, "linkram0: phys:%x, virt:%p, size:%x\n",
+			block->phys, block->virt, block->size);
+		writel_relaxed(block->phys, &qmgr->reg_config->link_ram_base0);
 		writel_relaxed(block->size, &qmgr->reg_config->link_ram_size0);
 
 		block++;
 		if (!block->size)
-			continue;
+			return 0;
 
-		dev_dbg(kdev->dev, "linkram1: dma:%pad, virt:%p, size:%x\n",
-			&block->dma, block->virt, block->size);
-		writel_relaxed(block->dma, &qmgr->reg_config->link_ram_base1);
+		dev_dbg(kdev->dev, "linkram1: phys:%x, virt:%p, size:%x\n",
+			block->phys, block->virt, block->size);
+		writel_relaxed(block->phys, &qmgr->reg_config->link_ram_base1);
 	}
 
 	return 0;
@@ -1220,19 +1212,9 @@ static int knav_setup_queue_range(struct knav_device *kdev,
 
 		range->num_irqs++;
 
-		if (IS_ENABLED(CONFIG_SMP) && oirq.args_count == 3) {
-			unsigned long mask;
-			int bit;
-
-			range->irqs[i].cpu_mask = devm_kzalloc(dev,
-							       cpumask_size(), GFP_KERNEL);
-			if (!range->irqs[i].cpu_mask)
-				return -ENOMEM;
-
-			mask = (oirq.args[2] & 0x0000ff00) >> 8;
-			for_each_set_bit(bit, &mask, BITS_PER_LONG)
-				cpumask_set_cpu(bit, range->irqs[i].cpu_mask);
-		}
+		if (oirq.args_count == 3)
+			range->irqs[i].cpu_map =
+				(oirq.args[2] & 0x0000ff00) >> 8;
 	}
 
 	range->num_irqs = min(range->num_irqs, range->num_queues);
@@ -1323,14 +1305,14 @@ static void knav_free_queue_ranges(struct knav_device *kdev)
 static void knav_queue_free_regions(struct knav_device *kdev)
 {
 	struct knav_region *region;
-	struct knav_pool *pool, *tmp;
+	struct knav_pool *pool;
 	unsigned size;
 
 	for (;;) {
 		region = first_region(kdev);
 		if (!region)
 			break;
-		list_for_each_entry_safe(pool, tmp, &region->pools, region_inst)
+		list_for_each_entry(pool, &region->pools, region_inst)
 			knav_pool_destroy(pool);
 
 		size = region->virt_end - region->virt_start;
@@ -1447,6 +1429,7 @@ static int knav_queue_init_pdsps(struct knav_device *kdev,
 	struct device *dev = kdev->dev;
 	struct knav_pdsp_info *pdsp;
 	struct device_node *child;
+	int ret;
 
 	for_each_child_of_node(pdsps, child) {
 		pdsp = devm_kzalloc(dev, sizeof(*pdsp), GFP_KERNEL);
@@ -1455,6 +1438,17 @@ static int knav_queue_init_pdsps(struct knav_device *kdev,
 			return -ENOMEM;
 		}
 		pdsp->name = knav_queue_find_name(child);
+		ret = of_property_read_string(child, "firmware",
+					      &pdsp->firmware);
+		if (ret < 0 || !pdsp->firmware) {
+			dev_err(dev, "unknown firmware for pdsp %s\n",
+				pdsp->name);
+			devm_kfree(dev, pdsp);
+			continue;
+		}
+		dev_dbg(dev, "pdsp name %s fw name :%s\n", pdsp->name,
+			pdsp->firmware);
+
 		pdsp->iram =
 			knav_queue_map_reg(kdev, child,
 					   KNAV_QUEUE_PDSP_IRAM_REG_INDEX);
@@ -1485,9 +1479,9 @@ static int knav_queue_init_pdsps(struct knav_device *kdev,
 		}
 		of_property_read_u32(child, "id", &pdsp->id);
 		list_add_tail(&pdsp->list, &kdev->pdsps);
-		dev_dbg(dev, "added pdsp %s: command %p, iram %p, regs %p, intd %p\n",
+		dev_dbg(dev, "added pdsp %s: command %p, iram %p, regs %p, intd %p, firmware %s\n",
 			pdsp->name, pdsp->command, pdsp->iram, pdsp->regs,
-			pdsp->intd);
+			pdsp->intd, pdsp->firmware);
 	}
 	return 0;
 }
@@ -1506,8 +1500,6 @@ static int knav_queue_stop_pdsp(struct knav_device *kdev,
 		dev_err(kdev->dev, "timed out on pdsp %s stop\n", pdsp->name);
 		return ret;
 	}
-	pdsp->loaded = false;
-	pdsp->started = false;
 	return 0;
 }
 
@@ -1516,29 +1508,14 @@ static int knav_queue_load_pdsp(struct knav_device *kdev,
 {
 	int i, ret, fwlen;
 	const struct firmware *fw;
-	bool found = false;
 	u32 *fwdata;
 
-	for (i = 0; i < ARRAY_SIZE(knav_acc_firmwares); i++) {
-		if (knav_acc_firmwares[i]) {
-			ret = request_firmware_direct(&fw,
-						      knav_acc_firmwares[i],
-						      kdev->dev);
-			if (!ret) {
-				found = true;
-				break;
-			}
-		}
+	ret = request_firmware(&fw, pdsp->firmware, kdev->dev);
+	if (ret) {
+		dev_err(kdev->dev, "failed to get firmware %s for pdsp %s\n",
+			pdsp->firmware, pdsp->name);
+		return ret;
 	}
-
-	if (!found) {
-		dev_err(kdev->dev, "failed to get firmware for pdsp\n");
-		return -ENODEV;
-	}
-
-	dev_info(kdev->dev, "firmware file %s downloaded for PDSP\n",
-		 knav_acc_firmwares[i]);
-
 	writel_relaxed(pdsp->id + 1, pdsp->command + 0x18);
 	/* download the firmware */
 	fwdata = (u32 *)fw->data;
@@ -1596,24 +1573,16 @@ static int knav_queue_start_pdsps(struct knav_device *kdev)
 	int ret;
 
 	knav_queue_stop_pdsps(kdev);
-	/* now load them all. We return success even if pdsp
-	 * is not loaded as acc channels are optional on having
-	 * firmware availability in the system. We set the loaded
-	 * and stated flag and when initialize the acc range, check
-	 * it and init the range only if pdsp is started.
-	 */
+	/* now load them all */
 	for_each_pdsp(kdev, pdsp) {
 		ret = knav_queue_load_pdsp(kdev, pdsp);
-		if (!ret)
-			pdsp->loaded = true;
+		if (ret < 0)
+			return ret;
 	}
 
 	for_each_pdsp(kdev, pdsp) {
-		if (pdsp->loaded) {
-			ret = knav_queue_start_pdsp(kdev, pdsp);
-			if (!ret)
-				pdsp->started = true;
-		}
+		ret = knav_queue_start_pdsp(kdev, pdsp);
+		WARN_ON(ret);
 	}
 	return 0;
 }
@@ -1670,7 +1639,7 @@ static int knav_queue_init_queues(struct knav_device *kdev)
 	size = (1 << kdev->inst_shift) * kdev->num_queues_in_use;
 	kdev->instances = devm_kzalloc(kdev->dev, size, GFP_KERNEL);
 	if (!kdev->instances)
-		return -ENOMEM;
+		return -1;
 
 	for_each_queue_range(kdev, range) {
 		if (range->ops && range->ops->init_range)
@@ -1835,6 +1804,7 @@ static struct platform_driver keystone_qmss_driver = {
 	.remove		= knav_queue_remove,
 	.driver		= {
 		.name	= "keystone-navigator-qmss",
+		.owner	= THIS_MODULE,
 		.of_match_table = keystone_qmss_of_match,
 	},
 };

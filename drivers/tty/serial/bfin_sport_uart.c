@@ -517,15 +517,14 @@ static void sport_set_termios(struct uart_port *port,
 		up->csize = 5;
 		break;
 	default:
-		pr_warn("requested word length not supported\n");
-		break;
+		pr_warning("requested word length not supported\n");
 	}
 
 	if (termios->c_cflag & CSTOPB) {
 		up->stopb = 1;
 	}
 	if (termios->c_cflag & PARENB) {
-		pr_warn("PAREN bit is not supported yet\n");
+		pr_warning("PAREN bits is not supported yet\n");
 		/* up->parib = 1; */
 	}
 
@@ -740,7 +739,7 @@ static int sport_uart_resume(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops bfin_sport_uart_dev_pm_ops = {
+static struct dev_pm_ops bfin_sport_uart_dev_pm_ops = {
 	.suspend	= sport_uart_suspend,
 	.resume		= sport_uart_resume,
 };

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_CRIS_PCI_H
 #define __ASM_CRIS_PCI_H
 
@@ -30,7 +29,7 @@ int pcibios_set_irq_routing(struct pci_dev *dev, int pin, int irq);
 
 #include <linux/types.h>
 #include <linux/slab.h>
-#include <linux/scatterlist.h>
+#include <asm/scatterlist.h>
 #include <linux/string.h>
 #include <asm/io.h>
 
@@ -43,9 +42,14 @@ struct pci_dev;
 #define PCI_DMA_BUS_IS_PHYS	(1)
 
 #define HAVE_PCI_MMAP
-#define ARCH_GENERIC_PCI_MMAP_RESOURCE
+extern int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
+			       enum pci_mmap_state mmap_state, int write_combine);
+
 
 #endif /* __KERNEL__ */
+
+/* implement the pci_ DMA API in terms of the generic device dma_ one */
+#include <asm-generic/pci-dma-compat.h>
 
 /* generic pci stuff */
 #include <asm-generic/pci.h>

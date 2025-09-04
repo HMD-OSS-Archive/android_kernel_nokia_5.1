@@ -448,6 +448,7 @@ static int kempld_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct kempld_device_data *pld;
 	struct resource *ioport;
+	int ret;
 
 	pld = devm_kzalloc(dev, sizeof(*pld), GFP_KERNEL);
 	if (!pld)
@@ -470,7 +471,11 @@ static int kempld_probe(struct platform_device *pdev)
 	mutex_init(&pld->lock);
 	platform_set_drvdata(pdev, pld);
 
-	return kempld_detect_device(pld);
+	ret = kempld_detect_device(pld);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static int kempld_remove(struct platform_device *pdev)
@@ -489,29 +494,14 @@ static int kempld_remove(struct platform_device *pdev)
 static struct platform_driver kempld_driver = {
 	.driver		= {
 		.name	= "kempld",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= kempld_probe,
 	.remove		= kempld_remove,
 };
 
-static const struct dmi_system_id kempld_dmi_table[] __initconst = {
+static struct dmi_system_id kempld_dmi_table[] __initdata = {
 	{
-		.ident = "BBD6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBD"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "BBL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
 		.ident = "BHL6",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
@@ -519,47 +509,8 @@ static const struct dmi_system_id kempld_dmi_table[] __initconst = {
 		},
 		.driver_data = (void *)&kempld_platform_data_generic,
 		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "BKL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-bKL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "BSL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-bSL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "CAL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-cAL"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "CBL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "CBW6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBW6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
+	},
+	{
 		.ident = "CCR2",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
@@ -632,14 +583,6 @@ static const struct dmi_system_id kempld_dmi_table[] __initconst = {
 		.driver_data = (void *)&kempld_platform_data_generic,
 		.callback = kempld_create_platform_device,
 	}, {
-		.ident = "CKL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-cKL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
 		.ident = "CNTG",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
@@ -664,14 +607,6 @@ static const struct dmi_system_id kempld_dmi_table[] __initconst = {
 		.driver_data = (void *)&kempld_platform_data_generic,
 		.callback = kempld_create_platform_device,
 	}, {
-		.ident = "CSL6",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-cSL6"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
 		.ident = "CVV6",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
@@ -691,14 +626,6 @@ static const struct dmi_system_id kempld_dmi_table[] __initconst = {
 		.ident = "FRI2",
 		.matches = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Fish River Island II"),
-		},
-		.driver_data = (void *)&kempld_platform_data_generic,
-		.callback = kempld_create_platform_device,
-	}, {
-		.ident = "MAL1",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
-			DMI_MATCH(DMI_BOARD_NAME, "COMe-mAL10"),
 		},
 		.driver_data = (void *)&kempld_platform_data_generic,
 		.callback = kempld_create_platform_device,
@@ -807,6 +734,7 @@ MODULE_DEVICE_TABLE(dmi, kempld_dmi_table);
 static int __init kempld_init(void)
 {
 	const struct dmi_system_id *id;
+	int ret;
 
 	if (force_device_id[0]) {
 		for (id = kempld_dmi_table;
@@ -821,7 +749,11 @@ static int __init kempld_init(void)
 			return -ENODEV;
 	}
 
-	return platform_driver_register(&kempld_driver);
+	ret = platform_driver_register(&kempld_driver);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static void __exit kempld_exit(void)

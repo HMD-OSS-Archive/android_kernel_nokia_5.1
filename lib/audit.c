@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/audit.h>
@@ -54,9 +53,6 @@ int audit_classify_syscall(int abi, unsigned syscall)
 #ifdef __NR_socketcall
 	case __NR_socketcall:
 		return 4;
-#endif
-#ifdef __NR_execveat
-	case __NR_execveat:
 #endif
 	case __NR_execve:
 		return 5;

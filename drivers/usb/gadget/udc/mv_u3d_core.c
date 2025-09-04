@@ -119,14 +119,18 @@ static int mv_u3d_process_ep_req(struct mv_u3d *u3d, int index,
 	struct mv_u3d_req *curr_req)
 {
 	struct mv_u3d_trb	*curr_trb;
-	int actual, remaining_length = 0;
+	dma_addr_t cur_deq_lo;
+	struct mv_u3d_ep_context	*curr_ep_context;
+	int trb_complete, actual, remaining_length = 0;
 	int direction, ep_num;
 	int retval = 0;
 	u32 tmp, status, length;
 
+	curr_ep_context = &u3d->ep_context[index];
 	direction = index % 2;
 	ep_num = index / 2;
 
+	trb_complete = 0;
 	actual = curr_req->req.length;
 
 	while (!list_empty(&curr_req->trb_list)) {
@@ -139,10 +143,15 @@ static int mv_u3d_process_ep_req(struct mv_u3d *u3d, int index,
 		}
 
 		curr_trb->trb_hw->ctrl.own = 0;
-		if (direction == MV_U3D_EP_DIR_OUT)
+		if (direction == MV_U3D_EP_DIR_OUT) {
 			tmp = ioread32(&u3d->vuc_regs->rxst[ep_num].statuslo);
-		else
+			cur_deq_lo =
+				ioread32(&u3d->vuc_regs->rxst[ep_num].curdeqlo);
+		} else {
 			tmp = ioread32(&u3d->vuc_regs->txst[ep_num].statuslo);
+			cur_deq_lo =
+				ioread32(&u3d->vuc_regs->txst[ep_num].curdeqlo);
+		}
 
 		status = tmp >> MV_U3D_XFERSTATUS_COMPLETE_SHIFT;
 		length = tmp & MV_U3D_XFERSTATUS_TRB_LENGTH_MASK;
@@ -462,12 +471,6 @@ static int mv_u3d_req_to_trb(struct mv_u3d_req *req)
 					req->trb_head->trb_hw,
 					trb_num * sizeof(*trb_hw),
 					DMA_BIDIRECTIONAL);
-		if (dma_mapping_error(u3d->gadget.dev.parent,
-					req->trb_head->trb_dma)) {
-			kfree(req->trb_head->trb_hw);
-			kfree(req->trb_head);
-			return -EFAULT;
-		}
 
 		req->chain = 1;
 	}
@@ -493,32 +496,30 @@ mv_u3d_start_queue(struct mv_u3d_ep *ep)
 	ret = usb_gadget_map_request(&u3d->gadget, &req->req,
 					mv_u3d_ep_dir(ep));
 	if (ret)
-		goto break_processing;
+		return ret;
 
 	req->req.status = -EINPROGRESS;
 	req->req.actual = 0;
 	req->trb_count = 0;
 
-	/* build trbs */
-	ret = mv_u3d_req_to_trb(req);
-	if (ret) {
+	/* build trbs and push them to device queue */
+	if (!mv_u3d_req_to_trb(req)) {
+		ret = mv_u3d_queue_trb(ep, req);
+		if (ret) {
+			ep->processing = 0;
+			return ret;
+		}
+	} else {
+		ep->processing = 0;
 		dev_err(u3d->dev, "%s, mv_u3d_req_to_trb fail\n", __func__);
-		goto break_processing;
+		return -ENOMEM;
 	}
 
-	/* and push them to device queue */
-	ret = mv_u3d_queue_trb(ep, req);
-	if (ret)
-		goto break_processing;
-
 	/* irq handler advances the queue */
-	list_add_tail(&req->queue, &ep->queue);
+	if (req)
+		list_add_tail(&req->queue, &ep->queue);
 
 	return 0;
-
-break_processing:
-	ep->processing = 0;
-	return ret;
 }
 
 static int mv_u3d_ep_enable(struct usb_ep *_ep,
@@ -526,6 +527,7 @@ static int mv_u3d_ep_enable(struct usb_ep *_ep,
 {
 	struct mv_u3d *u3d;
 	struct mv_u3d_ep *ep;
+	struct mv_u3d_ep_context *ep_context;
 	u16 max = 0;
 	unsigned maxburst = 0;
 	u32 epxcr, direction;
@@ -545,6 +547,9 @@ static int mv_u3d_ep_enable(struct usb_ep *_ep,
 	if (!_ep->maxburst)
 		_ep->maxburst = 1;
 	maxburst = _ep->maxburst;
+
+	/* Get the endpoint context address */
+	ep_context = (struct mv_u3d_ep_context *)ep->ep_context;
 
 	/* Set the max burst size */
 	switch (desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) {
@@ -628,6 +633,7 @@ static int  mv_u3d_ep_disable(struct usb_ep *_ep)
 {
 	struct mv_u3d *u3d;
 	struct mv_u3d_ep *ep;
+	struct mv_u3d_ep_context *ep_context;
 	u32 epxcr, direction;
 	unsigned long flags;
 
@@ -639,6 +645,9 @@ static int  mv_u3d_ep_disable(struct usb_ep *_ep)
 		return -EINVAL;
 
 	u3d = ep->u3d;
+
+	/* Get the endpoint context address */
+	ep_context = ep->ep_context;
 
 	direction = mv_u3d_ep_dir(ep);
 
@@ -995,7 +1004,7 @@ static int mv_u3d_ep_set_wedge(struct usb_ep *_ep)
 	return mv_u3d_ep_set_halt_wedge(_ep, 1, 1);
 }
 
-static const struct usb_ep_ops mv_u3d_ep_ops = {
+static struct usb_ep_ops mv_u3d_ep_ops = {
 	.enable		= mv_u3d_ep_enable,
 	.disable	= mv_u3d_ep_disable,
 
@@ -1257,7 +1266,8 @@ static int mv_u3d_start(struct usb_gadget *g,
 	return 0;
 }
 
-static int mv_u3d_stop(struct usb_gadget *g)
+static int mv_u3d_stop(struct usb_gadget *g,
+		struct usb_gadget_driver *driver)
 {
 	struct mv_u3d *u3d = container_of(g, struct mv_u3d, gadget);
 	struct mv_usb_platform_data *pdata = dev_get_platdata(u3d->dev);
@@ -1274,7 +1284,7 @@ static int mv_u3d_stop(struct usb_gadget *g)
 	mv_u3d_controller_stop(u3d);
 	/* stop all usb activities */
 	u3d->gadget.speed = USB_SPEED_UNKNOWN;
-	mv_u3d_stop_activity(u3d, NULL);
+	mv_u3d_stop_activity(u3d, driver);
 	mv_u3d_disable(u3d);
 
 	if (pdata->phy_deinit)
@@ -1315,9 +1325,6 @@ static int mv_u3d_eps_init(struct mv_u3d *u3d)
 	ep->ep.ops = &mv_u3d_ep_ops;
 	ep->wedge = 0;
 	usb_ep_set_maxpacket_limit(&ep->ep, MV_U3D_EP0_MAX_PKT_SIZE);
-	ep->ep.caps.type_control = true;
-	ep->ep.caps.dir_in = true;
-	ep->ep.caps.dir_out = true;
 	ep->ep_num = 0;
 	ep->ep.desc = &mv_u3d_ep0_desc;
 	INIT_LIST_HEAD(&ep->queue);
@@ -1333,19 +1340,13 @@ static int mv_u3d_eps_init(struct mv_u3d *u3d)
 		if (i & 1) {
 			snprintf(name, sizeof(name), "ep%din", i >> 1);
 			ep->direction = MV_U3D_EP_DIR_IN;
-			ep->ep.caps.dir_in = true;
 		} else {
 			snprintf(name, sizeof(name), "ep%dout", i >> 1);
 			ep->direction = MV_U3D_EP_DIR_OUT;
-			ep->ep.caps.dir_out = true;
 		}
 		ep->u3d = u3d;
 		strncpy(ep->name, name, sizeof(ep->name));
 		ep->ep.name = ep->name;
-
-		ep->ep.caps.type_iso = true;
-		ep->ep.caps.type_bulk = true;
-		ep->ep.caps.type_int = true;
 
 		ep->ep.ops = &mv_u3d_ep_ops;
 		usb_ep_set_maxpacket_limit(&ep->ep, (unsigned short) ~0);
@@ -1758,7 +1759,8 @@ static int mv_u3d_remove(struct platform_device *dev)
 	usb_del_gadget_udc(&u3d->gadget);
 
 	/* free memory allocated in probe */
-	dma_pool_destroy(u3d->trb_pool);
+	if (u3d->trb_pool)
+		dma_pool_destroy(u3d->trb_pool);
 
 	if (u3d->ep_context)
 		dma_free_coherent(&dev->dev, u3d->ep_context_size,
@@ -1835,18 +1837,13 @@ static int mv_u3d_probe(struct platform_device *dev)
 	}
 
 	/* we will access controller register, so enable the u3d controller */
-	retval = clk_enable(u3d->clk);
-	if (retval) {
-		dev_err(&dev->dev, "clk_enable error %d\n", retval);
-		goto err_u3d_enable;
-	}
+	clk_enable(u3d->clk);
 
 	if (pdata->phy_init) {
 		retval = pdata->phy_init(u3d->phy_regs);
 		if (retval) {
 			dev_err(&dev->dev, "init phy error %d\n", retval);
-			clk_disable(u3d->clk);
-			goto err_phy_init;
+			goto err_u3d_enable;
 		}
 	}
 
@@ -1979,13 +1976,15 @@ err_alloc_trb_pool:
 	dma_free_coherent(&dev->dev, u3d->ep_context_size,
 		u3d->ep_context, u3d->ep_context_dma);
 err_alloc_ep_context:
-err_phy_init:
+	if (pdata->phy_deinit)
+		pdata->phy_deinit(u3d->phy_regs);
+	clk_disable(u3d->clk);
 err_u3d_enable:
 	iounmap(u3d->cap_regs);
 err_map_cap_regs:
 err_get_cap_regs:
-	clk_put(u3d->clk);
 err_get_clk:
+	clk_put(u3d->clk);
 	kfree(u3d);
 err_alloc_private:
 err_pdata:
@@ -2054,6 +2053,7 @@ static struct platform_driver mv_u3d_driver = {
 	.remove		= mv_u3d_remove,
 	.shutdown	= mv_u3d_shutdown,
 	.driver		= {
+		.owner	= THIS_MODULE,
 		.name	= "mv-u3d",
 		.pm	= &mv_u3d_pm_ops,
 	},

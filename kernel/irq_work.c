@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 Red Hat, Inc., Peter Zijlstra
+ * Copyright (C) 2010 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
  *
  * Provides a framework for enqueueing and running callbacks from hardirq
  * context. The enqueueing is NMI-safe.
@@ -18,9 +18,7 @@
 #include <linux/notifier.h>
 #include <linux/smp.h>
 #include <asm/processor.h>
-#ifdef CONFIG_MTK_SCHED_MONITOR
-#include "mtk_sched_mon.h"
-#endif
+
 
 static DEFINE_PER_CPU(struct llist_head, raised_list);
 static DEFINE_PER_CPU(struct llist_head, lazy_list);
@@ -155,13 +153,7 @@ static void irq_work_run_list(struct llist_head *list)
 		flags = work->flags & ~IRQ_WORK_PENDING;
 		xchg(&work->flags, flags);
 
-#ifdef CONFIG_MTK_SCHED_MONITOR
-		mt_trace_irq_work_start(work->func);
-#endif
 		work->func(work);
-#ifdef CONFIG_MTK_SCHED_MONITOR
-		mt_trace_irq_work_end(work->func);
-#endif
 		/*
 		 * Clear the BUSY bit and return to the free state if
 		 * no-one else claimed it meanwhile.
@@ -183,11 +175,11 @@ EXPORT_SYMBOL_GPL(irq_work_run);
 
 void irq_work_tick(void)
 {
-	struct llist_head *raised = this_cpu_ptr(&raised_list);
+	struct llist_head *raised = &__get_cpu_var(raised_list);
 
 	if (!llist_empty(raised) && !arch_irq_work_has_interrupt())
 		irq_work_run_list(raised);
-	irq_work_run_list(this_cpu_ptr(&lazy_list));
+	irq_work_run_list(&__get_cpu_var(lazy_list));
 }
 
 /*

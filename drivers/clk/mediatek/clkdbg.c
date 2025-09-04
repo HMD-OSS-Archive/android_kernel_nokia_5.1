@@ -11,8 +11,6 @@
  * GNU General Public License for more details.
  */
 
-#define pr_fmt(fmt) "[clkdbg] " fmt
-
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
@@ -33,15 +31,10 @@
 
 #include "clkdbg.h"
 
-#if defined(CONFIG_PM_DEBUG)
-#define CLKDBG_PM_DOMAIN	1
-#else
 #define CLKDBG_PM_DOMAIN	0
-#endif
-#define CLKDBG_PM_DOMAIN_API_4_9	1
-#define CLKDBG_CCF_API_4_4	1
-#define CLKDBG_HACK_CLK		0
-#define CLKDBG_HACK_CLK_CORE	1
+#define CLKDBG_CCF_API_4_4	0
+#define CLKDBG_HACK_CLK		1
+#define CLKDBG_HACK_CLK_CORE	0
 
 
 #if !CLKDBG_CCF_API_4_4
@@ -85,7 +78,7 @@ static struct clk_hw *clk_hw_get_parent_by_index(const struct clk_hw *hw,
 
 #include <linux/clk-private.h>
 
-static bool clk_hw_is_on(struct clk_hw *hw)
+static int clk_hw_is_on(struct clk_hw *hw)
 {
 	const struct clk_ops *ops = hw->clk->ops;
 
@@ -104,7 +97,7 @@ struct clk_core {
 	struct clk_hw		*hw;
 };
 
-static bool clk_hw_is_on(struct clk_hw *hw)
+static int clk_hw_is_on(struct clk_hw *hw)
 {
 	const struct clk_ops *ops = hw->core->ops;
 
@@ -117,7 +110,7 @@ static bool clk_hw_is_on(struct clk_hw *hw)
 
 #else
 
-static bool clk_hw_is_on(struct clk_hw *hw)
+static int clk_hw_is_on(struct clk_hw *hw)
 {
 	return __clk_get_enable_count(hw->clk) || clk_hw_is_prepared(hw);
 }
@@ -133,7 +126,7 @@ void set_clkdbg_ops(const struct clkdbg_ops *ops)
 
 static const struct fmeter_clk *get_all_fmeter_clks(void)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->get_all_fmeter_clks  == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->get_all_fmeter_clks)
 		return NULL;
 
 	return clkdbg_ops->get_all_fmeter_clks();
@@ -141,7 +134,7 @@ static const struct fmeter_clk *get_all_fmeter_clks(void)
 
 static void *prepare_fmeter(void)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->prepare_fmeter == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->prepare_fmeter)
 		return NULL;
 
 	return clkdbg_ops->prepare_fmeter();
@@ -149,7 +142,7 @@ static void *prepare_fmeter(void)
 
 static void unprepare_fmeter(void *data)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->unprepare_fmeter == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->unprepare_fmeter)
 		return;
 
 	clkdbg_ops->unprepare_fmeter(data);
@@ -157,7 +150,7 @@ static void unprepare_fmeter(void *data)
 
 static u32 fmeter_freq(const struct fmeter_clk *fclk)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->fmeter_freq == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->fmeter_freq)
 		return 0;
 
 	return clkdbg_ops->fmeter_freq(fclk);
@@ -165,7 +158,7 @@ static u32 fmeter_freq(const struct fmeter_clk *fclk)
 
 static const struct regname *get_all_regnames(void)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->get_all_regnames == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->get_all_regnames)
 		return NULL;
 
 	return clkdbg_ops->get_all_regnames();
@@ -173,7 +166,7 @@ static const struct regname *get_all_regnames(void)
 
 static const char * const *get_all_clk_names(void)
 {
-	if (clkdbg_ops == NULL || clkdbg_ops->get_all_clk_names == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->get_all_clk_names)
 		return NULL;
 
 	return clkdbg_ops->get_all_clk_names();
@@ -216,27 +209,18 @@ static const char * const *get_pwr_names(void)
 		[31] = "(CPU0_SRM_PDN)",
 	};
 
-	if (clkdbg_ops == NULL || clkdbg_ops->get_pwr_names == NULL)
+	if (!clkdbg_ops || !clkdbg_ops->get_pwr_names)
 		return default_pwr_names;
 
 	return clkdbg_ops->get_pwr_names();
 }
 
-static void setup_provider_clk(struct provider_clk *pvdck)
-{
-	if (clkdbg_ops == NULL || clkdbg_ops->setup_provider_clk == NULL)
-		return;
-
-	clkdbg_ops->setup_provider_clk(pvdck);
-}
-
 static bool is_valid_reg(void __iomem *addr)
 {
 #ifdef CONFIG_64BIT
-	return ((u64)addr & 0xf0000000) != 0UL ||
-			(((u64)addr >> 32U) & 0xf0000000) != 0UL;
+	return ((u64)addr & 0xf0000000) || (((u64)addr >> 32) & 0xf0000000);
 #else
-	return ((u32)addr & 0xf0000000) != 0U;
+	return ((u32)addr & 0xf0000000);
 #endif
 }
 
@@ -244,7 +228,6 @@ enum clkdbg_opt {
 	CLKDBG_EN_SUSPEND_SAVE_1,
 	CLKDBG_EN_SUSPEND_SAVE_2,
 	CLKDBG_EN_SUSPEND_SAVE_3,
-	CLKDBG_EN_LOG_SAVE_POINTS,
 };
 
 static u32 clkdbg_flags;
@@ -261,7 +244,7 @@ static void clr_clkdbg_flag(enum clkdbg_opt opt)
 
 static bool has_clkdbg_flag(enum clkdbg_opt opt)
 {
-	return (clkdbg_flags & BIT(opt)) != 0U;
+	return !!(clkdbg_flags & BIT(opt));
 }
 
 typedef void (*fn_fclk_freq_proc)(const struct fmeter_clk *fclk,
@@ -274,12 +257,12 @@ static void proc_all_fclk_freq(fn_fclk_freq_proc proc, void *data)
 
 	fclk = get_all_fmeter_clks();
 
-	if (fclk == NULL || proc == NULL)
+	if (!fclk || !proc)
 		return;
 
 	fmeter_data = prepare_fmeter();
 
-	for (; fclk->type != FT_NULL; fclk++) {
+	for (; fclk->type; fclk++) {
 		u32 freq;
 
 		freq = fmeter_freq(fclk);
@@ -291,7 +274,7 @@ static void proc_all_fclk_freq(fn_fclk_freq_proc proc, void *data)
 
 static void print_fclk_freq(const struct fmeter_clk *fclk, u32 freq, void *data)
 {
-	pr_info("%2d: %-29s: %u\n", fclk->id, fclk->name, freq);
+	clk_warn("%2d: %-29s: %u\n", fclk->id, fclk->name, freq);
 }
 
 void print_fmeter_all(void)
@@ -320,10 +303,10 @@ static void proc_all_regname(fn_regname_proc proc, void *data)
 {
 	const struct regname *rn = get_all_regnames();
 
-	if (rn == NULL)
+	if (!rn)
 		return;
 
-	for (; rn->base != NULL; rn++)
+	for (; rn->base; rn++)
 		proc(rn, data);
 }
 
@@ -332,8 +315,8 @@ static void print_reg(const struct regname *rn, void *data)
 	if (!is_valid_reg(ADDR(rn)))
 		return;
 
-	pr_info("%-21s: [0x%08x][0x%p] = 0x%08x\n",
-			rn->name, PHYSADDR(rn), ADDR(rn), clk_readl(ADDR(rn)));
+	clk_warn("%-21s: [0x%08x][0x%p] = 0x%08x\n",
+		rn->name, PHYSADDR(rn), ADDR(rn), clk_readl(ADDR(rn)));
 }
 
 void print_regs(void)
@@ -364,7 +347,7 @@ static void print_reg2(const struct regname *rn, void *data)
 	if (!is_valid_reg(ADDR(rn)))
 		return;
 
-	pr_info("%-21s: [0x%08x][0x%p] = 0x%08x\n",
+	clk_warn("%-21s: [0x%08x][0x%p] = 0x%08x\n",
 		rn->name, PHYSADDR(rn), ADDR(rn), clk_readl(ADDR(rn)));
 
 	msleep(20);
@@ -375,61 +358,6 @@ static int clkdbg_dump_regs2(struct seq_file *s, void *v)
 	proc_all_regname(print_reg2, s);
 
 	return 0;
-}
-
-static u32 read_spm_pwr_status(void)
-{
-	static void __iomem *scpsys_base, *pwr_sta, *pwr_sta_2nd;
-
-	if (clkdbg_ops == NULL || clkdbg_ops->get_spm_pwr_status  == NULL) {
-		if (scpsys_base == NULL ||
-		    pwr_sta == NULL || pwr_sta_2nd == NULL) {
-			scpsys_base = ioremap(0x10006000, PAGE_SIZE);
-			pwr_sta = scpsys_base + 0x60c;
-			pwr_sta_2nd = scpsys_base + 0x610;
-		}
-
-		return clk_readl(pwr_sta) & clk_readl(pwr_sta_2nd);
-	} else
-		return clkdbg_ops->get_spm_pwr_status();
-}
-
-static bool clk_hw_pwr_is_on(struct clk_hw *c_hw,
-			u32 spm_pwr_status, u32 pwr_mask)
-{
-	if ((spm_pwr_status & pwr_mask) != pwr_mask)
-		return false;
-
-	return clk_hw_is_on(c_hw);
-}
-
-static bool pvdck_pwr_is_on(struct provider_clk *pvdck, u32 spm_pwr_status)
-{
-	struct clk *c = pvdck->ck;
-	struct clk_hw *c_hw = __clk_get_hw(c);
-
-	return clk_hw_pwr_is_on(c_hw, spm_pwr_status, pvdck->pwr_mask);
-}
-
-static bool pvdck_is_on(struct provider_clk *pvdck)
-{
-	u32 spm_pwr_status = 0;
-
-	if (pvdck->pwr_mask != 0U)
-		spm_pwr_status = read_spm_pwr_status();
-
-	return pvdck_pwr_is_on(pvdck, spm_pwr_status);
-}
-
-static const char *ccf_state(struct clk_hw *hw)
-{
-	if (__clk_get_enable_count(hw->clk))
-		return "enabled";
-
-	if (clk_hw_is_prepared(hw))
-		return "prepared";
-
-	return "disabled";
 }
 
 static void dump_clk_state(const char *clkname, struct seq_file *s)
@@ -444,23 +372,23 @@ static void dump_clk_state(const char *clkname, struct seq_file *s)
 		return;
 	}
 
-	seq_printf(s, "[%-17s: %8s, %3d, %3d, %10ld, %17s]\n",
+	seq_printf(s, "[%-17s: %3s, %3d, %3d, %10ld, %17s]\n",
 		clk_hw_get_name(c_hw),
-		ccf_state(c_hw),
+		clk_hw_is_on(c_hw) ? "ON" : "off",
 		clk_hw_is_prepared(c_hw),
 		__clk_get_enable_count(c),
 		clk_hw_get_rate(c_hw),
-		p != NULL ? clk_hw_get_name(p_hw) : "- ");
+		p ? clk_hw_get_name(p_hw) : "- ");
 }
 
 static int clkdbg_dump_state_all(struct seq_file *s, void *v)
 {
 	const char * const *ckn = get_all_clk_names();
 
-	if (ckn == NULL)
+	if (!ckn)
 		return 0;
 
-	for (; *ckn != NULL; ckn++)
+	for (; *ckn; ckn++)
 		dump_clk_state(*ckn, s);
 
 	return 0;
@@ -472,26 +400,25 @@ static const char *get_provider_name(struct device_node *node, u32 *cells)
 	const char *p;
 	u32 cc;
 
-	if (of_property_read_u32(node, "#clock-cells", &cc) != 0)
+	if (of_property_read_u32(node, "#clock-cells", &cc))
 		cc = 0;
 
-	if (cells != NULL)
+	if (cells)
 		*cells = cc;
 
-	if (cc == 0U) {
-		if (of_property_read_string(node,
-				"clock-output-names", &name) < 0)
+	if (cc == 0) {
+		if (of_property_read_string(node, "clock-output-names", &name))
 			name = node->name;
 
 		return name;
 	}
 
-	if (of_property_read_string(node, "compatible", &name) < 0)
+	if (of_property_read_string(node, "compatible", &name))
 		name = node->name;
 
-	p = strchr(name, (int)'-');
+	p = strchr(name, '-');
 
-	if (p != NULL)
+	if (p)
 		return p + 1;
 	else
 		return name;
@@ -503,7 +430,7 @@ struct provider_clk *get_all_provider_clks(void)
 	struct device_node *node = NULL;
 	int n = 0;
 
-	if (provider_clks[0].ck != NULL)
+	if (provider_clks[0].ck)
 		return provider_clks;
 
 	do {
@@ -512,22 +439,16 @@ struct provider_clk *get_all_provider_clks(void)
 
 		node = of_find_node_with_property(node, "#clock-cells");
 
-		if (node == NULL)
+		if (!node)
 			break;
 
 		node_name = get_provider_name(node, &cells);
 
-		if (cells == 0U) {
-			struct clk *ck = __clk_lookup(node_name);
-
-			if (IS_ERR_OR_NULL(ck))
-				continue;
-
-			provider_clks[n].ck = ck;
-			setup_provider_clk(&provider_clks[n]);
+		if (cells == 0) {
+			provider_clks[n].ck = __clk_lookup(node_name);
 			++n;
 		} else {
-			unsigned int i;
+			int i;
 
 			for (i = 0; i < 256; i++) {
 				struct of_phandle_args pa;
@@ -546,11 +467,10 @@ struct provider_clk *get_all_provider_clks(void)
 				provider_clks[n].ck = ck;
 				provider_clks[n].idx = i;
 				provider_clks[n].provider_name = node_name;
-				setup_provider_clk(&provider_clks[n]);
 				++n;
 			}
 		}
-	} while (node != NULL);
+	} while (node);
 
 	return provider_clks;
 }
@@ -563,20 +483,20 @@ static void dump_provider_clk(struct provider_clk *pvdck, struct seq_file *s)
 	struct clk_hw *p_hw = __clk_get_hw(p);
 
 	seq_printf(s, "[%10s: %-17s: %3s, %3d, %3d, %10ld, %17s]\n",
-		pvdck->provider_name != NULL ? pvdck->provider_name : "/ ",
+		pvdck->provider_name ? pvdck->provider_name : "/ ",
 		clk_hw_get_name(c_hw),
-		pvdck_is_on(pvdck) ? "ON" : "off",
+		clk_hw_is_on(c_hw) ? "ON" : "off",
 		clk_hw_is_prepared(c_hw),
 		__clk_get_enable_count(c),
 		clk_hw_get_rate(c_hw),
-		p != NULL ? clk_hw_get_name(p_hw) : "- ");
+		p ? clk_hw_get_name(p_hw) : "- ");
 }
 
 static int clkdbg_dump_provider_clks(struct seq_file *s, void *v)
 {
 	struct provider_clk *pvdck = get_all_provider_clks();
 
-	for (; pvdck->ck != NULL; pvdck++)
+	for (; pvdck->ck; pvdck++)
 		dump_provider_clk(pvdck, s);
 
 	return 0;
@@ -584,12 +504,12 @@ static int clkdbg_dump_provider_clks(struct seq_file *s, void *v)
 
 static void dump_provider_mux(struct provider_clk *pvdck, struct seq_file *s)
 {
-	unsigned int i;
+	int i;
 	struct clk *c = pvdck->ck;
 	struct clk_hw *c_hw = __clk_get_hw(c);
 	unsigned int np = clk_hw_get_num_parents(c_hw);
 
-	if (np <= 1U)
+	if (np <= 1)
 		return;
 
 	dump_provider_clk(pvdck, s);
@@ -600,10 +520,10 @@ static void dump_provider_mux(struct provider_clk *pvdck, struct seq_file *s)
 		if (IS_ERR_OR_NULL(p_hw))
 			continue;
 
-		seq_printf(s, "\t\t\t(%2d: %-17s: %8s, %10ld)\n",
+		seq_printf(s, "\t\t\t(%2d: %-17s: %3s, %10ld)\n",
 			i,
 			clk_hw_get_name(p_hw),
-			ccf_state(p_hw),
+			clk_hw_is_on(p_hw) ? "ON" : "off",
 			clk_hw_get_rate(p_hw));
 	}
 }
@@ -612,41 +532,36 @@ static int clkdbg_dump_muxes(struct seq_file *s, void *v)
 {
 	struct provider_clk *pvdck = get_all_provider_clks();
 
-	for (; pvdck->ck != NULL; pvdck++)
+	for (; pvdck->ck; pvdck++)
 		dump_provider_mux(pvdck, s);
 
 	return 0;
 }
 
-static void show_pwr_status(u32 spm_pwr_status)
-{
-	unsigned int i;
-	const char * const *pwr_name = get_pwr_names();
-
-	pr_info("SPM_PWR_STATUS: 0x%08x\n\n", spm_pwr_status);
-
-	for (i = 0; i < 32; i++) {
-		const char *st = (spm_pwr_status & BIT(i)) != 0U ? "ON" : "off";
-
-		pr_info("[%2d]: %3s: %s\n", i, st, pwr_name[i]);
-		mdelay(20);
-	}
-}
-
 static int dump_pwr_status(u32 spm_pwr_status, struct seq_file *s)
 {
-	unsigned int i;
+	int i;
 	const char * const *pwr_name = get_pwr_names();
 
 	seq_printf(s, "SPM_PWR_STATUS: 0x%08x\n\n", spm_pwr_status);
 
 	for (i = 0; i < 32; i++) {
-		const char *st = (spm_pwr_status & BIT(i)) != 0U ? "ON" : "off";
+		const char *st = (spm_pwr_status & BIT(i)) ? "ON" : "off";
 
 		seq_printf(s, "[%2d]: %3s: %s\n", i, st, pwr_name[i]);
 	}
 
 	return 0;
+}
+
+static u32 read_spm_pwr_status(void)
+{
+	static void __iomem *scpsys_base;
+
+	if (!scpsys_base)
+		scpsys_base = ioremap(0x10006000, PAGE_SIZE);
+
+	return clk_readl(scpsys_base + 0x60c);
 }
 
 static int clkdbg_pwr_status(struct seq_file *s, void *v)
@@ -689,19 +604,18 @@ static int clkdbg_clkop_int_ckname(int (*clkop)(struct clk *clk),
 	char *clk_name;
 	int r = 0;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	clk_name = strsep(&c, " ");
 
-	if (clk_name == NULL)
+	if (!clk_name)
 		return 0;
 
 	if (strcmp(clk_name, "all") == 0) {
 		struct provider_clk *pvdck = get_all_provider_clks();
 
-		for (; pvdck->ck != NULL; pvdck++) {
+		for (; pvdck->ck; pvdck++) {
 			r |= clkop_int_ckname(clkop, clkop_name, NULL,
 						pvdck->ck, s);
 		}
@@ -744,19 +658,18 @@ static int clkdbg_clkop_void_ckname(void (*clkop)(struct clk *clk),
 	char *ign;
 	char *clk_name;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	clk_name = strsep(&c, " ");
 
-	if (clk_name == NULL)
+	if (!clk_name)
 		return 0;
 
 	if (strcmp(clk_name, "all") == 0) {
 		struct provider_clk *pvdck = get_all_provider_clks();
 
-		for (; pvdck->ck != NULL; pvdck++) {
+		for (; pvdck->ck; pvdck++) {
 			clkop_void_ckname(clkop, clkop_name, NULL,
 						pvdck->ck, s);
 		}
@@ -810,27 +723,23 @@ static int clkdbg_disable_unprepare(struct seq_file *s, void *v)
 
 void prepare_enable_provider(const char *pvd)
 {
-	bool allpvd = (pvd == NULL || strcmp(pvd, "all") == 0);
+	bool allpvd = (!pvd || strcmp(pvd, "all") == 0);
 	struct provider_clk *pvdck = get_all_provider_clks();
 
-	for (; pvdck->ck != NULL; pvdck++) {
-		if (allpvd || (pvdck->provider_name != NULL &&
-				strcmp(pvd, pvdck->provider_name) == 0)) {
-			int r = clk_prepare_enable(pvdck->ck);
-
-			if (r != 0)
-				pr_info("clk_prepare_enable(): %d\n", r);
-		}
+	for (; pvdck->ck; pvdck++) {
+		if (allpvd || (pvdck->provider_name &&
+				strcmp(pvd, pvdck->provider_name) == 0))
+			clk_prepare_enable(pvdck->ck);
 	}
 }
 
 void disable_unprepare_provider(const char *pvd)
 {
-	bool allpvd = (pvd == NULL || strcmp(pvd, "all") == 0);
+	bool allpvd = (!pvd || strcmp(pvd, "all") == 0);
 	struct provider_clk *pvdck = get_all_provider_clks();
 
-	for (; pvdck->ck != NULL; pvdck++) {
-		if (allpvd || (pvdck->provider_name != NULL &&
+	for (; pvdck->ck; pvdck++) {
+		if (allpvd || (pvdck->provider_name &&
 				strcmp(pvd, pvdck->provider_name) == 0))
 			clk_disable_unprepare(pvdck->ck);
 	}
@@ -844,13 +753,12 @@ static void clkpvdop(void (*pvdop)(const char *), const char *clkpvdop_name,
 	char *ign;
 	char *pvd_name;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	pvd_name = strsep(&c, " ");
 
-	if (pvd_name == NULL)
+	if (!pvd_name)
 		return;
 
 	pvdop(pvd_name);
@@ -880,14 +788,13 @@ static int clkdbg_set_parent(struct seq_file *s, void *v)
 	struct clk *parent;
 	int r;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	clk_name = strsep(&c, " ");
 	parent_name = strsep(&c, " ");
 
-	if (clk_name == NULL || parent_name == NULL)
+	if (!clk_name || !parent_name)
 		return 0;
 
 	seq_printf(s, "clk_set_parent(%s, %s): ", clk_name, parent_name);
@@ -905,7 +812,7 @@ static int clkdbg_set_parent(struct seq_file *s, void *v)
 	}
 
 	r = clk_prepare_enable(clk);
-	if (r != 0) {
+	if (r) {
 		seq_printf(s, "clk_prepare_enable(): %d\n", r);
 		return r;
 	}
@@ -926,17 +833,16 @@ static int clkdbg_set_rate(struct seq_file *s, void *v)
 	char *clk_name;
 	char *rate_str;
 	struct clk *clk;
-	unsigned long rate = 0;
+	unsigned long rate;
 	int r;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	clk_name = strsep(&c, " ");
 	rate_str = strsep(&c, " ");
 
-	if (clk_name == NULL || rate_str == NULL)
+	if (!clk_name || !rate_str)
 		return 0;
 
 	r = kstrtoul(rate_str, 0, &rate);
@@ -955,24 +861,23 @@ static int clkdbg_set_rate(struct seq_file *s, void *v)
 	return r;
 }
 
-static void *reg_from_str(const char *str)
+void *reg_from_str(const char *str)
 {
-	static phys_addr_t phys;
+	static u32 phys;
 	static void __iomem *virt;
 
 	if (sizeof(void *) == sizeof(unsigned long)) {
-		unsigned long v = 0;
+		unsigned long v;
 
-		if (kstrtoul(str, 0, &v) == 0U) {
+		if (kstrtoul(str, 0, &v) == 0) {
 			if ((0xf0000000 & v) < 0x20000000) {
-				if (virt != NULL && v > phys
-						&& v < phys + PAGE_SIZE)
+				if (virt && v > phys && v < phys + PAGE_SIZE)
 					return virt + v - phys;
 
-				if (virt != NULL)
+				if (virt)
 					iounmap(virt);
 
-				phys = v & ~(PAGE_SIZE - 1U);
+				phys = v & ~(PAGE_SIZE - 1);
 				virt = ioremap(phys, PAGE_SIZE);
 
 				return virt + v - phys;
@@ -988,7 +893,7 @@ static void *reg_from_str(const char *str)
 				if (virt && v > phys && v < phys + PAGE_SIZE)
 					return virt + v - phys;
 
-				if (virt != NULL)
+				if (virt)
 					iounmap(virt);
 
 				phys = v & ~(PAGE_SIZE - 1);
@@ -1000,11 +905,11 @@ static void *reg_from_str(const char *str)
 			return (void *)((uintptr_t)v);
 		}
 	} else {
-		pr_warn("unexpected pointer size: sizeof(void *): %zu\n",
+		clk_warn("unexpected pointer size: sizeof(void *): %zu\n",
 			sizeof(void *));
 	}
 
-	pr_warn("%s(): parsing error: %s\n", __func__, str);
+	clk_warn("%s(): parsing error: %s\n", __func__, str);
 
 	return NULL;
 }
@@ -1018,20 +923,19 @@ static int parse_reg_val_from_cmd(void __iomem **preg, unsigned long *pval)
 	char *val_str;
 	int r = 0;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	reg_str = strsep(&c, " ");
 	val_str = strsep(&c, " ");
 
-	if (preg != NULL && reg_str != NULL) {
+	if (preg && reg_str) {
 		*preg = reg_from_str(reg_str);
-		if (*preg != NULL)
+		if (*preg)
 			r++;
 	}
 
-	if (pval != NULL && val_str != NULL && kstrtoul(val_str, 0, pval) == 0)
+	if (pval && val_str && !kstrtoul(val_str, 0, pval))
 		r++;
 
 	return r;
@@ -1040,7 +944,7 @@ static int parse_reg_val_from_cmd(void __iomem **preg, unsigned long *pval)
 static int clkdbg_reg_read(struct seq_file *s, void *v)
 {
 	void __iomem *reg;
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_reg_val_from_cmd(&reg, NULL) != 1)
 		return 0;
@@ -1056,7 +960,7 @@ static int clkdbg_reg_read(struct seq_file *s, void *v)
 static int clkdbg_reg_write(struct seq_file *s, void *v)
 {
 	void __iomem *reg;
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_reg_val_from_cmd(&reg, &val) != 2)
 		return 0;
@@ -1073,7 +977,7 @@ static int clkdbg_reg_write(struct seq_file *s, void *v)
 static int clkdbg_reg_set(struct seq_file *s, void *v)
 {
 	void __iomem *reg;
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_reg_val_from_cmd(&reg, &val) != 2)
 		return 0;
@@ -1090,7 +994,7 @@ static int clkdbg_reg_set(struct seq_file *s, void *v)
 static int clkdbg_reg_clr(struct seq_file *s, void *v)
 {
 	void __iomem *reg;
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_reg_val_from_cmd(&reg, &val) != 2)
 		return 0;
@@ -1112,13 +1016,12 @@ static int parse_val_from_cmd(unsigned long *pval)
 	char *val_str;
 	int r = 0;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	val_str = strsep(&c, " ");
 
-	if (pval != NULL && val_str != NULL && kstrtoul(val_str, 0, pval) == 0)
+	if (pval && val_str && !kstrtoul(val_str, 0, pval))
 		r++;
 
 	return r;
@@ -1130,18 +1033,16 @@ static int clkdbg_show_flags(struct seq_file *s, void *v)
 		"CLKDBG_EN_SUSPEND_SAVE_1",
 		"CLKDBG_EN_SUSPEND_SAVE_2",
 		"CLKDBG_EN_SUSPEND_SAVE_3",
-		"CLKDBG_EN_LOG_SAVE_POINTS",
 	};
 
-	size_t i;
+	int i;
 
 	seq_printf(s, "clkdbg_flags: 0x%08x\n", clkdbg_flags);
 
 	for (i = 0; i < ARRAY_SIZE(clkdbg_opt_name); i++) {
-		const char *onff =
-			has_clkdbg_flag((enum clkdbg_opt)i) ? "ON" : "off";
+		const char *onff = has_clkdbg_flag(i) ? "ON" : "off";
 
-		seq_printf(s, "[%2zd]: %3s: %s\n", i, onff, clkdbg_opt_name[i]);
+		seq_printf(s, "[%2d]: %3s: %s\n", i, onff, clkdbg_opt_name[i]);
 	}
 
 	return 0;
@@ -1149,12 +1050,12 @@ static int clkdbg_show_flags(struct seq_file *s, void *v)
 
 static int clkdbg_set_flag(struct seq_file *s, void *v)
 {
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_val_from_cmd(&val) != 1)
 		return 0;
 
-	set_clkdbg_flag((enum clkdbg_opt)val);
+	set_clkdbg_flag(val);
 
 	seq_printf(s, "clkdbg_flags: 0x%08x\n", clkdbg_flags);
 
@@ -1163,12 +1064,12 @@ static int clkdbg_set_flag(struct seq_file *s, void *v)
 
 static int clkdbg_clr_flag(struct seq_file *s, void *v)
 {
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (parse_val_from_cmd(&val) != 1)
 		return 0;
 
-	clr_clkdbg_flag((enum clkdbg_opt)val);
+	clr_clkdbg_flag(val);
 
 	seq_printf(s, "clkdbg_flags: 0x%08x\n", clkdbg_flags);
 
@@ -1185,24 +1086,16 @@ static struct generic_pm_domain **get_all_genpd(void)
 {
 	static struct generic_pm_domain *pds[20];
 	static int num_pds;
-	const size_t maxpd = ARRAY_SIZE(pds);
+	const int maxpd = ARRAY_SIZE(pds);
 	struct device_node *node;
-#if CLKDBG_PM_DOMAIN_API_4_9
-	struct platform_device *pdev;
-	int r;
-#endif
 
-	if (num_pds != 0)
+	if (num_pds)
 		goto out;
 
 	node = of_find_node_with_property(NULL, "#power-domain-cells");
 
-	if (node == NULL)
+	if (!node)
 		return NULL;
-
-#if CLKDBG_PM_DOMAIN_API_4_9
-	pdev = platform_device_alloc("traverse", 0);
-#endif
 
 	for (num_pds = 0; num_pds < maxpd; num_pds++) {
 		struct of_phandle_args pa;
@@ -1210,31 +1103,13 @@ static struct generic_pm_domain **get_all_genpd(void)
 		pa.np = node;
 		pa.args[0] = num_pds;
 		pa.args_count = 1;
-
-#if CLKDBG_PM_DOMAIN_API_4_9
-		r = of_genpd_add_device(&pa, &pdev->dev);
-		if (r == -EINVAL)
-			continue;
-		else if (r != 0)
-			pr_warn("%s(): of_genpd_add_device(%d)\n", __func__, r);
-		pds[num_pds] = pd_to_genpd(pdev->dev.pm_domain);
-		r = pm_genpd_remove_device(pds[num_pds], &pdev->dev);
-		if (r != 0)
-			pr_warn("%s(): pm_genpd_remove_device(%d)\n",
-					__func__, r);
-#else
 		pds[num_pds] = of_genpd_get_from_provider(&pa);
-#endif
 
 		if (IS_ERR(pds[num_pds])) {
 			pds[num_pds] = NULL;
 			break;
 		}
 	}
-
-#if CLKDBG_PM_DOMAIN_API_4_9
-	platform_device_put(pdev);
-#endif
 
 out:
 	return pds;
@@ -1244,7 +1119,7 @@ static struct platform_device *pdev_from_name(const char *name)
 {
 	struct generic_pm_domain **pds = get_all_genpd();
 
-	for (; *pds != NULL; pds++) {
+	for (; *pds; pds++) {
 		struct pm_domain_data *pdd;
 		struct generic_pm_domain *pd = *pds;
 
@@ -1267,7 +1142,7 @@ static struct generic_pm_domain *genpd_from_name(const char *name)
 {
 	struct generic_pm_domain **pds = get_all_genpd();
 
-	for (; *pds != NULL; pds++) {
+	for (; *pds; pds++) {
 		struct generic_pm_domain *pd = *pds;
 
 		if (IS_ERR_OR_NULL(pd))
@@ -1283,7 +1158,7 @@ static struct generic_pm_domain *genpd_from_name(const char *name)
 struct genpd_dev_state {
 	struct device *dev;
 	bool active;
-	atomic_t usage_count;
+	int usage_count;
 	unsigned int disable_depth;
 	enum rpm_status runtime_status;
 };
@@ -1302,7 +1177,7 @@ static void save_all_genpd_state(struct genpd_state *genpd_states,
 	struct genpd_dev_state *devst = genpd_dev_states;
 	struct generic_pm_domain **pds = get_all_genpd();
 
-	for (; *pds != NULL; pds++) {
+	for (; *pds; pds++) {
 		struct pm_domain_data *pdd;
 		struct generic_pm_domain *pd = *pds;
 
@@ -1319,7 +1194,7 @@ static void save_all_genpd_state(struct genpd_state *genpd_states,
 
 			devst->dev = d;
 			devst->active = pm_runtime_active(d);
-			devst->usage_count = d->power.usage_count;
+			devst->usage_count = atomic_read(&d->power.usage_count);
 			devst->disable_depth = d->power.disable_depth;
 			devst->runtime_status = d->power.runtime_status;
 
@@ -1332,53 +1207,6 @@ static void save_all_genpd_state(struct genpd_state *genpd_states,
 
 	pdst->pd = NULL;
 	devst->dev = NULL;
-}
-
-static void show_genpd_state(struct genpd_state *pdst)
-{
-	static const char * const gpd_status_name[] = {
-		"ACTIVE",
-		"POWER_OFF",
-	};
-
-	static const char * const prm_status_name[] = {
-		"active",
-		"resuming",
-		"suspended",
-		"suspending",
-	};
-
-	pr_info("domain_on [pmd_name  status]\n");
-	pr_info("\tdev_on (dev_name usage_count, disable, status)\n");
-	pr_info("------------------------------------------------------\n");
-
-	for (; pdst->pd != NULL; pdst++) {
-		int i;
-		struct generic_pm_domain *pd = pdst->pd;
-
-		if (IS_ERR_OR_NULL(pd)) {
-			pr_info("pd: 0x%p\n", pd);
-			continue;
-		}
-
-		pr_info("%c [%-9s %11s]\n",
-			(pdst->status == GPD_STATE_ACTIVE) ? '+' : '-',
-			pd->name, gpd_status_name[pdst->status]);
-
-		for (i = 0; i < pdst->num_dev_state; i++) {
-			struct genpd_dev_state *devst = &pdst->dev_state[i];
-			struct device *dev = devst->dev;
-			struct platform_device *pdev = to_platform_device(dev);
-
-			pr_info("\t%c (%-19s %3d, %d, %10s)\n",
-				devst->active ? '+' : '-',
-				pdev->name,
-				atomic_read(&dev->power.usage_count),
-				devst->disable_depth,
-				prm_status_name[devst->runtime_status]);
-			mdelay(20);
-		}
-	}
 }
 
 static void dump_genpd_state(struct genpd_state *pdst, struct seq_file *s)
@@ -1399,7 +1227,7 @@ static void dump_genpd_state(struct genpd_state *pdst, struct seq_file *s)
 	seq_puts(s, "\tdev_on (dev_name usage_count, disable, status)\n");
 	seq_puts(s, "------------------------------------------------------\n");
 
-	for (; pdst->pd != NULL; pdst++) {
+	for (; pdst->pd; pdst++) {
 		int i;
 		struct generic_pm_domain *pd = pdst->pd;
 
@@ -1420,7 +1248,7 @@ static void dump_genpd_state(struct genpd_state *pdst, struct seq_file *s)
 			seq_printf(s, "\t%c (%-19s %3d, %d, %10s)\n",
 				devst->active ? '+' : '-',
 				pdev->name,
-				atomic_read(&dev->power.usage_count),
+				devst->usage_count,
 				devst->disable_depth,
 				prm_status_name[devst->runtime_status]);
 		}
@@ -1451,19 +1279,18 @@ static int clkdbg_pm_runtime_enable(struct seq_file *s, void *v)
 	char *dev_name;
 	struct platform_device *pdev;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	dev_name = strsep(&c, " ");
 
-	if (dev_name == NULL)
+	if (!dev_name)
 		return 0;
 
 	seq_printf(s, "pm_runtime_enable(%s): ", dev_name);
 
 	pdev = pdev_from_name(dev_name);
-	if (pdev != NULL) {
+	if (pdev) {
 		pm_runtime_enable(&pdev->dev);
 		seq_puts(s, "\n");
 	} else {
@@ -1481,19 +1308,18 @@ static int clkdbg_pm_runtime_disable(struct seq_file *s, void *v)
 	char *dev_name;
 	struct platform_device *pdev;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	dev_name = strsep(&c, " ");
 
-	if (dev_name == NULL)
+	if (!dev_name)
 		return 0;
 
 	seq_printf(s, "pm_runtime_disable(%s): ", dev_name);
 
 	pdev = pdev_from_name(dev_name);
-	if (pdev != NULL) {
+	if (pdev) {
 		pm_runtime_disable(&pdev->dev);
 		seq_puts(s, "\n");
 	} else {
@@ -1511,19 +1337,18 @@ static int clkdbg_pm_runtime_get_sync(struct seq_file *s, void *v)
 	char *dev_name;
 	struct platform_device *pdev;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	dev_name = strsep(&c, " ");
 
-	if (dev_name == NULL)
+	if (!dev_name)
 		return 0;
 
 	seq_printf(s, "pm_runtime_get_sync(%s): ", dev_name);
 
 	pdev = pdev_from_name(dev_name);
-	if (pdev != NULL) {
+	if (pdev) {
 		int r = pm_runtime_get_sync(&pdev->dev);
 
 		seq_printf(s, "%d\n", r);
@@ -1542,19 +1367,18 @@ static int clkdbg_pm_runtime_put_sync(struct seq_file *s, void *v)
 	char *dev_name;
 	struct platform_device *pdev;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	dev_name = strsep(&c, " ");
 
-	if (dev_name == NULL)
+	if (!dev_name)
 		return 0;
 
 	seq_printf(s, "pm_runtime_put_sync(%s): ", dev_name);
 
 	pdev = pdev_from_name(dev_name);
-	if (pdev != NULL) {
+	if (pdev) {
 		int r = pm_runtime_put_sync(&pdev->dev);
 
 		seq_printf(s, "%d\n", r);
@@ -1576,13 +1400,12 @@ static int genpd_op(const char *gpd_op_name, struct seq_file *s)
 	int (*gpd_op)(struct generic_pm_domain *);
 	int r = 0;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	pd_name = strsep(&c, " ");
 
-	if (pd_name == NULL)
+	if (!pd_name)
 		return 0;
 
 	if (strcmp(gpd_op_name, "power_on") == 0)
@@ -1593,7 +1416,7 @@ static int genpd_op(const char *gpd_op_name, struct seq_file *s)
 	if (strcmp(pd_name, "all") == 0) {
 		struct generic_pm_domain **pds = get_all_genpd();
 
-		for (; *pds != NULL; pds++) {
+		for (; *pds; pds++) {
 			genpd = *pds;
 
 			if (IS_ERR_OR_NULL(genpd))
@@ -1610,7 +1433,7 @@ static int genpd_op(const char *gpd_op_name, struct seq_file *s)
 	}
 
 	genpd = genpd_from_name(pd_name);
-	if (genpd != NULL) {
+	if (genpd) {
 		gpd_op = (gpd_op_id == 1) ? genpd->power_on : genpd->power_off;
 		r = gpd_op(genpd);
 
@@ -1638,26 +1461,18 @@ static int clkdbg_pwr_off(struct seq_file *s, void *v)
 
 static int clkdbg_probe(struct platform_device *pdev)
 {
-	int r;
-
 	pm_runtime_enable(&pdev->dev);
-	r = pm_runtime_get_sync(&pdev->dev);
-	if (r != 0)
-		pr_warn("%s(): pm_runtime_get_sync(%d)\n", __func__, r);
+	pm_runtime_get_sync(&pdev->dev);
 
-	return r;
+	return 0;
 }
 
 static int clkdbg_remove(struct platform_device *pdev)
 {
-	int r;
-
-	r = pm_runtime_put_sync(&pdev->dev);
-	if (r != 0)
-		pr_warn("%s(): pm_runtime_put_sync(%d)\n", __func__, r);
+	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
-	return r;
+	return 0;
 }
 
 struct pdev_drv {
@@ -1687,26 +1502,19 @@ static struct pdev_drv pderv[] = {
 	PDEV_DRV("clkdbg-pd7"),
 	PDEV_DRV("clkdbg-pd8"),
 	PDEV_DRV("clkdbg-pd9"),
-	PDEV_DRV("clkdbg-pd10"),
-	PDEV_DRV("clkdbg-pd11"),
-	PDEV_DRV("clkdbg-pd12"),
-	PDEV_DRV("clkdbg-pd13"),
-	PDEV_DRV("clkdbg-pd14"),
-	PDEV_DRV("clkdbg-pd15"),
 };
 
 static void reg_pdev_drv(const char *pdname, struct seq_file *s)
 {
-	size_t i;
+	int i;
 	struct generic_pm_domain **pds = get_all_genpd();
-	bool allpd = (pdname == NULL || strcmp(pdname, "all") == 0);
-	int r;
+	bool allpd = (!pdname || strcmp(pdname, "all") == 0);
 
-	for (i = 0; i < ARRAY_SIZE(pderv) && *pds != NULL; i++, pds++) {
+	for (i = 0; i < ARRAY_SIZE(pderv) && *pds; i++, pds++) {
 		const char *name = pderv[i].pdrv.driver.name;
 		struct generic_pm_domain *pd = *pds;
 
-		if (IS_ERR_OR_NULL(pd) || pderv[i].genpd != NULL)
+		if (IS_ERR_OR_NULL(pd) || pderv[i].genpd)
 			continue;
 
 		if (!allpd && strcmp(pdname, pd->name) != 0)
@@ -1715,32 +1523,22 @@ static void reg_pdev_drv(const char *pdname, struct seq_file *s)
 		pderv[i].genpd = pd;
 
 		pderv[i].pdev = platform_device_alloc(name, 0);
-		r = platform_device_add(pderv[i].pdev);
-		if (r != 0 && s != NULL)
-			seq_printf(s, "%s(): platform_device_add(%d)\n",
-						__func__, r);
+		platform_device_add(pderv[i].pdev);
 
-		r = pm_genpd_add_device(pd, &pderv[i].pdev->dev);
-		if (r != 0 && s != NULL)
-			seq_printf(s, "%s(): pm_genpd_add_device(%d)\n",
-						__func__, r);
-		r = platform_driver_register(&pderv[i].pdrv);
-		if (r != 0 && s != NULL)
-			seq_printf(s, "%s(): platform_driver_register(%d)\n",
-						__func__, r);
+		pm_genpd_add_device(pd, &pderv[i].pdev->dev);
+		platform_driver_register(&pderv[i].pdrv);
 
-		if (s != NULL)
+		if (s)
 			seq_printf(s, "%s --> %s\n", name, pd->name);
 	}
 }
 
 static void unreg_pdev_drv(const char *pdname, struct seq_file *s)
 {
-	ssize_t i;
-	bool allpd = (pdname == NULL || strcmp(pdname, "all") == 0);
-	int r;
+	int i;
+	bool allpd = (!pdname || strcmp(pdname, "all") == 0);
 
-	for (i = ARRAY_SIZE(pderv) - 1L; i >= 0L; i--) {
+	for (i = ARRAY_SIZE(pderv) - 1; i >= 0; i--) {
 		const char *name = pderv[i].pdrv.driver.name;
 		struct generic_pm_domain *pd = pderv[i].genpd;
 
@@ -1750,17 +1548,14 @@ static void unreg_pdev_drv(const char *pdname, struct seq_file *s)
 		if (!allpd && strcmp(pdname, pd->name) != 0)
 			continue;
 
-		r = pm_genpd_remove_device(pd, &pderv[i].pdev->dev);
-		if (r != 0 && s != NULL)
-			seq_printf(s, "%s(): pm_genpd_remove_device(%d)\n",
-						__func__, r);
-
 		platform_driver_unregister(&pderv[i].pdrv);
+		pm_genpd_remove_device(pd, &pderv[i].pdev->dev);
+
 		platform_device_unregister(pderv[i].pdev);
 
 		pderv[i].genpd = NULL;
 
-		if (s != NULL)
+		if (s)
 			seq_printf(s, "%s -x- %s\n", name, pd->name);
 	}
 }
@@ -1772,13 +1567,12 @@ static int clkdbg_reg_pdrv(struct seq_file *s, void *v)
 	char *ign;
 	char *pd_name;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	pd_name = strsep(&c, " ");
 
-	if (pd_name == NULL)
+	if (!pd_name)
 		return 0;
 
 	reg_pdev_drv(pd_name, s);
@@ -1793,13 +1587,12 @@ static int clkdbg_unreg_pdrv(struct seq_file *s, void *v)
 	char *ign;
 	char *pd_name;
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
 	ign = strsep(&c, " ");
 	pd_name = strsep(&c, " ");
 
-	if (pd_name == NULL)
+	if (!pd_name)
 		return 0;
 
 	unreg_pdev_drv(pd_name, s);
@@ -1836,7 +1629,6 @@ struct provider_clk_state {
 	bool enabled;
 	unsigned int enable_count;
 	unsigned long rate;
-	struct clk *parent;
 };
 
 struct save_point {
@@ -1857,41 +1649,21 @@ static void save_pwr_status(u32 *spm_pwr_status)
 	*spm_pwr_status = read_spm_pwr_status();
 }
 
-static void save_all_clks_state(struct provider_clk_state *clks_states,
-				u32 spm_pwr_status)
+static void save_all_clks_state(struct provider_clk_state *clks_states)
 {
 	struct provider_clk *pvdck = get_all_provider_clks();
 	struct provider_clk_state *st = clks_states;
 
-	for (; pvdck->ck != NULL; pvdck++, st++) {
+	for (; pvdck->ck; pvdck++, st++) {
 		struct clk *c = pvdck->ck;
 		struct clk_hw *c_hw = __clk_get_hw(c);
 
 		st->pvdck = pvdck;
 		st->prepared = clk_hw_is_prepared(c_hw);
-		st->enabled = clk_hw_pwr_is_on(c_hw, spm_pwr_status,
-							pvdck->pwr_mask);
+		st->enabled = clk_hw_is_on(c_hw);
 		st->enable_count = __clk_get_enable_count(c);
 		st->rate = clk_hw_get_rate(c_hw);
-		st->parent = IS_ERR_OR_NULL(c) ? NULL : clk_get_parent(c);
 	}
-}
-
-static void show_provider_clk_state(struct provider_clk_state *st)
-{
-	struct provider_clk *pvdck = st->pvdck;
-	struct clk_hw *c_hw = __clk_get_hw(pvdck->ck);
-
-	pr_info("[%10s: %-17s: %3s, %3d, %3d, %10ld, %17s]\n",
-		pvdck->provider_name != NULL ? pvdck->provider_name : "/ ",
-		clk_hw_get_name(c_hw),
-		st->enabled ? "ON" : "off",
-		st->prepared,
-		st->enable_count,
-		st->rate,
-		st->parent != NULL ?
-			clk_hw_get_name(__clk_get_hw(st->parent)) : "- ");
-	mdelay(20);
 }
 
 static void dump_provider_clk_state(struct provider_clk_state *st,
@@ -1900,51 +1672,30 @@ static void dump_provider_clk_state(struct provider_clk_state *st,
 	struct provider_clk *pvdck = st->pvdck;
 	struct clk_hw *c_hw = __clk_get_hw(pvdck->ck);
 
-	seq_printf(s, "[%10s: %-17s: %3s, %3d, %3d, %10ld, %17s]\n",
-		pvdck->provider_name != NULL ? pvdck->provider_name : "/ ",
+	seq_printf(s, "[%10s: %-17s: %3s, %3d, %3d, %10ld]\n",
+		pvdck->provider_name ? pvdck->provider_name : "/ ",
 		clk_hw_get_name(c_hw),
 		st->enabled ? "ON" : "off",
 		st->prepared,
 		st->enable_count,
-		st->rate,
-		st->parent != NULL ?
-			clk_hw_get_name(__clk_get_hw(st->parent)) : "- ");
-}
-
-static void show_save_point(struct save_point *sp)
-{
-	struct provider_clk_state *st = sp->clks_states;
-
-	for (; st->pvdck != NULL; st++)
-		show_provider_clk_state(st);
-
-	pr_info("\n");
-	show_pwr_status(sp->spm_pwr_status);
-
-#if CLKDBG_PM_DOMAIN
-	pr_info("\n");
-	show_genpd_state(sp->genpd_states);
-#endif
+		st->rate);
 }
 
 static void store_save_point(struct save_point *sp)
 {
+	save_all_clks_state(sp->clks_states);
 	save_pwr_status(&sp->spm_pwr_status);
-	save_all_clks_state(sp->clks_states, sp->spm_pwr_status);
 
 #if CLKDBG_PM_DOMAIN
 	save_all_genpd_state(sp->genpd_states, sp->genpd_dev_states);
 #endif
-
-	if (has_clkdbg_flag(CLKDBG_EN_LOG_SAVE_POINTS))
-		show_save_point(sp);
 }
 
 static void dump_save_point(struct save_point *sp, struct seq_file *s)
 {
 	struct provider_clk_state *st = sp->clks_states;
 
-	for (; st->pvdck != NULL; st++)
+	for (; st->pvdck; st++)
 		dump_provider_clk_state(st, s);
 
 	seq_puts(s, "\n");
@@ -1977,13 +1728,13 @@ static int clkdbg_dump_suspend_clks_3(struct seq_file *s, void *v)
 static int clkdbg_dump_suspend_clks(struct seq_file *s, void *v)
 {
 	if (has_clkdbg_flag(CLKDBG_EN_SUSPEND_SAVE_3) &&
-			save_point_3.spm_pwr_status != 0U)
+			save_point_3.spm_pwr_status)
 		return clkdbg_dump_suspend_clks_3(s, v);
 	else if (has_clkdbg_flag(CLKDBG_EN_SUSPEND_SAVE_2) &&
-			save_point_2.spm_pwr_status != 0U)
+			save_point_2.spm_pwr_status)
 		return clkdbg_dump_suspend_clks_2(s, v);
 	else if (has_clkdbg_flag(CLKDBG_EN_SUSPEND_SAVE_1) &&
-			save_point_1.spm_pwr_status != 0U)
+			save_point_1.spm_pwr_status)
 		return clkdbg_dump_suspend_clks_1(s, v);
 
 	return 0;
@@ -2034,20 +1785,16 @@ static struct syscore_ops clkdbg_syscore_ops = {
 
 static int __init clkdbg_pm_init(void)
 {
-	int r;
-
 	register_syscore_ops(&clkdbg_syscore_ops);
-	r = register_pm_notifier(&clkdbg_pm_notifier);
-	if (r != 0)
-		pr_warn("%s(): register_pm_notifier(%d)\n", __func__, r);
+	register_pm_notifier(&clkdbg_pm_notifier);
 
-	return r;
+	return 0;
 }
 subsys_initcall(clkdbg_pm_init);
 
 static int clkdbg_suspend_ops_valid(suspend_state_t state)
 {
-	return state == PM_SUSPEND_MEM ? 1 : 0;
+	return state == PM_SUSPEND_MEM;
 }
 
 static int clkdbg_suspend_ops_begin(suspend_state_t state)
@@ -2150,10 +1897,10 @@ static int clkdbg_cmds(struct seq_file *s, void *v)
 {
 	const struct cmd_fn *cf;
 
-	for (cf = common_cmds; cf->cmd != NULL; cf++)
+	for (cf = common_cmds; cf->cmd; cf++)
 		seq_printf(s, "%s\n", cf->cmd);
 
-	for (cf = custom_cmds; cf != NULL && cf->cmd != NULL; cf++)
+	for (cf = custom_cmds; cf && cf->cmd; cf++)
 		seq_printf(s, "%s\n", cf->cmd);
 
 	seq_puts(s, "\n");
@@ -2166,10 +1913,9 @@ static int clkdbg_show(struct seq_file *s, void *v)
 	const struct cmd_fn *cf;
 	char cmd[sizeof(last_cmd)];
 
-	strncpy(cmd, last_cmd, sizeof(cmd));
-	cmd[sizeof(cmd) - 1UL] = '\0';
+	strcpy(cmd, last_cmd);
 
-	for (cf = custom_cmds; cf != NULL && cf->cmd != NULL; cf++) {
+	for (cf = custom_cmds; cf && cf->cmd; cf++) {
 		char *c = cmd;
 		char *token = strsep(&c, " ");
 
@@ -2177,7 +1923,7 @@ static int clkdbg_show(struct seq_file *s, void *v)
 			return cf->fn(s, v);
 	}
 
-	for (cf = common_cmds; cf->cmd != NULL; cf++) {
+	for (cf = common_cmds; cf->cmd; cf++) {
 		char *c = cmd;
 		char *token = strsep(&c, " ");
 
@@ -2199,21 +1945,18 @@ static ssize_t clkdbg_write(
 		size_t count,
 		loff_t *data)
 {
-	size_t len = 0;
-	char *nl;
+	int len = 0;
 
-	len = (count < (sizeof(last_cmd) - 1UL)) ?
-				count : (sizeof(last_cmd) - 1UL);
-	if (copy_from_user(last_cmd, buffer, len) != 0UL)
+	len = (count < (sizeof(last_cmd) - 1)) ? count : (sizeof(last_cmd) - 1);
+	if (copy_from_user(last_cmd, buffer, len))
 		return 0;
 
 	last_cmd[len] = '\0';
 
-	nl = strchr(last_cmd, '\n');
-	if (nl != NULL)
-		*nl = '\0';
+	if (last_cmd[len - 1] == '\n')
+		last_cmd[len - 1] = 0;
 
-	return (ssize_t)len;
+	return count;
 }
 
 static const struct file_operations clkdbg_fops = {
@@ -2233,8 +1976,8 @@ static int __init clkdbg_debug_init(void)
 {
 	struct proc_dir_entry *entry;
 
-	entry = proc_create("clkdbg", 0644, NULL, &clkdbg_fops);
-	if (entry == 0)
+	entry = proc_create("clkdbg", 0, 0, &clkdbg_fops);
+	if (!entry)
 		return -ENOMEM;
 
 	set_clkdbg_flag(CLKDBG_EN_SUSPEND_SAVE_3);

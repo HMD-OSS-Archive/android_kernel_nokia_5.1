@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/file.c
  *
@@ -13,7 +12,7 @@
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/time.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/file.h>
@@ -24,12 +23,26 @@
 #include <linux/rcupdate.h>
 #include <linux/workqueue.h>
 
-unsigned int sysctl_nr_open __read_mostly = 1024*1024;
-unsigned int sysctl_nr_open_min = BITS_PER_LONG;
-/* our min() is unusable in constant expressions ;-/ */
-#define __const_min(x, y) ((x) < (y) ? (x) : (y))
-unsigned int sysctl_nr_open_max =
-	__const_min(INT_MAX, ~(size_t)0/sizeof(void *)) & -BITS_PER_LONG;
+int sysctl_nr_open __read_mostly = 1024*1024;
+int sysctl_nr_open_min = BITS_PER_LONG;
+/* our max() is unusable in constant expressions ;-/ */
+#define __const_max(x, y) ((x) < (y) ? (x) : (y))
+int sysctl_nr_open_max = __const_max(INT_MAX, ~(size_t)0/sizeof(void *)) &
+			 -BITS_PER_LONG;
+
+static void *alloc_fdmem(size_t size)
+{
+	/*
+	 * Very large allocations can stress page reclaim, so fall back to
+	 * vmalloc() if the allocation size will be considered "large" by the VM.
+	 */
+	if (size <= (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)) {
+		void *data = kmalloc(size, GFP_KERNEL|__GFP_NOWARN|__GFP_NORETRY);
+		if (data != NULL)
+			return data;
+	}
+	return vmalloc(size);
+}
 
 static void __free_fdtable(struct fdtable *fdt)
 {
@@ -43,35 +56,9 @@ static void free_fdtable_rcu(struct rcu_head *rcu)
 	__free_fdtable(container_of(rcu, struct fdtable, rcu));
 }
 
-#define BITBIT_NR(nr)	BITS_TO_LONGS(BITS_TO_LONGS(nr))
-#define BITBIT_SIZE(nr)	(BITBIT_NR(nr) * sizeof(long))
-
 /*
- * Copy 'count' fd bits from the old table to the new table and clear the extra
- * space if any.  This does not copy the file pointers.  Called with the files
- * spinlock held for write.
- */
-static void copy_fd_bitmaps(struct fdtable *nfdt, struct fdtable *ofdt,
-			    unsigned int count)
-{
-	unsigned int cpy, set;
-
-	cpy = count / BITS_PER_BYTE;
-	set = (nfdt->max_fds - count) / BITS_PER_BYTE;
-	memcpy(nfdt->open_fds, ofdt->open_fds, cpy);
-	memset((char *)nfdt->open_fds + cpy, 0, set);
-	memcpy(nfdt->close_on_exec, ofdt->close_on_exec, cpy);
-	memset((char *)nfdt->close_on_exec + cpy, 0, set);
-
-	cpy = BITBIT_SIZE(count);
-	set = BITBIT_SIZE(nfdt->max_fds) - cpy;
-	memcpy(nfdt->full_fds_bits, ofdt->full_fds_bits, cpy);
-	memset((char *)nfdt->full_fds_bits + cpy, 0, set);
-}
-
-/*
- * Copy all file descriptors from the old table to the new, expanded table and
- * clear the extra space.  Called with the files spinlock held for write.
+ * Expand the fdset in the files_struct.  Called with the files spinlock
+ * held for write.
  */
 static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 {
@@ -82,9 +69,14 @@ static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 	cpy = ofdt->max_fds * sizeof(struct file *);
 	set = (nfdt->max_fds - ofdt->max_fds) * sizeof(struct file *);
 	memcpy(nfdt->fd, ofdt->fd, cpy);
-	memset((char *)nfdt->fd + cpy, 0, set);
+	memset((char *)(nfdt->fd) + cpy, 0, set);
 
-	copy_fd_bitmaps(nfdt, ofdt, ofdt->max_fds);
+	cpy = ofdt->max_fds / BITS_PER_BYTE;
+	set = (nfdt->max_fds - ofdt->max_fds) / BITS_PER_BYTE;
+	memcpy(nfdt->open_fds, ofdt->open_fds, cpy);
+	memset((char *)(nfdt->open_fds) + cpy, 0, set);
+	memcpy(nfdt->close_on_exec, ofdt->close_on_exec, cpy);
+	memset((char *)(nfdt->close_on_exec) + cpy, 0, set);
 }
 
 static struct fdtable * alloc_fdtable(unsigned int nr)
@@ -113,25 +105,22 @@ static struct fdtable * alloc_fdtable(unsigned int nr)
 	if (unlikely(nr > sysctl_nr_open))
 		nr = ((sysctl_nr_open - 1) | (BITS_PER_LONG - 1)) + 1;
 
-	fdt = kmalloc(sizeof(struct fdtable), GFP_KERNEL_ACCOUNT);
+	fdt = kmalloc(sizeof(struct fdtable), GFP_KERNEL);
 	if (!fdt)
 		goto out;
 	fdt->max_fds = nr;
-	data = kvmalloc_array(nr, sizeof(struct file *), GFP_KERNEL_ACCOUNT);
+	data = alloc_fdmem(nr * sizeof(struct file *));
 	if (!data)
 		goto out_fdt;
 	fdt->fd = data;
 
-	data = kvmalloc(max_t(size_t,
-				 2 * nr / BITS_PER_BYTE + BITBIT_SIZE(nr), L1_CACHE_BYTES),
-				 GFP_KERNEL_ACCOUNT);
+	data = alloc_fdmem(max_t(size_t,
+				 2 * nr / BITS_PER_BYTE, L1_CACHE_BYTES));
 	if (!data)
 		goto out_arr;
 	fdt->open_fds = data;
 	data += nr / BITS_PER_BYTE;
 	fdt->close_on_exec = data;
-	data += nr / BITS_PER_BYTE;
-	fdt->full_fds_bits = data;
 
 	return fdt;
 
@@ -150,7 +139,7 @@ out:
  * Return <0 error code on error; 1 on successful completion.
  * The files->file_lock should be held on entry, and will be held on exit.
  */
-static int expand_fdtable(struct files_struct *files, unsigned int nr)
+static int expand_fdtable(struct files_struct *files, int nr)
 	__releases(files->file_lock)
 	__acquires(files->file_lock)
 {
@@ -158,13 +147,6 @@ static int expand_fdtable(struct files_struct *files, unsigned int nr)
 
 	spin_unlock(&files->file_lock);
 	new_fdt = alloc_fdtable(nr);
-
-	/* make sure all __fd_install() have seen resize_in_progress
-	 * or have finished their rcu_read_lock_sched() section.
-	 */
-	if (atomic_read(&files->count) > 1)
-		synchronize_sched();
-
 	spin_lock(&files->file_lock);
 	if (!new_fdt)
 		return -ENOMEM;
@@ -176,14 +158,21 @@ static int expand_fdtable(struct files_struct *files, unsigned int nr)
 		__free_fdtable(new_fdt);
 		return -EMFILE;
 	}
+	/*
+	 * Check again since another task may have expanded the fd table while
+	 * we dropped the lock
+	 */
 	cur_fdt = files_fdtable(files);
-	BUG_ON(nr < cur_fdt->max_fds);
-	copy_fdtable(new_fdt, cur_fdt);
-	rcu_assign_pointer(files->fdt, new_fdt);
-	if (cur_fdt != &files->fdtab)
-		call_rcu(&cur_fdt->rcu, free_fdtable_rcu);
-	/* coupled with smp_rmb() in __fd_install() */
-	smp_wmb();
+	if (nr >= cur_fdt->max_fds) {
+		/* Continue as planned */
+		copy_fdtable(new_fdt, cur_fdt);
+		rcu_assign_pointer(files->fdt, new_fdt);
+		if (cur_fdt != &files->fdtab)
+			call_rcu(&cur_fdt->rcu, free_fdtable_rcu);
+	} else {
+		/* Somebody else expanded, so undo our attempt */
+		__free_fdtable(new_fdt);
+	}
 	return 1;
 }
 
@@ -195,70 +184,48 @@ static int expand_fdtable(struct files_struct *files, unsigned int nr)
  * expanded and execution may have blocked.
  * The files->file_lock should be held on entry, and will be held on exit.
  */
-static int expand_files(struct files_struct *files, unsigned int nr)
-	__releases(files->file_lock)
-	__acquires(files->file_lock)
+static int expand_files(struct files_struct *files, int nr)
 {
 	struct fdtable *fdt;
-	int expanded = 0;
 
-repeat:
 	fdt = files_fdtable(files);
 
 	/* Do we need to expand? */
 	if (nr < fdt->max_fds)
-		return expanded;
+		return 0;
 
 	/* Can we expand? */
 	if (nr >= sysctl_nr_open)
 		return -EMFILE;
 
-	if (unlikely(files->resize_in_progress)) {
-		spin_unlock(&files->file_lock);
-		expanded = 1;
-		wait_event(files->resize_wait, !files->resize_in_progress);
-		spin_lock(&files->file_lock);
-		goto repeat;
-	}
-
 	/* All good, so we try */
-	files->resize_in_progress = true;
-	expanded = expand_fdtable(files, nr);
-	files->resize_in_progress = false;
-
-	wake_up_all(&files->resize_wait);
-	return expanded;
+	return expand_fdtable(files, nr);
 }
 
-static inline void __set_close_on_exec(unsigned int fd, struct fdtable *fdt)
+static inline void __set_close_on_exec(int fd, struct fdtable *fdt)
 {
 	__set_bit(fd, fdt->close_on_exec);
 }
 
-static inline void __clear_close_on_exec(unsigned int fd, struct fdtable *fdt)
+static inline void __clear_close_on_exec(int fd, struct fdtable *fdt)
 {
-	if (test_bit(fd, fdt->close_on_exec))
-		__clear_bit(fd, fdt->close_on_exec);
+	__clear_bit(fd, fdt->close_on_exec);
 }
 
-static inline void __set_open_fd(unsigned int fd, struct fdtable *fdt)
+static inline void __set_open_fd(int fd, struct fdtable *fdt)
 {
 	__set_bit(fd, fdt->open_fds);
-	fd /= BITS_PER_LONG;
-	if (!~fdt->open_fds[fd])
-		__set_bit(fd, fdt->full_fds_bits);
 }
 
-static inline void __clear_open_fd(unsigned int fd, struct fdtable *fdt)
+static inline void __clear_open_fd(int fd, struct fdtable *fdt)
 {
 	__clear_bit(fd, fdt->open_fds);
-	__clear_bit(fd / BITS_PER_LONG, fdt->full_fds_bits);
 }
 
-static unsigned int count_open_files(struct fdtable *fdt)
+static int count_open_files(struct fdtable *fdt)
 {
-	unsigned int size = fdt->max_fds;
-	unsigned int i;
+	int size = fdt->max_fds;
+	int i;
 
 	/* Find the last open fd */
 	for (i = size / BITS_PER_LONG; i > 0; ) {
@@ -278,7 +245,7 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 {
 	struct files_struct *newf;
 	struct file **old_fds, **new_fds;
-	unsigned int open_files, i;
+	int open_files, size, i;
 	struct fdtable *old_fdt, *new_fdt;
 
 	*errorp = -ENOMEM;
@@ -289,14 +256,11 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 	atomic_set(&newf->count, 1);
 
 	spin_lock_init(&newf->file_lock);
-	newf->resize_in_progress = false;
-	init_waitqueue_head(&newf->resize_wait);
 	newf->next_fd = 0;
 	new_fdt = &newf->fdtab;
 	new_fdt->max_fds = NR_OPEN_DEFAULT;
 	new_fdt->close_on_exec = newf->close_on_exec_init;
 	new_fdt->open_fds = newf->open_fds_init;
-	new_fdt->full_fds_bits = newf->full_fds_bits_init;
 	new_fdt->fd = &newf->fd_array[0];
 
 	spin_lock(&oldf->file_lock);
@@ -335,10 +299,11 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 		open_files = count_open_files(old_fdt);
 	}
 
-	copy_fd_bitmaps(new_fdt, old_fdt, open_files);
-
 	old_fds = old_fdt->fd;
 	new_fds = new_fdt->fd;
+
+	memcpy(new_fdt->open_fds, old_fdt->open_fds, open_files / 8);
+	memcpy(new_fdt->close_on_exec, old_fdt->close_on_exec, open_files / 8);
 
 	for (i = open_files; i != 0; i--) {
 		struct file *f = *old_fds++;
@@ -357,8 +322,19 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 	}
 	spin_unlock(&oldf->file_lock);
 
-	/* clear the remainder */
-	memset(new_fds, 0, (new_fdt->max_fds - open_files) * sizeof(struct file *));
+	/* compute the remainder to be cleared */
+	size = (new_fdt->max_fds - open_files) * sizeof(struct file *);
+
+	/* This is long word aligned thus could use a optimized version */
+	memset(new_fds, 0, size);
+
+	if (new_fdt->max_fds > open_files) {
+		int left = (new_fdt->max_fds - open_files) / 8;
+		int start = open_files / BITS_PER_LONG;
+
+		memset(&new_fdt->open_fds[start], 0, left);
+		memset(&new_fdt->close_on_exec[start], 0, left);
+	}
 
 	rcu_assign_pointer(newf->fdt, new_fdt);
 
@@ -378,7 +354,7 @@ static struct fdtable *close_files(struct files_struct * files)
 	 * files structure.
 	 */
 	struct fdtable *fdt = rcu_dereference_raw(files->fdt);
-	unsigned int i, j = 0;
+	int i, j = 0;
 
 	for (;;) {
 		unsigned long set;
@@ -459,25 +435,143 @@ struct files_struct init_files = {
 		.fd		= &init_files.fd_array[0],
 		.close_on_exec	= init_files.close_on_exec_init,
 		.open_fds	= init_files.open_fds_init,
-		.full_fds_bits	= init_files.full_fds_bits_init,
 	},
 	.file_lock	= __SPIN_LOCK_UNLOCKED(init_files.file_lock),
-	.resize_wait	= __WAIT_QUEUE_HEAD_INITIALIZER(init_files.resize_wait),
 };
 
-static unsigned int find_next_fd(struct fdtable *fdt, unsigned int start)
-{
-	unsigned int maxfd = fdt->max_fds;
-	unsigned int maxbit = maxfd / BITS_PER_LONG;
-	unsigned int bitbit = start / BITS_PER_LONG;
+#ifdef FD_OVER_CHECK
+#define FD_CHECK_NAME_SIZE 256
+/* Declare a radix tree to construct fd set tree */
+static RADIX_TREE(over_fd_tree, GFP_KERNEL);
+static LIST_HEAD(fd_listhead);
+static DEFINE_MUTEX(over_fd_mutex);
+static int dump_current_open_files;
 
-	bitbit = find_next_zero_bit(fdt->full_fds_bits, maxbit, bitbit) * BITS_PER_LONG;
-	if (bitbit > maxfd)
-		return maxfd;
-	if (bitbit > start)
-		start = bitbit;
-	return find_next_zero_bit(fdt->open_fds, maxfd, start);
+struct over_fd_entry {
+	int num_of_fd;
+	char name[FD_CHECK_NAME_SIZE];
+	int hash;
+	struct list_head fd_link;
+};
+
+/*
+* Get File Name from FD value
+*/
+static long get_file_name_from_fd(struct files_struct *files, int fd, int procid, struct over_fd_entry *res_name)
+{
+	char *tmp;
+	char *pathname;
+	struct file *file;
+	struct path path;
+
+	spin_lock(&files->file_lock);
+	file = fget(fd);
+	if (!file) {
+		spin_unlock(&files->file_lock);
+		return 0;
+	}
+	path_get(&file->f_path);
+	path = file->f_path;
+	fput(file);
+	spin_unlock(&files->file_lock);
+	tmp = (char *)__get_free_page(GFP_TEMPORARY);
+	if (!tmp)
+		return 0;
+
+	pathname = d_path(&path, tmp, PAGE_SIZE);
+	path_put(&path);
+
+	if (IS_ERR(pathname)) {
+		free_page((unsigned long)tmp);
+		return PTR_ERR(pathname);
+	}  /* do something here with pathname */
+
+	if (pathname != NULL)
+		strncpy(res_name->name, pathname, FD_CHECK_NAME_SIZE - 1);
+
+	free_page((unsigned long)tmp);
+	return 1;
 }
+
+static unsigned int get_hash(char *name)
+{
+	return full_name_hash(name, strlen(name));
+}
+
+static struct over_fd_entry *fd_lookup(unsigned int hash)
+{
+	return radix_tree_lookup(&over_fd_tree, hash);
+}
+
+static void fd_insert(struct over_fd_entry *entry)
+{
+	unsigned int hash = get_hash(entry->name);
+	struct over_fd_entry *find_entry = fd_lookup(hash);
+
+	if (!find_entry) {	/* Can't find the element, just add the element */
+		entry->num_of_fd = 1;
+		entry->hash = hash;
+		list_add_tail(&entry->fd_link, &fd_listhead);
+		radix_tree_insert(&over_fd_tree, hash, (void *)entry);
+	} else {	/* Cover the original element */
+		find_entry->num_of_fd = find_entry->num_of_fd+1;
+		kfree(entry);
+	}
+}
+
+static void fd_delete(unsigned int hash)
+{
+	radix_tree_delete(&over_fd_tree, hash);
+}
+
+void fd_show_open_files(pid_t pid, struct files_struct *files, struct fdtable *fdt)
+{
+	int i = 0;
+	struct over_fd_entry *lentry;
+	long result;
+	int num_of_entry;
+	int sum_fds_of_pid = 0;
+
+	mutex_lock(&over_fd_mutex);
+	/* pr_err("(PID:%d)Max FD Number:%d", current->pid, fdt->max_fds);*/
+	for (i = 0; i < fdt->max_fds; i++) {
+		struct over_fd_entry *entry = kzalloc(sizeof(struct over_fd_entry), GFP_KERNEL);
+
+		if (entry) {
+			memset(entry->name, 0, sizeof(entry->name));
+			result = get_file_name_from_fd(files, i, pid, entry);
+			if (result == 1) {
+				fd_insert(entry);
+				sum_fds_of_pid++;
+			}
+		}
+	}
+
+	for (; ;) {
+		if (list_empty(&fd_listhead))
+			break;
+
+		lentry = list_entry((&fd_listhead)->next, struct over_fd_entry, fd_link);
+		if (lentry != NULL) {
+			num_of_entry = lentry->num_of_fd;
+			if (lentry->name != NULL)
+				pr_err("[FDLEAK]OverAllocFDError(PID:%d fileName:%s Num:%d)\n",
+						pid, lentry->name, num_of_entry);
+			else
+				pr_err("[FDLEAK]OverAllocFDError(PID:%d fileName:%s Num:%d)\n",
+						pid, "NULL", num_of_entry);
+			list_del((&fd_listhead)->next);
+			fd_delete(lentry->hash);
+			kfree(lentry);
+		}
+	}
+
+	if (sum_fds_of_pid)
+		pr_err("[FDLEAK]OverAllocFDError(PID:%d totalFDs:%d)\n", pid, sum_fds_of_pid);
+
+	mutex_unlock(&over_fd_mutex);
+}
+#endif
 
 /*
  * allocate a file descriptor, mark it busy.
@@ -497,7 +591,7 @@ repeat:
 		fd = files->next_fd;
 
 	if (fd < fdt->max_fds)
-		fd = find_next_fd(fdt, fd);
+		fd = find_next_zero_bit(fdt->open_fds, fdt->max_fds, fd);
 
 	/*
 	 * N.B. For clone tasks sharing a files structure, this test
@@ -537,6 +631,17 @@ repeat:
 
 out:
 	spin_unlock(&files->file_lock);
+#ifdef FD_OVER_CHECK
+	if (error == -EMFILE && !dump_current_open_files) {
+		/*add Backbone into FD white list for skype*/
+		/*if (strcmp(current->comm, "Backbone") != 0) {*/
+		dump_current_open_files = 0x1;
+		pr_err("[FDLEAK][%d:%s]fd over RLIMIT_NOFILE:%ld\n",
+			current->pid, current->comm, rlimit(RLIMIT_NOFILE));
+		fd_show_open_files(current->pid, files, fdt);
+		/*}*/
+	}
+#endif
 	return error;
 }
 
@@ -593,21 +698,11 @@ void __fd_install(struct files_struct *files, unsigned int fd,
 		struct file *file)
 {
 	struct fdtable *fdt;
-
-	might_sleep();
-	rcu_read_lock_sched();
-
-	while (unlikely(files->resize_in_progress)) {
-		rcu_read_unlock_sched();
-		wait_event(files->resize_wait, !files->resize_in_progress);
-		rcu_read_lock_sched();
-	}
-	/* coupled with smp_wmb() in expand_fdtable() */
-	smp_rmb();
-	fdt = rcu_dereference_sched(files->fdt);
+	spin_lock(&files->file_lock);
+	fdt = files_fdtable(files);
 	BUG_ON(fdt->fd[fd] != NULL);
 	rcu_assign_pointer(fdt->fd[fd], file);
-	rcu_read_unlock_sched();
+	spin_unlock(&files->file_lock);
 }
 
 void fd_install(unsigned int fd, struct file *file)
@@ -685,17 +780,12 @@ static struct file *__fget(unsigned int fd, fmode_t mask)
 	struct file *file;
 
 	rcu_read_lock();
-loop:
 	file = fcheck_files(files, fd);
 	if (file) {
-		/* File object ref couldn't be taken.
-		 * dup2() atomicity guarantee is the reason
-		 * we loop to catch the new file (or NULL pointer)
-		 */
-		if (file->f_mode & mask)
+		/* File object ref couldn't be taken */
+		if ((file->f_mode & mask) ||
+		    !atomic_long_inc_not_zero(&file->f_count))
 			file = NULL;
-		else if (!get_file_rcu(file))
-			goto loop;
 	}
 	rcu_read_unlock();
 
@@ -770,11 +860,6 @@ unsigned long __fdget_pos(unsigned int fd)
 		}
 	}
 	return v;
-}
-
-void __f_unlock_pos(struct file *f)
-{
-	mutex_unlock(&f->f_pos_lock);
 }
 
 /*
@@ -929,7 +1014,7 @@ SYSCALL_DEFINE1(dup, unsigned int, fildes)
 	struct file *file = fget_raw(fildes);
 
 	if (file) {
-		ret = get_unused_fd_flags(0);
+		ret = get_unused_fd();
 		if (ret >= 0)
 			fd_install(ret, file);
 		else

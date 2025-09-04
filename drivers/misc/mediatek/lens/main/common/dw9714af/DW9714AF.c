@@ -17,38 +17,36 @@
  *
  */
 
-#include <linux/delay.h>
-#include <linux/fs.h>
 #include <linux/i2c.h>
+#include <linux/delay.h>
 #include <linux/uaccess.h>
+#include <linux/fs.h>
 
 #include "lens_info.h"
 
-// added for slop control 20180607 [
-#include <linux/hrtimer.h>
-#include <linux/ktime.h>
-// added for slop control 20180607 ]
 
 #define AF_DRVNAME "DW9714AF_DRV"
-#define AF_I2C_SLAVE_ADDR 0x18
+#define AF_I2C_SLAVE_ADDR        0x18
 
 #define AF_DEBUG
 #ifdef AF_DEBUG
-#define LOG_INF(format, args...)                                               \
-	pr_debug(AF_DRVNAME " [%s] " format, __func__, ##args)
+#define LOG_INF(format, args...) pr_debug(AF_DRVNAME " [%s] " format, __func__, ##args)
 #else
 #define LOG_INF(format, args...)
 #endif
 
+
 static struct i2c_client *g_pstAF_I2Cclient;
 static int *g_pAF_Opened;
 static spinlock_t *g_pAF_SpinLock;
+extern struct stAF_MotorInfo proc_stMotorInfo;
 
-static unsigned long g_u4AF_INF = 0; // modified to fix AF init fail 20180409
+static unsigned long g_u4AF_INF;
 static unsigned long g_u4AF_MACRO = 1023;
+static unsigned long g_u4TargetPosition;
 static unsigned long g_u4CurrPosition;
+static int g_sr = 4; 
 
-#if 0
 static int s4AF_ReadReg(unsigned short *a_pu2Result)
 {
 	int i4RetValue = 0;
@@ -65,18 +63,16 @@ static int s4AF_ReadReg(unsigned short *a_pu2Result)
 		return -1;
 	}
 
-	*a_pu2Result = (((u16)pBuff[0]) << 4) + (pBuff[1] >> 4);
+	*a_pu2Result = (((u16) pBuff[0]) << 4) + (pBuff[1] >> 4);
 
 	return 0;
 }
-#endif
 
 static int s4AF_WriteReg(u16 a_u2Data)
 {
 	int i4RetValue = 0;
 
-	char puSendCmd[2] = {(char)(a_u2Data >> 4),
-			     (char)((a_u2Data & 0xF) << 4)};
+	char puSendCmd[2] = { (char)(a_u2Data >> 4), (char)(((a_u2Data & 0xF) << 4)+g_sr) };
 
 	g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
 
@@ -91,27 +87,7 @@ static int s4AF_WriteReg(u16 a_u2Data)
 
 	return 0;
 }
-// added for slop control 20180607 [
-static int s4AF_WriteReg_16bit(u16 a_u2Data)
-{
-	int i4RetValue = 0;
 
-	char puSendCmd[2] = { (char)(a_u2Data >> 8), (char)(a_u2Data & 0xFF) };
-
-	g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
-
-	g_pstAF_I2Cclient->addr = g_pstAF_I2Cclient->addr >> 1;
-
-	i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puSendCmd, 2);
-
-	if (i4RetValue < 0) {
-		LOG_INF("I2C send failed!!\n");
-		return -1;
-	}
-
-	return 0;
-}
-// added for slop control 20180607 ]
 static inline int getAFInfo(__user struct stAF_MotorInfo *pstMotorInfo)
 {
 	struct stAF_MotorInfo stMotorInfo;
@@ -128,42 +104,77 @@ static inline int getAFInfo(__user struct stAF_MotorInfo *pstMotorInfo)
 	else
 		stMotorInfo.bIsMotorOpen = 0;
 
-	if (copy_to_user(pstMotorInfo, &stMotorInfo,
-			 sizeof(struct stAF_MotorInfo)))
+	if (copy_to_user(pstMotorInfo, &stMotorInfo, sizeof(struct stAF_MotorInfo)))
 		LOG_INF("copy to user failed when getting motor information\n");
 
 	return 0;
 }
 
-/* initAF include driver initialization and standby mode */
-static int initAF(void)
+static inline int moveAF(unsigned long a_u4Position)
 {
-	LOG_INF("+\n");
+	int ret = 0;
+
+	if ((a_u4Position > g_u4AF_MACRO) || (a_u4Position < g_u4AF_INF)) {
+		LOG_INF("out of range\n");
+		return -EINVAL;
+	}
 
 	if (*g_pAF_Opened == 1) {
+		unsigned short InitPos;
+		
+		char puSendCmd2[2] = { 0xEC, 0xA3 };
+		char puSendCmd3[2] = { 0xA1, 0x0D };
+		char puSendCmd4[2] = { 0xF2, 0x00 };
+		char puSendCmd5[2] = { 0xDC, 0x51 };
+		
+	g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
+	g_pstAF_I2Cclient->addr = g_pstAF_I2Cclient->addr >> 1;
+
+		i2c_master_send(g_pstAF_I2Cclient, puSendCmd2, 2);
+		i2c_master_send(g_pstAF_I2Cclient, puSendCmd3, 2);
+		i2c_master_send(g_pstAF_I2Cclient, puSendCmd4, 2);
+		i2c_master_send(g_pstAF_I2Cclient, puSendCmd5, 2);
+		
+
+		ret = s4AF_ReadReg(&InitPos);
+
+		if (ret == 0) {
+			LOG_INF("Init Pos %6d\n", InitPos);
+
+			spin_lock(g_pAF_SpinLock);
+			g_u4CurrPosition = (unsigned long)InitPos;
+			spin_unlock(g_pAF_SpinLock);
+
+		} else {
+			spin_lock(g_pAF_SpinLock);
+			g_u4CurrPosition = 0;
+			spin_unlock(g_pAF_SpinLock);
+		}
 
 		spin_lock(g_pAF_SpinLock);
 		*g_pAF_Opened = 2;
 		spin_unlock(g_pAF_SpinLock);
 	}
 
-	LOG_INF("-\n");
+	if (g_u4CurrPosition == a_u4Position)
+		return 0;
 
-	return 0;
-}
+	spin_lock(g_pAF_SpinLock);
+	g_u4TargetPosition = a_u4Position;
+	spin_unlock(g_pAF_SpinLock);
 
-/* moveAF only use to control moving the motor */
-static inline int moveAF(unsigned long a_u4Position)
-{
-	int ret = 0;
+	/* LOG_INF("move [curr] %d [target] %d\n", g_u4CurrPosition, g_u4TargetPosition); */
 
-	if (s4AF_WriteReg((unsigned short)a_u4Position) == 0) {
-		g_u4CurrPosition = a_u4Position;
-		ret = 0;
+
+	if (s4AF_WriteReg((unsigned short)g_u4TargetPosition) == 0) {
+		spin_lock(g_pAF_SpinLock);
+		g_u4CurrPosition = (unsigned long)g_u4TargetPosition;
+		spin_unlock(g_pAF_SpinLock);
 	} else {
 		LOG_INF("set I2C failed when moving the motor\n");
 		ret = -1;
 	}
+	proc_stMotorInfo.u4CurrentPosition = g_u4CurrPosition;
 
 	return ret;
 }
@@ -172,6 +183,7 @@ static inline int setAFInf(unsigned long a_u4Position)
 {
 	spin_lock(g_pAF_SpinLock);
 	g_u4AF_INF = a_u4Position;
+	proc_stMotorInfo.u4InfPosition = g_u4AF_INF;
 	spin_unlock(g_pAF_SpinLock);
 	return 0;
 }
@@ -180,20 +192,19 @@ static inline int setAFMacro(unsigned long a_u4Position)
 {
 	spin_lock(g_pAF_SpinLock);
 	g_u4AF_MACRO = a_u4Position;
+	proc_stMotorInfo.u4MacroPosition = g_u4AF_MACRO;
 	spin_unlock(g_pAF_SpinLock);
 	return 0;
 }
 
 /* ////////////////////////////////////////////////////////////// */
-long DW9714AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
-		    unsigned long a_u4Param)
+long DW9714AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command, unsigned long a_u4Param)
 {
 	long i4RetValue = 0;
 
 	switch (a_u4Command) {
 	case AFIOC_G_MOTORINFO:
-		i4RetValue =
-			getAFInfo((__user struct stAF_MotorInfo *)(a_u4Param));
+		i4RetValue = getAFInfo((__user struct stAF_MotorInfo *) (a_u4Param));
 		break;
 
 	case AFIOC_T_MOVETO:
@@ -207,11 +218,7 @@ long DW9714AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
 	case AFIOC_T_SETMACROPOS:
 		i4RetValue = setAFMacro(a_u4Param);
 		break;
-// modified to fix AF init fail 20180409 [
-	case AFIOC_S_SETPARA:
-		LOG_INF("No AFIOC_S_SETPARA CMD\n");
-		break;
-// modified to fix AF init fail 20180409 ]
+
 	default:
 		LOG_INF("No CMD\n");
 		i4RetValue = -EPERM;
@@ -221,25 +228,6 @@ long DW9714AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
 	return i4RetValue;
 }
 
-int DW9714AF_LSC_Mode(void)
-{
-	LOG_INF("DW9714AF_LSC_Mode Start\n");
-
-       if (s4AF_WriteReg_16bit(0xECA3) == -1)
-       {
-           s4AF_WriteReg_16bit(0xECA3);
-           LOG_INF("retry DW9714AF_LSC_Mode 0xECA3\n");
-       }
-       s4AF_WriteReg_16bit(0xA104);
-       s4AF_WriteReg_16bit(0xF2C0);
-       s4AF_WriteReg_16bit(0xDC51);
-       s4AF_WriteReg_16bit(0x0006);
-
-	LOG_INF("DW9714AF_LSC_Mode End\n");
-	
-	return 1;
-}
-
 /* Main jobs: */
 /* 1.Deallocate anything that "open" allocated in private_data. */
 /* 2.Shut down the device on last close. */
@@ -247,21 +235,30 @@ int DW9714AF_LSC_Mode(void)
 /* Q1 : Try release multiple times. */
 int DW9714AF_Release(struct inode *a_pstInode, struct file *a_pstFile)
 {
-	LOG_INF("Start\n");
-
-	// add for LSC mode
-	DW9714AF_LSC_Mode();
-	usleep_range(100000, 110000);
-
+	LOG_INF("Start,*g_pAF_Opened = %d \n",*g_pAF_Opened);
 	if (*g_pAF_Opened == 2) {
-		LOG_INF("Wait\n");
-		//s4AF_WriteReg(0x80); /* Power down mode */
-		s4AF_WriteReg_16bit(0x8000); /* Power down mode */ // added for slop control 20180607
+		g_sr = 5; 
+		s4AF_WriteReg(400);
+		mdelay(15);
+		s4AF_WriteReg(370);
+		mdelay(15);
+		s4AF_WriteReg(330);
+		mdelay(15);
+		s4AF_WriteReg(300);
+		mdelay(12);
+		s4AF_WriteReg(260);
+		mdelay(12);
+		s4AF_WriteReg(220);
+		mdelay(12);
+		s4AF_WriteReg(180);
+		mdelay(12);
+		s4AF_WriteReg(140);
+		mdelay(12);
+		s4AF_WriteReg(100);
+		mdelay(12);
 	}
-
 	if (*g_pAF_Opened) {
 		LOG_INF("Free\n");
-
 		spin_lock(g_pAF_SpinLock);
 		*g_pAF_Opened = 0;
 		spin_unlock(g_pAF_SpinLock);
@@ -271,57 +268,12 @@ int DW9714AF_Release(struct inode *a_pstInode, struct file *a_pstFile)
 
 	return 0;
 }
-// added for slop control 20180607 [
-int DW9714AF_Init(void)
+
+int DW9714AF_SetI2Cclient(struct i2c_client *pstAF_I2Cclient, spinlock_t *pAF_SpinLock, int *pAF_Opened)
 {
-	LOG_INF("DW9714AF_Init Start\n");
-
-       if (s4AF_WriteReg_16bit(0x8000) == -1)
-       {
-           s4AF_WriteReg_16bit(0x8000);
-           LOG_INF("DW9714AF_Init retry WriteReg_16bit 0x8000\n");
-       }
-
-       s4AF_WriteReg_16bit(0x0000);
-       usleep_range(100, 110);
-       s4AF_WriteReg_16bit(0xECA3);
-       s4AF_WriteReg_16bit(0xA115);
-       s4AF_WriteReg_16bit(0xF228);
-       s4AF_WriteReg_16bit(0xDC51);
-
-	LOG_INF("DW9714AF_Init End\n");
-
-	return 1;
-}
-// added for slop control 20180607 ]
-int DW9714AF_SetI2Cclient(struct i2c_client *pstAF_I2Cclient,
-			  spinlock_t *pAF_SpinLock, int *pAF_Opened)
-{
-	LOG_INF("DW9714AF_SetI2Cclient Start\n");
 	g_pstAF_I2Cclient = pstAF_I2Cclient;
 	g_pAF_SpinLock = pAF_SpinLock;
 	g_pAF_Opened = pAF_Opened;
 
-	DW9714AF_Init(); // added for slop control 20180607
-	initAF();
-	LOG_INF("DW9714AF_SetI2Cclient End\n");
-	return 1;
-}
-
-int DW9714AF_GetFileName(unsigned char *pFileName)
-{
-	#if SUPPORT_GETTING_LENS_FOLDER_NAME
-	char FilePath[256];
-	char *FileString;
-
-	sprintf(FilePath, "%s", __FILE__);
-	FileString = strrchr(FilePath, '/');
-	*FileString = '\0';
-	FileString = (strrchr(FilePath, '/') + 1);
-	strncpy(pFileName, FileString, AF_MOTOR_NAME);
-	LOG_INF("FileName : %s\n", pFileName);
-	#else
-	pFileName[0] = '\0';
-	#endif
 	return 1;
 }

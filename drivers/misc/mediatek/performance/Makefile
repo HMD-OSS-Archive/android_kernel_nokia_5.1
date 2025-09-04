@@ -1,4 +1,5 @@
-# Copyright (C) 2017 MediaTek Inc.
+#
+# Copyright (C) 2015 MediaTek Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -10,28 +11,16 @@
 # GNU General Public License for more details.
 #
 
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/performance/perf_ioctl/ \
-		    -I$(srctree)/drivers/misc/mediatek/performance/include/ \
-		    -I$(srctree)/drivers/misc/mediatek/base/power/include/ \
+obj-y += fliper/
+obj-y += perfmgr/
+obj-y += legacy_controller/
+obj-y += cpu_loading/
 
-
-obj-y += perfmgr_main.o
-obj-y += base/
-
-ifeq (,$(findstring mt8,$(CONFIG_MTK_PLATFORM)))
-	obj-$(CONFIG_MTK_PERF_OBSERVER) += observer/
-	obj-$(CONFIG_MTK_RESYM) += resym/
-	obj-$(CONFIG_MTK_BASE_POWER) += boost_ctrl/
-	obj-$(CONFIG_MTK_BASE_POWER) += tchbst/
+ifneq ($(CONFIG_MTK_PERFMGR_TOUCH_BOOST),y)
+obj-$(CONFIG_ARCH_MT6735) += perf_ioctl/
+obj-$(CONFIG_ARCH_MT6735M) += perf_ioctl/
+obj-$(CONFIG_ARCH_MT6753) += perf_ioctl/
+#obj-$(CONFIG_ARCH_MT6580) += perf_ioctl/
+obj-$(CONFIG_ARCH_MT6755) += perf_ioctl/
+obj-$(CONFIG_ARCH_MT6797) += perf_ioctl/
 endif
-
-obj-y += perf_ioctl/
-obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3/
-
-ifeq ($(CONFIG_THERMAL),y)
-obj-$(CONFIG_MTK_EARA_THERMAL) += eara_thermal/
-endif
-
-obj-$(CONFIG_MTK_LOAD_TRACKER) += load_track/
-obj-$(CONFIG_MTK_LOAD_TRACKER) += uload_ind/
-

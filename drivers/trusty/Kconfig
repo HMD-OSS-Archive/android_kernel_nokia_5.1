@@ -1,7 +1,9 @@
+#
+# Trusty
+#
+
 menu "Trusty"
 
-# NOTE
-# MTK_ENABLE_GENIEZONE will not select TRUSTY while gz-trusty driving.
 config TRUSTY
 	tristate "Trusty"
 	default n
@@ -34,7 +36,7 @@ config MT_TRUSTY_DEBUGFS
 config TRUSTY_INTERRUPT_MAP
 	tristate "Trusty interrupt map"
 	depends on TRUSTY
-	default y
+	default n
 
 config TRUSTY_INTERRUPT_FIQ_ONLY
 	tristate "Trusty interrupt fiq support"

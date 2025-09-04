@@ -1,5 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0
 # Run headers_$1 command for all suitable architectures
 
 # Stop on error
@@ -19,6 +18,8 @@ archs=${HDR_ARCH_LIST:-$(ls ${srctree}/arch)}
 for arch in ${archs}; do
 	case ${arch} in
 	um)        # no userspace export
+		;;
+	cris)      # headers export are known broken
 		;;
 	*)
 		if [ -d ${srctree}/arch/${arch} ]; then

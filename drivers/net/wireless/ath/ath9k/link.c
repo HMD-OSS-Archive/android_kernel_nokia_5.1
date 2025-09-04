@@ -20,13 +20,20 @@
  * TX polling - checks if the TX engine is stuck somewhere
  * and issues a chip reset if so.
  */
-static bool ath_tx_complete_check(struct ath_softc *sc)
+void ath_tx_complete_poll_work(struct work_struct *work)
 {
+	struct ath_softc *sc = container_of(work, struct ath_softc,
+					    tx_complete_work.work);
 	struct ath_txq *txq;
 	int i;
+	bool needreset = false;
 
-	if (sc->tx99_state)
-		return true;
+
+	if (sc->tx99_state) {
+		ath_dbg(ath9k_hw_common(sc->sc_ah), RESET,
+			"skip tx hung detection on tx99\n");
+		return;
+	}
 
 	for (i = 0; i < IEEE80211_NUM_ACS; i++) {
 		txq = sc->tx.txq_map[i];
@@ -34,36 +41,25 @@ static bool ath_tx_complete_check(struct ath_softc *sc)
 		ath_txq_lock(sc, txq);
 		if (txq->axq_depth) {
 			if (txq->axq_tx_inprogress) {
+				needreset = true;
 				ath_txq_unlock(sc, txq);
-				goto reset;
+				break;
+			} else {
+				txq->axq_tx_inprogress = true;
 			}
-
-			txq->axq_tx_inprogress = true;
 		}
 		ath_txq_unlock(sc, txq);
 	}
 
-	return true;
-
-reset:
-	ath_dbg(ath9k_hw_common(sc->sc_ah), RESET,
-		"tx hung, resetting the chip\n");
-	ath9k_queue_reset(sc, RESET_TYPE_TX_HANG);
-	return false;
-
-}
-
-void ath_hw_check_work(struct work_struct *work)
-{
-	struct ath_softc *sc = container_of(work, struct ath_softc,
-					    hw_check_work.work);
-
-	if (!ath_hw_check(sc) ||
-	    !ath_tx_complete_check(sc))
+	if (needreset) {
+		ath_dbg(ath9k_hw_common(sc->sc_ah), RESET,
+			"tx hung, resetting the chip\n");
+		ath9k_queue_reset(sc, RESET_TYPE_TX_HANG);
 		return;
+	}
 
-	ieee80211_queue_delayed_work(sc->hw, &sc->hw_check_work,
-				     msecs_to_jiffies(ATH_HW_CHECK_POLL_INT));
+	ieee80211_queue_delayed_work(sc->hw, &sc->tx_complete_work,
+				     msecs_to_jiffies(ATH_TX_COMPLETE_POLL_INT));
 }
 
 /*
@@ -176,7 +172,7 @@ static bool ath_paprd_send_frame(struct ath_softc *sc, struct sk_buff *skb, int 
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_common *common = ath9k_hw_common(ah);
 	struct ath_tx_control txctl;
-	unsigned long time_left;
+	int time_left;
 
 	memset(&txctl, 0, sizeof(txctl));
 	txctl.txq = sc->tx.txq_map[IEEE80211_AC_BE];
@@ -375,15 +371,9 @@ void ath_ani_calibrate(unsigned long data)
 
 	/* Perform calibration if necessary */
 	if (longcal || shortcal) {
-		int ret = ath9k_hw_calibrate(ah, ah->curchan, ah->rxchainmask,
-					     longcal);
-		if (ret < 0) {
-			common->ani.caldone = 0;
-			ath9k_queue_reset(sc, RESET_TYPE_CALIBRATION);
-			return;
-		}
-
-		common->ani.caldone = ret;
+		common->ani.caldone =
+			ath9k_hw_calibrate(ah, ah->curchan,
+					   ah->rxchainmask, longcal);
 	}
 
 	ath_dbg(common, ANI,
@@ -520,14 +510,14 @@ int ath_update_survey_stats(struct ath_softc *sc)
 		ath_hw_cycle_counters_update(common);
 
 	if (cc->cycles > 0) {
-		survey->filled |= SURVEY_INFO_TIME |
-			SURVEY_INFO_TIME_BUSY |
-			SURVEY_INFO_TIME_RX |
-			SURVEY_INFO_TIME_TX;
-		survey->time += cc->cycles / div;
-		survey->time_busy += cc->rx_busy / div;
-		survey->time_rx += cc->rx_frame / div;
-		survey->time_tx += cc->tx_frame / div;
+		survey->filled |= SURVEY_INFO_CHANNEL_TIME |
+			SURVEY_INFO_CHANNEL_TIME_BUSY |
+			SURVEY_INFO_CHANNEL_TIME_RX |
+			SURVEY_INFO_CHANNEL_TIME_TX;
+		survey->channel_time += cc->cycles / div;
+		survey->channel_time_busy += cc->rx_busy / div;
+		survey->channel_time_rx += cc->rx_frame / div;
+		survey->channel_time_tx += cc->tx_frame / div;
 	}
 
 	if (cc->cycles < div)

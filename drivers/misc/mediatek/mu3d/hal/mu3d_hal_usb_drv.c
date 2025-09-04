@@ -20,23 +20,16 @@
 #include "mu3d_hal_comm.h"
 #include "mtk-phy.h"
 
-#ifdef SUPPORT_U3
-#include <linux/module.h>
-unsigned int musb_hal_speed = 1;
-module_param_named(hal_speed, musb_hal_speed, uint, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(debug, "USB super speed support for hal layer");
-#endif
-
-struct USB_REQ *mu3d_hal_get_req(int ep_num, enum USB_DIR dir)
+struct USB_REQ *mu3d_hal_get_req(DEV_INT32 ep_num, USB_DIR dir)
 {
-	int ep_index = 0;
+	DEV_INT32 ep_index = 0;
 
 	if (dir == USB_TX)
 		ep_index = ep_num;
 	else if (dir == USB_RX)
 		ep_index = ep_num + MAX_EP_NUM;
 	else
-		WARN_ON(1);
+		BUG_ON(1);
 
 	return &g_u3d_req[ep_index];
 }
@@ -92,16 +85,11 @@ void _ex_mu3d_hal_ssusb_en(void)
 {
 	os_printk(K_DEBUG, "%s\n", __func__);
 
-	/* trigger HW full reset explicitly */
-	os_setmsk(U3D_SSUSB_IP_PW_CTRL0, SSUSB_IP_SW_RST);
-	udelay(1);
-
 	os_clrmsk(U3D_SSUSB_IP_PW_CTRL0, SSUSB_IP_SW_RST);
 	os_clrmsk(U3D_SSUSB_IP_PW_CTRL2, SSUSB_IP_DEV_PDN);
 #ifdef SUPPORT_U3
-	if (musb_hal_speed)
-		os_clrmsk(U3D_SSUSB_U3_CTRL_0P,
-				(SSUSB_U3_PORT_DIS | SSUSB_U3_PORT_PDN | SSUSB_U3_PORT_HOST_SEL));
+	os_clrmsk(U3D_SSUSB_U3_CTRL_0P,
+		  (SSUSB_U3_PORT_DIS | SSUSB_U3_PORT_PDN | SSUSB_U3_PORT_HOST_SEL));
 #endif
 	os_clrmsk(U3D_SSUSB_U2_CTRL_0P,
 		  (SSUSB_U2_PORT_DIS | SSUSB_U2_PORT_PDN | SSUSB_U2_PORT_HOST_SEL));
@@ -120,7 +108,7 @@ void _ex_mu3d_hal_ssusb_en(void)
  */
 void mu3d_hal_dft_reg(void)
 {
-	unsigned int tmp;
+	DEV_UINT32 tmp;
 
 	/* set sys_ck related registers */
 #ifdef NEVER
@@ -216,7 +204,7 @@ void mu3d_hal_dft_reg(void)
  */
 void mu3d_hal_rst_dev(void)
 {
-	int ret;
+	DEV_INT32 ret;
 
 	os_printk(K_DEBUG, "%s\n", __func__);
 
@@ -253,9 +241,9 @@ void mu3d_hal_rst_dev(void)
  * mu3d_hal_check_clk_sts - check sys125,u3 mac,u2 mac clock status
  *
  */
-int mu3d_hal_check_clk_sts(void)
+DEV_INT32 mu3d_hal_check_clk_sts(void)
 {
-	int ret;
+	DEV_INT32 ret;
 
 	os_printk(K_DEBUG, "%s\n", __func__);
 
@@ -275,7 +263,7 @@ int mu3d_hal_check_clk_sts(void)
 	}
 #ifdef SUPPORT_U3
 	/* do not check when SSUSB_U3_PORT_PDN = 1, because U3 port stays in reset state */
-	if (musb_hal_speed && (!(os_readl(U3D_SSUSB_U3_CTRL_0P) & SSUSB_U3_PORT_PDN))) {
+	if (!(os_readl(U3D_SSUSB_U3_CTRL_0P) & SSUSB_U3_PORT_PDN)) {
 		ret =
 		    wait_for_value(U3D_SSUSB_IP_PW_STS1, SSUSB_U3_MAC_RST_B_STS,
 				   SSUSB_U3_MAC_RST_B_STS, 1, 100);
@@ -294,7 +282,7 @@ int mu3d_hal_check_clk_sts(void)
  * mu3d_hal_link_up - u3d link up
  *
  */
-int mu3d_hal_link_up(int latch_val)
+DEV_INT32 mu3d_hal_link_up(DEV_INT32 latch_val)
 {
 	mu3d_hal_ssusb_en();
 	mu3d_hal_rst_dev();
@@ -377,11 +365,8 @@ void mu3d_hal_clear_intr(void)
 	/* Clear U2 USB common interrupt status */
 	os_writel(U3D_COMMON_USB_INTR, 0xFFFFFFFF);
 
-#ifdef SUPPORT_U3
 	/* Clear U3 LTSSM interrupt status */
-	if (musb_hal_speed)
-		os_writel(U3D_LTSSM_INTR, 0xFFFFFFFF);
-#endif
+	os_writel(U3D_LTSSM_INTR, 0xFFFFFFFF);
 }
 
 /**
@@ -390,11 +375,10 @@ void mu3d_hal_clear_intr(void)
  */
 void mu3d_hal_system_intr_en(void)
 {
-	unsigned short int_en;
+	DEV_UINT16 int_en;
 #ifdef SUPPORT_U3
-	unsigned int ltssm_int_en;
+	DEV_UINT32 ltssm_int_en;
 #endif
-
 	os_printk(K_ERR, "%s\n", __func__);
 
 	/* Disable All endpoint interrupt */
@@ -457,11 +441,10 @@ void mu3d_hal_system_intr_en(void)
 
 void _ex_mu3d_hal_system_intr_en(void)
 {
-	unsigned short int_en;
+	DEV_UINT16 int_en;
 #ifdef SUPPORT_U3
-	unsigned int ltssm_int_en;
+	DEV_UINT32 ltssm_int_en;
 #endif
-
 	os_printk(K_DEBUG, "%s\n", __func__);
 
 	/* Disable All endpoint interrupt */
@@ -482,23 +465,21 @@ void _ex_mu3d_hal_system_intr_en(void)
 	os_writel(U3D_COMMON_USB_INTR_ENABLE, int_en);
 
 #ifdef SUPPORT_U3
-	if (musb_hal_speed) {
-		/* Disable U3 LTSSM interrupts */
-		os_writel(U3D_LTSSM_INTR_ENABLE, 0x00);
-		os_printk(K_ERR, "U3D_LTSSM_INTR: %x\n", os_readl(U3D_LTSSM_INTR));
+	/* Disable U3 LTSSM interrupts */
+	os_writel(U3D_LTSSM_INTR_ENABLE, 0x00);
+	os_printk(K_ERR, "U3D_LTSSM_INTR: %x\n", os_readl(U3D_LTSSM_INTR));
 
-		/* Clear U3 LTSSM interrupts */
-		os_writel(U3D_LTSSM_INTR, os_readl(U3D_LTSSM_INTR));
+	/* Clear U3 LTSSM interrupts */
+	os_writel(U3D_LTSSM_INTR, os_readl(U3D_LTSSM_INTR));
 
-		/* Enable U3 LTSSM interrupts */
-		ltssm_int_en =
-			SS_INACTIVE_INTR_EN | SS_DISABLE_INTR_EN | COMPLIANCE_INTR_EN | LOOPBACK_INTR_EN |
-			HOT_RST_INTR_EN | WARM_RST_INTR_EN | RECOVERY_INTR_EN | ENTER_U0_INTR_EN |
-			ENTER_U1_INTR_EN | ENTER_U2_INTR_EN | ENTER_U3_INTR_EN | EXIT_U1_INTR_EN |
-			EXIT_U2_INTR_EN | EXIT_U3_INTR_EN | RXDET_SUCCESS_INTR_EN | VBUS_RISE_INTR_EN |
-			VBUS_FALL_INTR_EN | U3_LFPS_TMOUT_INTR_EN | U3_RESUME_INTR_EN;
-		os_writel(U3D_LTSSM_INTR_ENABLE, ltssm_int_en);
-	}
+	/* Enable U3 LTSSM interrupts */
+	ltssm_int_en =
+	    SS_INACTIVE_INTR_EN | SS_DISABLE_INTR_EN | COMPLIANCE_INTR_EN | LOOPBACK_INTR_EN |
+	    HOT_RST_INTR_EN | WARM_RST_INTR_EN | RECOVERY_INTR_EN | ENTER_U0_INTR_EN |
+	    ENTER_U1_INTR_EN | ENTER_U2_INTR_EN | ENTER_U3_INTR_EN | EXIT_U1_INTR_EN |
+	    EXIT_U2_INTR_EN | EXIT_U3_INTR_EN | RXDET_SUCCESS_INTR_EN | VBUS_RISE_INTR_EN |
+	    VBUS_FALL_INTR_EN | U3_LFPS_TMOUT_INTR_EN | U3_RESUME_INTR_EN;
+	os_writel(U3D_LTSSM_INTR_ENABLE, ltssm_int_en);
 #endif
 
 #if 0
@@ -512,7 +493,6 @@ void _ex_mu3d_hal_system_intr_en(void)
 		  SSUSB_ATTACH_B_ROLE_INT_EN);
 #endif
 #endif
-
 #ifdef USE_SSUSB_QMU
 	/* Enable QMU interrupt. */
 	os_writel(U3D_QIESR1, TXQ_EMPTY_IESR | TXQ_CSERR_IESR | TXQ_LENERR_IESR |
@@ -716,22 +696,18 @@ void mu3d_hal_u3dev_en(void)
  */
 void mu3d_hal_u3dev_dis(void)
 {
-#ifdef SUPPORT_U3
 	/*
 	 * If usb3_en =0 => LTSSM will go to SS.Disable state.
 	 */
-	if (musb_hal_speed) {
-		os_writel(U3D_USB3_CONFIG, 0);
-		os_printk(K_INFO, "USB3_EN = 0\n");
-	}
-#endif
+	os_writel(U3D_USB3_CONFIG, 0);
+	os_printk(K_INFO, "USB3_EN = 0\n");
 }
 
 /**
  * mu3d_hal_set_speed - enable ss or connect to hs/fs
  *@args - arg1: speed
  */
-void mu3d_hal_set_speed(enum USB_SPEED speed)
+void mu3d_hal_set_speed(USB_SPEED speed)
 {
 #ifndef EXT_VBUS_DET
 	os_writel(U3D_MISC_CTRL, 0);
@@ -760,7 +736,7 @@ void mu3d_hal_set_speed(enum USB_SPEED speed)
 #endif
 	else {
 		os_printk(K_ALET, "Unsupported speed!!\n");
-		WARN_ON(1);
+		BUG_ON(1);
 	}
 }
 
@@ -771,7 +747,7 @@ void mu3d_hal_set_speed(enum USB_SPEED speed)
 void mu3d_hal_pdn_cg_en(void)
 {
 #ifdef POWER_SAVING_MODE
-	unsigned char speed = (os_readl(U3D_DEVICE_CONF) & SSUSB_DEV_SPEED);
+	DEV_UINT8 speed = (os_readl(U3D_DEVICE_CONF) & SSUSB_DEV_SPEED);
 
 	os_printk(K_INFO, "%s\n", __func__);
 
@@ -799,7 +775,7 @@ void mu3d_hal_pdn_cg_en(void)
 #endif
 }
 
-void mu3d_hal_pdn_ip_port(unsigned char on, unsigned char touch_dis, unsigned char u3, unsigned char u2)
+void mu3d_hal_pdn_ip_port(DEV_UINT8 on, DEV_UINT8 touch_dis, DEV_UINT8 u3, DEV_UINT8 u2)
 {
 #ifdef POWER_SAVING_MODE
 	os_printk(K_INFO, "%s on=%d, touch_dis=%d, u3=%d, u2=%d\n", __func__, on, touch_dis, u3,
@@ -839,10 +815,10 @@ void mu3d_hal_pdn_ip_port(unsigned char on, unsigned char touch_dis, unsigned ch
  * mu3d_hal_det_speed - detect device speed
  *@args - arg1: speed
  */
-void mu3d_hal_det_speed(enum USB_SPEED speed, unsigned char det_speed)
+void mu3d_hal_det_speed(USB_SPEED speed, DEV_UINT8 det_speed)
 {
-	unsigned char temp;
-	unsigned short cnt_down = 10000;
+	DEV_UINT8 temp;
+	DEV_UINT16 cnt_down = 10000;
 
 	pr_debug("===Start polling===\n");
 
@@ -896,11 +872,11 @@ void mu3d_hal_det_speed(enum USB_SPEED speed, unsigned char det_speed)
  * mu3d_hal_write_fifo - pio write one packet
  *@args - arg1: ep number, arg2: data length,  arg3: data buffer, arg4: max packet size
  */
-int mu3d_hal_write_fifo(int ep_num, int length, unsigned char *buf, int maxp)
+DEV_INT32 mu3d_hal_write_fifo(DEV_INT32 ep_num, DEV_INT32 length, DEV_UINT8 *buf, DEV_INT32 maxp)
 {
-	unsigned int residue;
-	unsigned int count;
-	unsigned int temp;
+	DEV_UINT32 residue;
+	DEV_UINT32 count;
+	DEV_UINT32 temp;
 
 	os_printk(K_DEBUG, "%s epnum=%d, len=%d, buf=%p, maxp=%d\n", __func__, ep_num, length, buf,
 		  maxp);
@@ -976,11 +952,11 @@ int mu3d_hal_write_fifo(int ep_num, int length, unsigned char *buf, int maxp)
  * mu3d_hal_read_fifo - pio read one packet
  *@args - arg1: ep number,  arg2: data buffer
  */
-DEV_INT32 mu3d_hal_read_fifo(int ep_num, unsigned char *buf)
+DEV_INT32 mu3d_hal_read_fifo(DEV_INT32 ep_num, DEV_UINT8 *buf)
 {
-	unsigned short count, residue;
-	unsigned int temp;
-	unsigned char *bp = buf;
+	DEV_UINT16 count, residue;
+	DEV_UINT32 temp;
+	DEV_UINT8 *bp = buf;
 
 	if (ep_num == 0)
 		residue = count = os_readl(U3D_RXCOUNT0);
@@ -1045,12 +1021,12 @@ DEV_INT32 mu3d_hal_read_fifo(int ep_num, unsigned char *buf)
  * mu3d_hal_write_fifo_burst - pio write n packets with polling buffer full (epn only)
  *@args - arg1: ep number, arg2: u3d req
  */
-int mu3d_hal_write_fifo_burst(int ep_num, int length, unsigned char *buf,
-				    int maxp)
+DEV_INT32 mu3d_hal_write_fifo_burst(DEV_INT32 ep_num, DEV_INT32 length, DEV_UINT8 *buf,
+				    DEV_INT32 maxp)
 {
-	unsigned int residue, count, actual;
-	unsigned int temp;
-	unsigned char *bp;
+	DEV_UINT32 residue, count, actual;
+	DEV_UINT32 temp;
+	DEV_UINT8 *bp;
 
 	os_printk(K_DEBUG, "%s ep_num=%d, length=%d, buf=%p, maxp=%d\n", __func__, ep_num, length,
 		  buf, maxp);
@@ -1170,11 +1146,11 @@ int mu3d_hal_write_fifo_burst(int ep_num, int length, unsigned char *buf,
  * mu3d_hal_read_fifo_burst - pio read n packets with polling buffer empty (epn only)
  *@args - arg1: ep number, arg2: data buffer
  */
-int mu3d_hal_read_fifo_burst(int ep_num, unsigned char *buf)
+DEV_INT32 mu3d_hal_read_fifo_burst(DEV_INT32 ep_num, DEV_UINT8 *buf)
 {
-	unsigned short count, residue;
-	unsigned int temp, actual;
-	unsigned char *bp;
+	DEV_UINT16 count, residue;
+	DEV_UINT32 temp, actual;
+	DEV_UINT8 *bp;
 
 	os_printk(K_INFO, "mu3d_hal_read_fifo_burst\n");
 	os_printk(K_ALET, "req->buf=%p\n", buf);
@@ -1230,7 +1206,7 @@ int mu3d_hal_read_fifo_burst(int ep_num, unsigned char *buf)
  */
 void mu3d_hal_unfigured_ep(void)
 {
-	unsigned int i, tx_ep_num, rx_ep_num;
+	DEV_UINT32 i, tx_ep_num, rx_ep_num;
 	struct USB_EP_SETTING *ep_setting;
 
 	os_printk(K_DEBUG, "%s\n", __func__);
@@ -1269,11 +1245,11 @@ void mu3d_hal_unfigured_ep(void)
 * mu3d_hal_unfigured_ep_num -
  *@args -
  */
-void mu3d_hal_unfigured_ep_num(unsigned char ep_num, enum USB_DIR dir)
+void mu3d_hal_unfigured_ep_num(DEV_UINT8 ep_num, USB_DIR dir)
 {
 	struct USB_EP_SETTING *ep_setting;
 
-	os_printk(K_DEBUG, "%s %d\n", __func__, ep_num);
+	os_printk(K_INFO, "%s %d\n", __func__, ep_num);
 
 	if (dir == USB_TX) {
 		USB_WriteCsr32(U3D_TX1CSR0, ep_num, USB_ReadCsr32(U3D_TX1CSR0, ep_num) & (~0x7FF));
@@ -1292,18 +1268,17 @@ void mu3d_hal_unfigured_ep_num(unsigned char ep_num, enum USB_DIR dir)
 
 /**
 * mu3d_hal_ep_enable - configure ep
-*@args - arg1: ep number, arg2: dir, arg3: transfer type, arg4: max packet size, arg5: interval,
-* arg6: slot, arg7: burst, arg8: mult
+*@args - arg1: ep number, arg2: dir, arg3: transfer type, arg4: max packet size, arg5: interval, arg6: slot, arg7: burst, arg8: mult
 */
-void _ex_mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFER_TYPE type, int maxp,
-			    char interval, char slot, char burst, char mult)
+void _ex_mu3d_hal_ep_enable(DEV_UINT8 ep_num, USB_DIR dir, TRANSFER_TYPE type, DEV_INT32 maxp,
+			    DEV_INT8 interval, DEV_INT8 slot, DEV_INT8 burst, DEV_INT8 mult)
 {
-	int ep_index = 0;
-	int used_before;
-	unsigned char fifosz = 0, max_pkt, binterval;
-	int csr0, csr1, csr2;
+	DEV_INT32 ep_index = 0;
+	DEV_INT32 used_before;
+	DEV_UINT8 fifosz = 0, max_pkt, binterval;
+	DEV_INT32 csr0, csr1, csr2;
 	struct USB_EP_SETTING *ep_setting;
-	unsigned char update_FIFOadd = 0;
+	DEV_UINT8 update_FIFOadd = 0;
 
 	os_printk(K_INFO, "%s\n", __func__);
 
@@ -1343,7 +1318,7 @@ void _ex_mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFE
 	else if (dir == USB_RX)
 		ep_index = ep_num + MAX_EP_NUM;
 	else
-		WARN_ON(1);
+		BUG_ON(1);
 
 	ep_setting = &g_u3d_setting.ep_setting[ep_index];
 	used_before = ep_setting->fifoaddr;
@@ -1552,14 +1527,13 @@ void _ex_mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFE
 		os_setmsk(U3D_USB2_RX_EP_DATAERR_INTR, BIT16 << ep_num);	/* EPn data error interrupt */
 	} else {
 		os_printk(K_ERR, "WHAT THE DIRECTION IS?!?!\n");
-		WARN_ON(1);
+		BUG_ON(1);
 	}
 
 	if (update_FIFOadd == 1) {
 		if (dir == USB_TX) {
 			/* The minimum unit of FIFO address is _16_ bytes.
-			 * So let the offset of each EP fifo address aligns _16_ bytes.
-			 */
+			 * So let the offset of each EP fifo address aligns _16_ bytes.*/
 			int fifo_offset = 0;
 
 			if ((maxp & 0xF))
@@ -1581,15 +1555,15 @@ void _ex_mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFE
 	}
 }
 
-void mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFER_TYPE type, int maxp,
-			char interval, char slot, char burst, char mult)
+void mu3d_hal_ep_enable(DEV_UINT8 ep_num, USB_DIR dir, TRANSFER_TYPE type, DEV_INT32 maxp,
+			DEV_INT8 interval, DEV_INT8 slot, DEV_INT8 burst, DEV_INT8 mult)
 {
-	int ep_index = 0;
-	int used_before;
-	unsigned char fifosz = 0, max_pkt, binterval;
-	int csr0, csr1, csr2;
+	DEV_INT32 ep_index = 0;
+	DEV_INT32 used_before;
+	DEV_UINT8 fifosz = 0, max_pkt, binterval;
+	DEV_INT32 csr0, csr1, csr2;
 	struct USB_EP_SETTING *ep_setting;
-	unsigned char update_FIFOadd = 0;
+	DEV_UINT8 update_FIFOadd = 0;
 
 	/*Enable Burst, NumP=0, EoB */
 	os_writel(U3D_USB3_EPCTRL_CAP,
@@ -1620,7 +1594,7 @@ void mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFER_TY
 	else if (dir == USB_RX)
 		ep_index = ep_num + MAX_EP_NUM;
 	else
-		WARN_ON(1);
+		BUG_ON(1);
 
 	ep_setting = &g_u3d_setting.ep_setting[ep_index];
 	used_before = ep_setting->fifoaddr;
@@ -1774,7 +1748,7 @@ void mu3d_hal_ep_enable(unsigned char ep_num, enum USB_DIR dir, enum TRANSFER_TY
 		os_setmsk(U3D_USB2_RX_EP_DATAERR_INTR, BIT16 << ep_num);	/* EPn data error interrupt */
 	} else {
 		os_printk(K_ERR, "WHAT THE DIRECTION IS?!?!\n");
-		WARN_ON(1);
+		BUG_ON(1);
 	}
 
 	if (update_FIFOadd == 1) {

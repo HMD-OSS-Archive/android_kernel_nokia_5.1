@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM power
 
@@ -8,7 +7,7 @@
 #include <linux/ktime.h>
 #include <linux/pm_qos.h>
 #include <linux/tracepoint.h>
-#include <linux/trace_events.h>
+#include <linux/ftrace_event.h>
 
 #define TPS(x)  tracepoint_string(x)
 
@@ -39,86 +38,50 @@ DEFINE_EVENT(cpu, cpu_idle,
 	TP_ARGS(state, cpu_id)
 );
 
-TRACE_EVENT(powernv_throttle,
-
-	TP_PROTO(int chip_id, const char *reason, int pmax),
-
-	TP_ARGS(chip_id, reason, pmax),
-
-	TP_STRUCT__entry(
-		__field(int, chip_id)
-		__string(reason, reason)
-		__field(int, pmax)
-	),
-
-	TP_fast_assign(
-		__entry->chip_id = chip_id;
-		__assign_str(reason, reason);
-		__entry->pmax = pmax;
-	),
-
-	TP_printk("Chip %d Pmax %d %s", __entry->chip_id,
-		  __entry->pmax, __get_str(reason))
-);
-
 TRACE_EVENT(pstate_sample,
 
 	TP_PROTO(u32 core_busy,
 		u32 scaled_busy,
-		u32 from,
-		u32 to,
+		u32 state,
 		u64 mperf,
 		u64 aperf,
-		u64 tsc,
-		u32 freq,
-		u32 io_boost
+		u32 freq
 		),
 
 	TP_ARGS(core_busy,
 		scaled_busy,
-		from,
-		to,
+		state,
 		mperf,
 		aperf,
-		tsc,
-		freq,
-		io_boost
+		freq
 		),
 
 	TP_STRUCT__entry(
 		__field(u32, core_busy)
 		__field(u32, scaled_busy)
-		__field(u32, from)
-		__field(u32, to)
+		__field(u32, state)
 		__field(u64, mperf)
 		__field(u64, aperf)
-		__field(u64, tsc)
 		__field(u32, freq)
-		__field(u32, io_boost)
-		),
+
+	),
 
 	TP_fast_assign(
 		__entry->core_busy = core_busy;
 		__entry->scaled_busy = scaled_busy;
-		__entry->from = from;
-		__entry->to = to;
+		__entry->state = state;
 		__entry->mperf = mperf;
 		__entry->aperf = aperf;
-		__entry->tsc = tsc;
 		__entry->freq = freq;
-		__entry->io_boost = io_boost;
 		),
 
-	TP_printk("core_busy=%lu scaled=%lu from=%lu to=%lu mperf=%llu aperf=%llu tsc=%llu freq=%lu io_boost=%lu",
+	TP_printk("core_busy=%lu scaled=%lu state=%lu mperf=%llu aperf=%llu freq=%lu ",
 		(unsigned long)__entry->core_busy,
 		(unsigned long)__entry->scaled_busy,
-		(unsigned long)__entry->from,
-		(unsigned long)__entry->to,
+		(unsigned long)__entry->state,
 		(unsigned long long)__entry->mperf,
 		(unsigned long long)__entry->aperf,
-		(unsigned long long)__entry->tsc,
-		(unsigned long)__entry->freq,
-		(unsigned long)__entry->io_boost
+		(unsigned long)__entry->freq
 		)
 
 );
@@ -174,7 +137,6 @@ TRACE_EVENT(cpu_frequency_limits,
 );
 
 TRACE_EVENT(device_pm_callback_start,
-
 	TP_PROTO(struct device *dev, const char *pm_ops, int event),
 
 	TP_ARGS(dev, pm_ops, event),
@@ -382,49 +344,47 @@ DEFINE_EVENT(power_domain, power_domain_target,
  */
 DECLARE_EVENT_CLASS(pm_qos_request,
 
-	TP_PROTO(int pm_qos_class, s32 value, char *owner),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(pm_qos_class, value, owner),
+	TP_ARGS(pm_qos_class, value),
 
 	TP_STRUCT__entry(
 		__field( int,                    pm_qos_class   )
 		__field( s32,                    value          )
-		__string(owner,                 owner)
 	),
 
 	TP_fast_assign(
 		__entry->pm_qos_class = pm_qos_class;
 		__entry->value = value;
-		__assign_str(owner, owner);
 	),
 
-	TP_printk("pm_qos_class=%s value=%d owner=%s",
+	TP_printk("pm_qos_class=%s value=%d",
 		  __print_symbolic(__entry->pm_qos_class,
 			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" },
 			{ PM_QOS_NETWORK_LATENCY,	"NETWORK_LATENCY" },
 			{ PM_QOS_NETWORK_THROUGHPUT,	"NETWORK_THROUGHPUT" }),
-		  __entry->value, __get_str(owner))
+		  __entry->value)
 );
 
 DEFINE_EVENT(pm_qos_request, pm_qos_add_request,
 
-	TP_PROTO(int pm_qos_class, s32 value, char *owner),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(pm_qos_class, value, owner)
+	TP_ARGS(pm_qos_class, value)
 );
 
 DEFINE_EVENT(pm_qos_request, pm_qos_update_request,
 
-	TP_PROTO(int pm_qos_class, s32 value, char *owner),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(pm_qos_class, value, owner)
+	TP_ARGS(pm_qos_class, value)
 );
 
 DEFINE_EVENT(pm_qos_request, pm_qos_remove_request,
 
-	TP_PROTO(int pm_qos_class, s32 value, char *owner),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(pm_qos_class, value, owner)
+	TP_ARGS(pm_qos_class, value)
 );
 
 TRACE_EVENT(pm_qos_update_request_timeout,

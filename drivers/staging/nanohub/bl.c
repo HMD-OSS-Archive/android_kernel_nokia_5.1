@@ -22,18 +22,18 @@
 #define MAX_FLASH_BANKS		16
 #define READ_ACK_TIMEOUT	100000
 
-static u8 write_len(struct nanohub_data *data, int len)
+static uint8_t write_len(struct nanohub_data *data, int len)
 {
-	u8 buffer[sizeof(u8) + 1];
+	uint8_t buffer[sizeof(uint8_t) + 1];
 
 	buffer[0] = len - 1;
 
-	return data->bl.write_data(data, buffer, sizeof(u8));
+	return data->bl.write_data(data, buffer, sizeof(uint8_t));
 }
 
-static u8 write_cnt(struct nanohub_data *data, uint16_t cnt)
+static uint8_t write_cnt(struct nanohub_data *data, uint16_t cnt)
 {
-	u8 buffer[sizeof(uint16_t) + 1];
+	uint8_t buffer[sizeof(uint16_t) + 1];
 
 	buffer[0] = (cnt >> 8) & 0xFF;
 	buffer[1] = (cnt >> 0) & 0xFF;
@@ -41,36 +41,36 @@ static u8 write_cnt(struct nanohub_data *data, uint16_t cnt)
 	return data->bl.write_data(data, buffer, sizeof(uint16_t));
 }
 
-static u8 write_addr(struct nanohub_data *data, u32 addr)
+static uint8_t write_addr(struct nanohub_data *data, uint32_t addr)
 {
-	u8 buffer[sizeof(u32) + 1];
+	uint8_t buffer[sizeof(uint32_t) + 1];
 
 	buffer[0] = (addr >> 24) & 0xFF;
 	buffer[1] = (addr >> 16) & 0xFF;
 	buffer[2] = (addr >> 8) & 0xFF;
 	buffer[3] = addr & 0xFF;
 
-	return data->bl.write_data(data, buffer, sizeof(u32));
+	return data->bl.write_data(data, buffer, sizeof(uint32_t));
 }
 
 /* write length followed by the data */
-static u8 write_len_data(struct nanohub_data *data, int len,
-			 const u8 *buf)
+static uint8_t write_len_data(struct nanohub_data *data, int len,
+			      const uint8_t *buf)
 {
-	u8 buffer[sizeof(u8) + 256 + sizeof(u8)];
+	uint8_t buffer[sizeof(uint8_t) + 256 + sizeof(uint8_t)];
 
 	buffer[0] = len - 1;
 
 	memcpy(&buffer[1], buf, len);
 
-	return data->bl.write_data(data, buffer, sizeof(u8) + len);
+	return data->bl.write_data(data, buffer, sizeof(uint8_t) + len);
 }
 
 /* keep checking for ack until we receive a ack or nack */
-static u8 read_ack_loop(struct nanohub_data *data)
+static uint8_t read_ack_loop(struct nanohub_data *data)
 {
-	u8 ret;
-	s32 timeout = READ_ACK_TIMEOUT;
+	uint8_t ret;
+	int32_t timeout = READ_ACK_TIMEOUT;
 
 	do {
 		ret = data->bl.read_ack(data);
@@ -81,7 +81,7 @@ static u8 read_ack_loop(struct nanohub_data *data)
 	return ret;
 }
 
-u8 nanohub_bl_sync(struct nanohub_data *data)
+uint8_t nanohub_bl_sync(struct nanohub_data *data)
 {
 	return data->bl.sync(data);
 }
@@ -116,51 +116,59 @@ void nanohub_bl_close(struct nanohub_data *data)
 	kfree(data->bl.rx_buffer);
 }
 
-static u8 write_bank(struct nanohub_data *data, int bank, u32 addr,
-		     const u8 *buf, size_t length)
+static uint8_t write_bank(struct nanohub_data *data, int bank, uint32_t addr,
+			  const uint8_t *buf, size_t length)
 {
 	const struct nanohub_platform_data *pdata = data->pdata;
-	u8 status = CMD_ACK;
-	u32 offset;
+	uint8_t status = CMD_ACK;
+	uint32_t offset;
 
 	if (addr <= pdata->flash_banks[bank].address) {
 		offset = pdata->flash_banks[bank].address - addr;
 		if (addr + length >
 		    pdata->flash_banks[bank].address +
 		    pdata->flash_banks[bank].length)
-			status = nanohub_bl_write_memory
-				(data, pdata->flash_banks[bank].address,
-				 pdata->flash_banks[bank].length, buf + offset);
+			status =
+			    nanohub_bl_write_memory(data,
+						    pdata->flash_banks[bank].
+						    address,
+						    pdata->flash_banks[bank].
+						    length, buf + offset);
 		else
-			status = nanohub_bl_write_memory
-				(data, pdata->flash_banks[bank].address,
-				 length - offset, buf + offset);
+			status =
+			    nanohub_bl_write_memory(data,
+						    pdata->flash_banks[bank].
+						    address, length - offset,
+						    buf + offset);
 	} else {
 		if (addr + length >
 		    pdata->flash_banks[bank].address +
 		    pdata->flash_banks[bank].length)
-			status = nanohub_bl_write_memory
-				(data, addr, pdata->flash_banks[bank].address +
-				 pdata->flash_banks[bank].length - addr, buf);
+			status =
+			    nanohub_bl_write_memory(data, addr,
+						    pdata->flash_banks[bank].
+						    address +
+						    pdata->flash_banks[bank].
+						    length - addr, buf);
 		else
-			status = nanohub_bl_write_memory(data, addr, length,
-							 buf);
+			status =
+			    nanohub_bl_write_memory(data, addr, length, buf);
 	}
 
 	return status;
 }
 
-u8 nanohub_bl_download(struct nanohub_data *data, u32 addr,
-		       const u8 *image, size_t length)
+uint8_t nanohub_bl_download(struct nanohub_data *data, uint32_t addr,
+			    const uint8_t *image, size_t length)
 {
 	const struct nanohub_platform_data *pdata = data->pdata;
-	u8 *ptr;
+	uint8_t *ptr;
 	int i, j;
-	u8 status;
-	u32 offset;
-	u8 erase_mask[MAX_FLASH_BANKS] = { 0 };
-	u8 erase_write_mask[MAX_FLASH_BANKS] = { 0 };
-	u8 write_mask[MAX_FLASH_BANKS] = { 0 };
+	uint8_t status;
+	uint32_t offset;
+	uint8_t erase_mask[MAX_FLASH_BANKS] = { 0 };
+	uint8_t erase_write_mask[MAX_FLASH_BANKS] = { 0 };
+	uint8_t write_mask[MAX_FLASH_BANKS] = { 0 };
 
 	if (pdata->num_flash_banks > MAX_FLASH_BANKS) {
 		status = CMD_NACK;
@@ -170,7 +178,7 @@ u8 nanohub_bl_download(struct nanohub_data *data, u32 addr,
 	status = nanohub_bl_sync(data);
 
 	if (status != CMD_ACK) {
-		pr_err("%s: sync=%02x\n", __func__, status);
+		pr_err("nanohub_bl_download: sync=%02x\n", status);
 		goto out;
 	}
 
@@ -194,7 +202,7 @@ u8 nanohub_bl_download(struct nanohub_data *data, u32 addr,
 		}
 	}
 
-	offset = (u32)(addr - pdata->flash_banks[i].address);
+	offset = (uint32_t) (addr - pdata->flash_banks[i].address);
 	j = 0;
 	while (j < length && i < pdata->num_flash_banks) {
 		if (image[j] != 0xFF)
@@ -248,11 +256,11 @@ out:
 	return status;
 }
 
-u8 nanohub_bl_erase_shared(struct nanohub_data *data)
+uint8_t nanohub_bl_erase_shared(struct nanohub_data *data)
 {
 	const struct nanohub_platform_data *pdata = data->pdata;
 	int i;
-	u8 status;
+	uint8_t status;
 
 	if (pdata->num_shared_flash_banks > MAX_FLASH_BANKS) {
 		status = CMD_NACK;
@@ -262,24 +270,24 @@ u8 nanohub_bl_erase_shared(struct nanohub_data *data)
 	status = nanohub_bl_sync(data);
 
 	if (status != CMD_ACK) {
-		pr_err("%s: sync=%02x\n", __func__, status);
+		pr_err("nanohub_bl_erase_shared: sync=%02x\n", status);
 		goto out;
 	}
 
 	for (i = 0;
 	     status == CMD_ACK && i < pdata->num_shared_flash_banks;
 	     i++) {
-		status = nanohub_bl_erase_sector
-				(data, pdata->shared_flash_banks[i].bank);
+		status = nanohub_bl_erase_sector(data,
+		    pdata->shared_flash_banks[i].bank);
 	}
 out:
 	return status;
 }
 
 /* erase a single sector */
-u8 nanohub_bl_erase_sector(struct nanohub_data *data, uint16_t sector)
+uint8_t nanohub_bl_erase_sector(struct nanohub_data *data, uint16_t sector)
 {
-	u8 ret;
+	uint8_t ret;
 
 	data->bl.write_cmd(data, data->bl.cmd_erase);
 	ret = data->bl.read_ack(data);
@@ -296,11 +304,11 @@ u8 nanohub_bl_erase_sector(struct nanohub_data *data, uint16_t sector)
 }
 
 /* read memory - this will chop the request into 256 byte reads */
-u8 nanohub_bl_read_memory(struct nanohub_data *data, u32 addr,
-			  u32 length, u8 *buffer)
+uint8_t nanohub_bl_read_memory(struct nanohub_data *data, uint32_t addr,
+			       uint32_t length, uint8_t *buffer)
 {
-	u8 ret = CMD_ACK;
-	u32 offset = 0;
+	uint8_t ret = CMD_ACK;
+	uint32_t offset = 0;
 
 	while (ret == CMD_ACK && length > offset) {
 		data->bl.write_cmd(data, data->bl.cmd_read_memory);
@@ -339,11 +347,11 @@ u8 nanohub_bl_read_memory(struct nanohub_data *data, u32 addr,
 }
 
 /* write memory - this will chop the request into 256 byte writes */
-u8 nanohub_bl_write_memory(struct nanohub_data *data, u32 addr,
-			   u32 length, const u8 *buffer)
+uint8_t nanohub_bl_write_memory(struct nanohub_data *data, uint32_t addr,
+				uint32_t length, const uint8_t *buffer)
 {
-	u8 ret = CMD_ACK;
-	u32 offset = 0;
+	uint8_t ret = CMD_ACK;
+	uint32_t offset = 0;
 
 	while (ret == CMD_ACK && length > offset) {
 		data->bl.write_cmd(data, data->bl.cmd_write_memory);

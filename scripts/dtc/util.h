@@ -2,7 +2,6 @@
 #define _UTIL_H
 
 #include <stdarg.h>
-#include <stdbool.h>
 #include <getopt.h>
 
 /*
@@ -25,24 +24,15 @@
  *                                                                   USA
  */
 
-#ifdef __GNUC__
-#define PRINTF(i, j)	__attribute__((format (printf, i, j)))
-#define NORETURN	__attribute__((noreturn))
-#else
-#define PRINTF(i, j)
-#define NORETURN
-#endif
-
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
-static inline void NORETURN PRINTF(1, 2) die(const char *str, ...)
+static inline void __attribute__((noreturn)) die(const char *str, ...)
 {
 	va_list ap;
 
 	va_start(ap, str);
 	fprintf(stderr, "FATAL ERROR: ");
 	vfprintf(stderr, str, ap);
-	va_end(ap);
 	exit(1);
 }
 
@@ -61,14 +51,12 @@ static inline void *xrealloc(void *p, size_t len)
 	void *new = realloc(p, len);
 
 	if (!new)
-		die("realloc() failed (len=%zd)\n", len);
+		die("realloc() failed (len=%d)\n", len);
 
 	return new;
 }
 
 extern char *xstrdup(const char *s);
-
-extern int PRINTF(2, 3) xasprintf(char **strp, const char *fmt, ...);
 extern char *join_path(const char *path, const char *name);
 
 /**
@@ -80,7 +68,7 @@ extern char *join_path(const char *path, const char *name);
  * @param len	The string length including terminator
  * @return 1 if a valid printable string, 0 if not
  */
-bool util_is_printable_string(const void *data, int len);
+int util_is_printable_string(const void *data, int len);
 
 /*
  * Parse an escaped character starting at index i in string s.  The resulting
@@ -197,7 +185,7 @@ void utilfdt_print_data(const char *data, int len);
 /**
  * Show source version and exit
  */
-void NORETURN util_version(void);
+void util_version(void) __attribute__((noreturn));
 
 /**
  * Show usage and exit
@@ -211,10 +199,9 @@ void NORETURN util_version(void);
  * @param long_opts	The structure of long options
  * @param opts_help	An array of help strings (should align with long_opts)
  */
-void NORETURN util_usage(const char *errmsg, const char *synopsis,
-			 const char *short_opts,
-			 struct option const long_opts[],
-			 const char * const opts_help[]);
+void util_usage(const char *errmsg, const char *synopsis,
+		const char *short_opts, struct option const long_opts[],
+		const char * const opts_help[]) __attribute__((noreturn));
 
 /**
  * Show usage and exit

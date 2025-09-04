@@ -86,7 +86,6 @@ static struct usb_serial_driver kobil_device = {
 	.description =		"KOBIL USB smart card terminal",
 	.id_table =		id_table,
 	.num_ports =		1,
-	.num_interrupt_out =	1,
 	.port_probe =		kobil_port_probe,
 	.port_remove =		kobil_port_remove,
 	.ioctl =		kobil_ioctl,
@@ -245,7 +244,7 @@ static int kobil_open(struct tty_struct *tty, struct usb_serial_port *port)
 	    priv->device_type == KOBIL_ADAPTER_B_PRODUCT_ID ||
 	    priv->device_type == KOBIL_KAAN_SIM_PRODUCT_ID) {
 		/* start reading (Adapter B 'cause PNP string) */
-		result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
+		result = usb_submit_urb(port->interrupt_in_urb, GFP_ATOMIC);
 		dev_dbg(dev, "%s - Send read URB returns: %i\n", __func__, result);
 	}
 
@@ -397,20 +396,12 @@ static int kobil_tiocmget(struct tty_struct *tty)
 			  transfer_buffer_length,
 			  KOBIL_TIMEOUT);
 
-	dev_dbg(&port->dev, "Send get_status_line_state URB returns: %i\n",
-			result);
-	if (result < 1) {
-		if (result >= 0)
-			result = -EIO;
-		goto out_free;
-	}
-
-	dev_dbg(&port->dev, "Statusline: %02x\n", transfer_buffer[0]);
+	dev_dbg(&port->dev, "%s - Send get_status_line_state URB returns: %i. Statusline: %02x\n",
+		__func__, result, transfer_buffer[0]);
 
 	result = 0;
 	if ((transfer_buffer[0] & SUSBCR_GSL_DSR) != 0)
 		result = TIOCM_DSR;
-out_free:
 	kfree(transfer_buffer);
 	return result;
 }

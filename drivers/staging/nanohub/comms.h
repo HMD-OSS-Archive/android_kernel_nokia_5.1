@@ -16,64 +16,58 @@
 #define _NANOHUB_COMMS_H
 
 struct __attribute__ ((__packed__)) nanohub_packet {
-	u8 sync;
-	u32 seq;
-	u32 reason;
-	u8 len;
-	u8 data[];
+	uint8_t sync;
+	uint32_t seq;
+	uint32_t reason;
+	uint8_t len;
+	uint8_t data[];
 };
 
 struct __attribute__ ((__packed__)) nanohub_packet_pad {
-	u8 pad[3];
+	uint8_t pad[3];
 	struct nanohub_packet
 	 packet;
 };
 
 struct __attribute__ ((__packed__)) nanohub_packet_crc {
-	u32 crc;
+	uint32_t crc;
 };
 
 struct nanohub_data;
 
 struct nanohub_comms {
 	struct semaphore sem;
-	u32 seq;
+	uint32_t seq;
 	int timeout_write;
 	int timeout_ack;
 	int timeout_reply;
-	int (*open)(void *data);
-	void (*close)(void *data);
-	int (*write)(void *data, u8 *buf, int size, int timeout_w);
-	int (*read)(void *data, u8 *buf, int size, int timeout_r);
+	int (*open)(void *);
+	void (*close)(void *);
+	int (*write)(void *, uint8_t *, int, int);
+	int (*read)(void *, uint8_t *, int, int);
 
 	union {
 		struct i2c_client *i2c_client;
 		struct spi_device *spi_device;
 	};
 
-	u8 *tx_buffer;
-	u8 *rx_buffer;
+	uint8_t *tx_buffer;
+	uint8_t *rx_buffer;
 };
 
-int nanohub_comms_kernel_download(struct nanohub_data *data,
-				  const u8 *image,
-				  size_t length);
-int nanohub_comms_app_download(struct nanohub_data *data,
-			       const u8 *image, size_t length);
-int nanohub_comms_rx_retrans_boottime(struct nanohub_data *data,
-				      u32 cmd, u8 *rx,
-				      size_t rx_len,
-				      int retrans_cnt,
-				      int retrans_delay);
-int nanohub_comms_tx_rx_retrans(struct nanohub_data *data, u32 cmd,
-				const u8 *tx, u8 tx_len,
-				u8 *rx, size_t rx_len, bool user,
-				int retrans_cnt, int retrans_delay);
+int nanohub_comms_kernel_download(struct nanohub_data *, const uint8_t *,
+				  size_t);
+int nanohub_comms_app_download(struct nanohub_data *, const uint8_t *, size_t);
+int nanohub_comms_rx_retrans_boottime(struct nanohub_data *, uint32_t,
+				      uint8_t *, size_t, int, int);
+int nanohub_comms_tx_rx_retrans(struct nanohub_data *, uint32_t,
+				const uint8_t *, uint8_t, uint8_t *, size_t,
+				bool, int, int);
 
 #define ERROR_NACK			-1
 #define ERROR_BUSY			-2
 
-#define MAX_UINT8			((1 << (8 * sizeof(u8))) - 1)
+#define MAX_UINT8			((1 << (8*sizeof(uint8_t))) - 1)
 
 #define COMMS_SYNC			0x31
 #define COMMS_FLASH_KERNEL_ID		0x1
@@ -123,9 +117,9 @@ int nanohub_comms_tx_rx_retrans(struct nanohub_data *data, u32 cmd,
 #define UPLOAD_REPLY_APP_SEC_BAD		12
 
 static inline int nanohub_comms_write(struct nanohub_data *data,
-				      const u8 *buffer, size_t buffer_len)
+				      const uint8_t *buffer, size_t buffer_len)
 {
-	u8 ret;
+	uint8_t ret;
 
 	if (nanohub_comms_tx_rx_retrans
 	    (data, CMD_COMMS_WRITE, buffer, buffer_len, &ret, sizeof(ret), true,
@@ -138,6 +132,5 @@ static inline int nanohub_comms_write(struct nanohub_data *data,
 		return ERROR_NACK;
 	}
 }
-
 ssize_t nanohub_external_write(const char *buffer, size_t length);
 #endif

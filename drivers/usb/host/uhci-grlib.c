@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * UHCI HCD (Host Controller Driver) for GRLIB GRUSBHC
  *
@@ -189,6 +188,7 @@ static struct platform_driver uhci_grlib_driver = {
 	.shutdown	= uhci_hcd_grlib_shutdown,
 	.driver = {
 		.name = "grlib-uhci",
+		.owner = THIS_MODULE,
 		.of_match_table = uhci_hcd_grlib_of_match,
 	},
 };

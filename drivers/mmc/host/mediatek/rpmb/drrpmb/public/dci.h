@@ -1,10 +1,9 @@
 /*
- * Copyright (c) 2013-2016 TRUSTONIC LIMITED
- * All Rights Reserved.
+ * Copyright (C) 2015 MediaTek Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -45,17 +44,16 @@ typedef uint32_t dciReturnCode_t;
 /**
  * DCI command header.
  */
-struct dciCommandHeader_t {
+typedef struct{
 	dciCommandId_t commandId; /**< Command ID */
-};
+} dciCommandHeader_t;
 
 /**
  * DCI response header.
  */
-struct dciResponseHeader_t {
-	/**< Response ID (must be command ID | RSP_ID_MASK )*/
-	dciResponseId_t     responseId;
+typedef struct{
+	dciResponseId_t     responseId; /**< Response ID (must be command ID | RSP_ID_MASK )*/
 	dciReturnCode_t     returnCode; /**< Return code of command */
-};
+} dciResponseHeader_t;
 
 #endif

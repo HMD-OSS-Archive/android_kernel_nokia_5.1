@@ -11,4 +11,4 @@
 # GNU General Public License for more details.
 #
 
-obj-y := mtk_partition.o
+obj-y := partition.o

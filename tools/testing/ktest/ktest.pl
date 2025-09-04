@@ -178,8 +178,6 @@ my $checkout;
 my $localversion;
 my $iteration = 0;
 my $successes = 0;
-my $stty_orig;
-my $run_command_status = 0;
 
 my $bisect_good;
 my $bisect_bad;
@@ -198,11 +196,6 @@ my $patchcheck_type;
 my $patchcheck_start;
 my $patchcheck_cherry;
 my $patchcheck_end;
-
-my $build_time;
-my $install_time;
-my $reboot_time;
-my $test_time;
 
 # set when a test is something other that just building or install
 # which would require more options.
@@ -561,66 +554,6 @@ sub get_mandatory_config {
     }
 }
 
-sub show_time {
-    my ($time) = @_;
-
-    my $hours = 0;
-    my $minutes = 0;
-
-    if ($time > 3600) {
-	$hours = int($time / 3600);
-	$time -= $hours * 3600;
-    }
-    if ($time > 60) {
-	$minutes = int($time / 60);
-	$time -= $minutes * 60;
-    }
-
-    if ($hours > 0) {
-	doprint "$hours hour";
-	doprint "s" if ($hours > 1);
-	doprint " ";
-    }
-
-    if ($minutes > 0) {
-	doprint "$minutes minute";
-	doprint "s" if ($minutes > 1);
-	doprint " ";
-    }
-
-    doprint "$time second";
-    doprint "s" if ($time != 1);
-}
-
-sub print_times {
-    doprint "\n";
-    if ($build_time) {
-	doprint "Build time:   ";
-	show_time($build_time);
-	doprint "\n";
-    }
-    if ($install_time) {
-	doprint "Install time: ";
-	show_time($install_time);
-	doprint "\n";
-    }
-    if ($reboot_time) {
-	doprint "Reboot time:  ";
-	show_time($reboot_time);
-	doprint "\n";
-    }
-    if ($test_time) {
-	doprint "Test time:    ";
-	show_time($test_time);
-	doprint "\n";
-    }
-    # reset for iterations like bisect
-    $build_time = 0;
-    $install_time = 0;
-    $reboot_time = 0;
-    $test_time = 0;
-}
-
 sub get_mandatory_configs {
     get_mandatory_config("MACHINE");
     get_mandatory_config("BUILD_DIR");
@@ -720,14 +653,14 @@ sub set_value {
 
     if ($buildonly && $lvalue =~ /^TEST_TYPE(\[.*\])?$/ && $prvalue ne "build") {
 	# Note if a test is something other than build, then we
-	# will need other mandatory options.
+	# will need other manditory options.
 	if ($prvalue ne "install") {
 	    # for bisect, we need to check BISECT_TYPE
 	    if ($prvalue ne "bisect") {
 		$buildonly = 0;
 	    }
 	} else {
-	    # install still limits some mandatory options.
+	    # install still limits some manditory options.
 	    $buildonly = 2;
 	}
     }
@@ -736,7 +669,7 @@ sub set_value {
 	if ($prvalue ne "install") {
 	    $buildonly = 0;
 	} else {
-	    # install still limits some mandatory options.
+	    # install still limits some manditory options.
 	    $buildonly = 2;
 	}
     }
@@ -751,8 +684,11 @@ sub set_value {
 	}
 	${$overrides}{$lvalue} = $prvalue;
     }
-
-    $opt{$lvalue} = $prvalue;
+    if ($rvalue =~ /^\s*$/) {
+	delete $opt{$lvalue};
+    } else {
+	$opt{$lvalue} = $prvalue;
+    }
 }
 
 sub set_eval {
@@ -1326,44 +1262,26 @@ sub wait_for_monitor;
 
 sub reboot {
     my ($time) = @_;
-    my $powercycle = 0;
 
-    # test if the machine can be connected to within 5 seconds
-    my $stat = run_ssh("echo check machine status", 5);
-    if (!$stat) {
-	doprint("power cycle\n");
-	$powercycle = 1;
-    }
+    # Make sure everything has been written to disk
+    run_ssh("sync");
 
-    if ($powercycle) {
-	run_command "$power_cycle";
-
+    if (defined($time)) {
 	start_monitor;
 	# flush out current monitor
 	# May contain the reboot success line
 	wait_for_monitor 1;
+    }
 
-    } else {
-	# Make sure everything has been written to disk
-	run_ssh("sync");
-
-	if (defined($time)) {
-	    start_monitor;
-	    # flush out current monitor
-	    # May contain the reboot success line
-	    wait_for_monitor 1;
-	}
-
-	# try to reboot normally
-	if (run_command $reboot) {
-	    if (defined($powercycle_after_reboot)) {
-		sleep $powercycle_after_reboot;
-		run_command "$power_cycle";
-	    }
-	} else {
-	    # nope? power cycle it.
+    # try to reboot normally
+    if (run_command $reboot) {
+	if (defined($powercycle_after_reboot)) {
+	    sleep $powercycle_after_reboot;
 	    run_command "$power_cycle";
 	}
+    } else {
+	# nope? power cycle it.
+	run_command "$power_cycle";
     }
 
     if (defined($time)) {
@@ -1426,87 +1344,23 @@ sub dodie {
 	print " See $opt{LOG_FILE} for more info.\n";
     }
 
-    if ($monitor_cnt) {
-	    # restore terminal settings
-	    system("stty $stty_orig");
-    }
-
-    if (defined($post_test)) {
-	run_command $post_test;
-    }
-
     die @_, "\n";
 }
 
-sub create_pty {
-    my ($ptm, $pts) = @_;
-    my $tmp;
-    my $TIOCSPTLCK = 0x40045431;
-    my $TIOCGPTN = 0x80045430;
-
-    sysopen($ptm, "/dev/ptmx", O_RDWR | O_NONBLOCK) or
-	dodie "Cant open /dev/ptmx";
-
-    # unlockpt()
-    $tmp = pack("i", 0);
-    ioctl($ptm, $TIOCSPTLCK, $tmp) or
-	dodie "ioctl TIOCSPTLCK for /dev/ptmx failed";
-
-    # ptsname()
-    ioctl($ptm, $TIOCGPTN, $tmp) or
-	dodie "ioctl TIOCGPTN for /dev/ptmx failed";
-    $tmp = unpack("i", $tmp);
-
-    sysopen($pts, "/dev/pts/$tmp", O_RDWR | O_NONBLOCK) or
-	dodie "Can't open /dev/pts/$tmp";
-}
-
-sub exec_console {
-    my ($ptm, $pts) = @_;
-
-    close($ptm);
-
-    close(\*STDIN);
-    close(\*STDOUT);
-    close(\*STDERR);
-
-    open(\*STDIN, '<&', $pts);
-    open(\*STDOUT, '>&', $pts);
-    open(\*STDERR, '>&', $pts);
-
-    close($pts);
-
-    exec $console or
-	die "Can't open console $console";
-}
-
 sub open_console {
-    my ($ptm) = @_;
-    my $pts = \*PTSFD;
-    my $pid;
+    my ($fp) = @_;
 
-    # save terminal settings
-    $stty_orig = `stty -g`;
+    my $flags;
 
-    # place terminal in cbreak mode so that stdin can be read one character at
-    # a time without having to wait for a newline
-    system("stty -icanon -echo -icrnl");
+    my $pid = open($fp, "$console|") or
+	dodie "Can't open console $console";
 
-    create_pty($ptm, $pts);
-
-    $pid = fork;
-
-    if (!$pid) {
-	# child
-	exec_console($ptm, $pts)
-    }
-
-    # parent
-    close($pts);
+    $flags = fcntl($fp, F_GETFL, 0) or
+	dodie "Can't get flags for the socket: $!";
+    $flags = fcntl($fp, F_SETFL, $flags | O_NONBLOCK) or
+	dodie "Can't set flags for the socket: $!";
 
     return $pid;
-
-    open(PTSFD, "Stop perl from warning about single use of PTSFD");
 }
 
 sub close_console {
@@ -1517,9 +1371,6 @@ sub close_console {
 
     print "closing!\n";
     close($fp);
-
-    # restore terminal settings
-    system("stty $stty_orig");
 }
 
 sub start_monitor {
@@ -1647,6 +1498,10 @@ sub save_logs {
 
 sub fail {
 
+	if (defined($post_test)) {
+		run_command $post_test;
+	}
+
 	if ($die_on_failure) {
 		dodie @_;
 	}
@@ -1667,8 +1522,6 @@ sub fail {
 	    $name = " ($test_name)";
 	}
 
-	print_times;
-
 	doprint "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
 	doprint "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
 	doprint "KTEST RESULT: TEST $i$name Failed: ", @_, "\n";
@@ -1679,17 +1532,11 @@ sub fail {
 	    save_logs "fail", $store_failures;
         }
 
-	if (defined($post_test)) {
-		run_command $post_test;
-	}
-
 	return 1;
 }
 
 sub run_command {
-    my ($command, $redirect, $timeout) = @_;
-    my $start_time;
-    my $end_time;
+    my ($command, $redirect) = @_;
     my $dolog = 0;
     my $dord = 0;
     my $pid;
@@ -1698,7 +1545,6 @@ sub run_command {
     $command =~ s/\$MACHINE/$machine/g;
 
     doprint("$command ... ");
-    $start_time = time;
 
     $pid = open(CMD, "$command 2>&1 |") or
 	(fail "unable to exec $command" and return 0);
@@ -1715,63 +1561,33 @@ sub run_command {
 	$dord = 1;
     }
 
-    my $hit_timeout = 0;
-
-    while (1) {
-	my $fp = \*CMD;
-	if (defined($timeout)) {
-	    doprint "timeout = $timeout\n";
-	}
-	my $line = wait_for_input($fp, $timeout);
-	if (!defined($line)) {
-	    my $now = time;
-	    if (defined($timeout) && (($now - $start_time) >= $timeout)) {
-		doprint "Hit timeout of $timeout, killing process\n";
-		$hit_timeout = 1;
-		kill 9, $pid;
-	    }
-	    last;
-	}
-	print LOG $line if ($dolog);
-	print RD $line if ($dord);
+    while (<CMD>) {
+	print LOG if ($dolog);
+	print RD  if ($dord);
     }
 
     waitpid($pid, 0);
-    # shift 8 for real exit status
-    $run_command_status = $? >> 8;
+    my $failed = $?;
 
     close(CMD);
     close(LOG) if ($dolog);
     close(RD)  if ($dord);
 
-    $end_time = time;
-    my $delta = $end_time - $start_time;
-
-    if ($delta == 1) {
-	doprint "[1 second] ";
-    } else {
-	doprint "[$delta seconds] ";
-    }
-
-    if ($hit_timeout) {
-	$run_command_status = 1;
-    }
-
-    if ($run_command_status) {
+    if ($failed) {
 	doprint "FAILED!\n";
     } else {
 	doprint "SUCCESS\n";
     }
 
-    return !$run_command_status;
+    return !$failed;
 }
 
 sub run_ssh {
-    my ($cmd, $timeout) = @_;
+    my ($cmd) = @_;
     my $cp_exec = $ssh_exec;
 
     $cp_exec =~ s/\$SSH_COMMAND/$cmd/g;
-    return run_command "$cp_exec", undef , $timeout;
+    return run_command "$cp_exec";
 }
 
 sub run_scp {
@@ -1880,11 +1696,8 @@ sub get_grub_index {
 sub wait_for_input
 {
     my ($fp, $time) = @_;
-    my $start_time;
     my $rin;
-    my $rout;
-    my $nr;
-    my $buf;
+    my $ready;
     my $line;
     my $ch;
 
@@ -1894,40 +1707,21 @@ sub wait_for_input
 
     $rin = '';
     vec($rin, fileno($fp), 1) = 1;
-    vec($rin, fileno(\*STDIN), 1) = 1;
+    ($ready, $time) = select($rin, undef, undef, $time);
 
-    $start_time = time;
+    $line = "";
 
-    while (1) {
-	$nr = select($rout=$rin, undef, undef, $time);
-
-	last if ($nr <= 0);
-
-	# copy data from stdin to the console
-	if (vec($rout, fileno(\*STDIN), 1) == 1) {
-	    $nr = sysread(\*STDIN, $buf, 1000);
-	    syswrite($fp, $buf, $nr) if ($nr > 0);
-	}
-
-	# The timeout is based on time waiting for the fp data
-	if (vec($rout, fileno($fp), 1) != 1) {
-	    last if (defined($time) && (time - $start_time > $time));
-	    next;
-	}
-
-	$line = "";
-
-	# try to read one char at a time
-	while (sysread $fp, $ch, 1) {
-	    $line .= $ch;
-	    last if ($ch eq "\n");
-	}
-
-	last if (!length($line));
-
-	return $line;
+    # try to read one char at a time
+    while (sysread $fp, $ch, 1) {
+	$line .= $ch;
+	last if ($ch eq "\n");
     }
-    return undef;
+
+    if (!length($line)) {
+	return undef;
+    }
+
+    return $line;
 }
 
 sub reboot_to {
@@ -1974,8 +1768,6 @@ sub monitor {
     my $bug_ignored = 0;
     my $skip_call_trace = 0;
     my $loops;
-
-    my $start_time = time;
 
     wait_for_monitor 5;
 
@@ -2101,9 +1893,6 @@ sub monitor {
 	}
     }
 
-    my $end_time = time;
-    $reboot_time = $end_time - $start_time;
-
     close(DMESG);
 
     if ($bug) {
@@ -2152,8 +1941,6 @@ sub install {
 
     return if ($no_install);
 
-    my $start_time = time;
-
     if (defined($pre_install)) {
 	my $cp_pre_install = eval_kernel_version $pre_install;
 	run_command "$cp_pre_install" or
@@ -2185,8 +1972,6 @@ sub install {
     if (!$install_mods) {
 	do_post_install;
 	doprint "No modules needed\n";
-	my $end_time = time;
-	$install_time = $end_time - $start_time;
 	return;
     }
 
@@ -2214,22 +1999,19 @@ sub install {
     run_ssh "rm -f /tmp/$modtar";
 
     do_post_install;
-
-    my $end_time = time;
-    $install_time = $end_time - $start_time;
 }
 
 sub get_version {
     # get the release name
     return if ($have_version);
     doprint "$make kernelrelease ... ";
-    $version = `$make -s kernelrelease | tail -1`;
+    $version = `$make kernelrelease | tail -1`;
     chomp($version);
     doprint "$version\n";
     $have_version = 1;
 }
 
-sub start_monitor_and_install {
+sub start_monitor_and_boot {
     # Make sure the stable kernel has finished booting
 
     # Install bisects, don't need console
@@ -2429,8 +2211,6 @@ sub build {
 
     unlink $buildlog;
 
-    my $start_time = time;
-
     # Failed builds should not reboot the target
     my $save_no_reboot = $no_reboot;
     $no_reboot = 1;
@@ -2516,9 +2296,6 @@ sub build {
 
     $no_reboot = $save_no_reboot;
 
-    my $end_time = time;
-    $build_time = $end_time - $start_time;
-
     return 1;
 }
 
@@ -2537,6 +2314,10 @@ sub halt {
 sub success {
     my ($i) = @_;
 
+    if (defined($post_test)) {
+	run_command $post_test;
+    }
+
     $successes++;
 
     my $name = "";
@@ -2544,8 +2325,6 @@ sub success {
     if (defined($test_name)) {
 	$name = " ($test_name)";
     }
-
-    print_times;
 
     doprint "\n\n*******************************************\n";
     doprint     "*******************************************\n";
@@ -2560,10 +2339,6 @@ sub success {
     if ($i != $opt{"NUM_TESTS"} && !do_not_reboot) {
 	doprint "Reboot and wait $sleep_time seconds\n";
 	reboot_to_good $sleep_time;
-    }
-
-    if (defined($post_test)) {
-	run_command $post_test;
     }
 }
 
@@ -2585,15 +2360,16 @@ sub answer_bisect {
 }
 
 sub child_run_test {
+    my $failed = 0;
 
     # child should have no power
     $reboot_on_error = 0;
     $poweroff_on_error = 0;
     $die_on_failure = 1;
 
-    run_command $run_test, $testlog;
+    run_command $run_test, $testlog or $failed = 1;
 
-    exit $run_command_status;
+    exit $failed;
 }
 
 my $child_done;
@@ -2609,8 +2385,6 @@ sub do_run_test {
     my $full_line;
     my $bug = 0;
     my $bug_ignored = 0;
-
-    my $start_time = time;
 
     wait_for_monitor 1;
 
@@ -2677,9 +2451,6 @@ sub do_run_test {
 
     waitpid $child_pid, 0;
     $child_exit = $? >> 8;
-
-    my $end_time = time;
-    $test_time = $end_time - $start_time;
 
     if (!$bug && $in_bisect) {
 	if (defined($bisect_ret_good)) {
@@ -2781,7 +2552,7 @@ sub run_bisect_test {
 	dodie "Failed on build" if $failed;
 
 	# Now boot the box
-	start_monitor_and_install or $failed = 1;
+	start_monitor_and_boot or $failed = 1;
 
 	if ($type ne "boot") {
 	    if ($failed && $bisect_skip) {
@@ -2987,7 +2758,6 @@ sub bisect {
     do {
 	$result = run_bisect $type;
 	$test = run_git_bisect "git bisect $result";
-	print_times;
     } while ($test);
 
     run_command "git bisect log" or
@@ -3377,6 +3147,7 @@ sub config_bisect {
     save_config \%good_configs, $good_config;
     save_config \%bad_configs, $bad_config;
 
+
     if (defined($config_bisect_check) && $config_bisect_check ne "0") {
 	if ($config_bisect_check ne "good") {
 	    doprint "Testing bad config\n";
@@ -3400,7 +3171,6 @@ sub config_bisect {
 
     do {
 	$ret = run_config_bisect \%good_configs, \%bad_configs;
-	print_times;
     } while (!$ret);
 
     return $ret if ($ret < 0);
@@ -3493,7 +3263,7 @@ sub patchcheck {
 	my $sha1 = $item;
 	$sha1 =~ s/^([[:xdigit:]]+).*/$1/;
 
-	doprint "\nProcessing commit \"$item\"\n\n";
+	doprint "\nProcessing commit $item\n\n";
 
 	run_command "git checkout $sha1" or
 	    die "Failed to checkout $sha1";
@@ -3524,18 +3294,16 @@ sub patchcheck {
 
 	my $failed = 0;
 
-	start_monitor_and_install or $failed = 1;
+	start_monitor_and_boot or $failed = 1;
 
 	if (!$failed && $type ne "boot"){
 	    do_run_test or $failed = 1;
 	}
 	end_monitor;
-	if ($failed) {
-	    print_times;
-	    return 0;
-	}
+	return 0 if ($failed);
+
 	patchcheck_reboot;
-	print_times;
+
     }
     $in_patchcheck = 0;
     success $i;
@@ -3988,7 +3756,7 @@ sub make_min_config {
 	my $failed = 0;
 	build "oldconfig" or $failed = 1;
 	if (!$failed) {
-		start_monitor_and_install or $failed = 1;
+		start_monitor_and_boot or $failed = 1;
 
 		if ($type eq "test" && !$failed) {
 		    do_run_test or $failed = 1;
@@ -4035,7 +3803,7 @@ sub make_min_config {
 		}
 	    }
 
-	    # Save off all the current mandatory configs
+	    # Save off all the current mandidory configs
 	    open (OUT, ">$temp_config")
 		or die "Can't write to $temp_config";
 	    foreach my $config (keys %keep_configs) {
@@ -4179,22 +3947,12 @@ for (my $i = 0, my $repeat = 1; $i <= $opt{"NUM_TESTS"}; $i += $repeat) {
     }
 }
 
-sub option_defined {
-    my ($option) = @_;
-
-    if (defined($opt{$option}) && $opt{$option} !~ /^\s*$/) {
-	return 1;
-    }
-
-    return 0;
-}
-
 sub __set_test_option {
     my ($name, $i) = @_;
 
     my $option = "$name\[$i\]";
 
-    if (option_defined($option)) {
+    if (defined($opt{$option})) {
 	return $opt{$option};
     }
 
@@ -4202,13 +3960,13 @@ sub __set_test_option {
 	if ($i >= $test &&
 	    $i < $test + $repeat_tests{$test}) {
 	    $option = "$name\[$test\]";
-	    if (option_defined($option)) {
+	    if (defined($opt{$option})) {
 		return $opt{$option};
 	    }
 	}
     }
 
-    if (option_defined($name)) {
+    if (defined($opt{$name})) {
 	return $opt{$name};
     }
 
@@ -4234,11 +3992,6 @@ for (my $i = 1; $i <= $opt{"NUM_TESTS"}; $i++) {
     $have_version = 0;
 
     $iteration = $i;
-
-    $build_time = 0;
-    $install_time = 0;
-    $reboot_time = 0;
-    $test_time = 0;
 
     undef %force_config;
 
@@ -4326,14 +4079,8 @@ for (my $i = 1; $i <= $opt{"NUM_TESTS"}; $i++) {
     my $installme = "";
     $installme = " no_install" if ($no_install);
 
-    my $name = "";
-
-    if (defined($test_name)) {
-	$name = " ($test_name)";
-    }
-
     doprint "\n\n";
-    doprint "RUNNING TEST $i of $opt{NUM_TESTS}$name with option $test_type $run_type$installme\n\n";
+    doprint "RUNNING TEST $i of $opt{NUM_TESTS} with option $test_type $run_type$installme\n\n";
 
     if (defined($pre_test)) {
 	run_command $pre_test;
@@ -4397,19 +4144,14 @@ for (my $i = 1; $i <= $opt{"NUM_TESTS"}; $i++) {
 
     if ($test_type ne "build") {
 	my $failed = 0;
-	start_monitor_and_install or $failed = 1;
+	start_monitor_and_boot or $failed = 1;
 
 	if (!$failed && $test_type ne "boot" && defined($run_test)) {
 	    do_run_test or $failed = 1;
 	}
 	end_monitor;
-	if ($failed) {
-	    print_times;
-	    next;
-	}
+	next if ($failed);
     }
-
-    print_times;
 
     success $i;
 }

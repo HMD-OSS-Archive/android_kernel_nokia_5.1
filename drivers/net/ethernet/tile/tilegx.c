@@ -40,7 +40,6 @@
 #include <linux/tcp.h>
 #include <linux/net_tstamp.h>
 #include <linux/ptp_clock_kernel.h>
-#include <linux/tick.h>
 
 #include <asm/checksum.h>
 #include <asm/homecache.h>
@@ -58,9 +57,6 @@
 
 /* Maximum number of packets to handle per "poll". */
 #define TILE_NET_WEIGHT 64
-
-/* Maximum Jumbo Packet MTU */
-#define TILE_JUMBO_MAX_MTU 9000
 
 /* Number of entries in each iqueue. */
 #define IQUEUE_ENTRIES 512
@@ -296,6 +292,7 @@ static inline int mpipe_instance(struct net_device *dev)
  */
 static bool network_cpus_init(void)
 {
+	char buf[1024];
 	int rc;
 
 	if (network_cpus_string == NULL)
@@ -317,8 +314,8 @@ static bool network_cpus_init(void)
 		return false;
 	}
 
-	pr_info("Linux network CPUs: %*pbl\n",
-		cpumask_pr_args(&network_cpus_map));
+	cpulist_scnprintf(buf, sizeof(buf), &network_cpus_map);
+	pr_info("Linux network CPUs: %s\n", buf);
 	return true;
 }
 
@@ -465,7 +462,7 @@ static void tile_tx_timestamp(struct sk_buff *skb, int instance)
 	if (unlikely((shtx->tx_flags & SKBTX_HW_TSTAMP) != 0)) {
 		struct mpipe_data *md = &mpipe_data[instance];
 		struct skb_shared_hwtstamps shhwtstamps;
-		struct timespec64 ts;
+		struct timespec ts;
 
 		shtx->tx_flags |= SKBTX_IN_PROGRESS;
 		gxio_mpipe_get_timestamp(&md->context, &ts);
@@ -512,7 +509,6 @@ static int tile_hwtstamp_set(struct net_device *dev, struct ifreq *rq)
 	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
-	case HWTSTAMP_FILTER_NTP_ALL:
 		config.rx_filter = HWTSTAMP_FILTER_ALL;
 		break;
 	default:
@@ -682,7 +678,7 @@ static int tile_net_poll(struct napi_struct *napi, int budget)
 	}
 
 	/* There are no packets left. */
-	napi_complete_done(&info_mpipe->napi, work);
+	napi_complete(&info_mpipe->napi);
 
 	md = &mpipe_data[instance];
 	/* Re-enable hypervisor interrupts. */
@@ -752,7 +748,7 @@ static void tile_net_schedule_tx_wake_timer(struct net_device *dev,
 		&info->mpipe[instance].tx_wake[priv->echannel];
 
 	hrtimer_start(&tx_wake->timer,
-		      TX_TIMER_DELAY_USEC * 1000UL,
+		      ktime_set(0, TX_TIMER_DELAY_USEC * 1000UL),
 		      HRTIMER_MODE_REL_PINNED);
 }
 
@@ -771,7 +767,7 @@ static void tile_net_schedule_egress_timer(void)
 
 	if (!info->egress_timer_scheduled) {
 		hrtimer_start(&info->egress_timer,
-			      EGRESS_TIMER_DELAY_USEC * 1000UL,
+			      ktime_set(0, EGRESS_TIMER_DELAY_USEC * 1000UL),
 			      HRTIMER_MODE_REL_PINNED);
 		info->egress_timer_scheduled = true;
 	}
@@ -843,8 +839,7 @@ static int ptp_mpipe_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	return ret;
 }
 
-static int ptp_mpipe_gettime(struct ptp_clock_info *ptp,
-			     struct timespec64 *ts)
+static int ptp_mpipe_gettime(struct ptp_clock_info *ptp, struct timespec *ts)
 {
 	int ret = 0;
 	struct mpipe_data *md = container_of(ptp, struct mpipe_data, caps);
@@ -856,7 +851,7 @@ static int ptp_mpipe_gettime(struct ptp_clock_info *ptp,
 }
 
 static int ptp_mpipe_settime(struct ptp_clock_info *ptp,
-			     const struct timespec64 *ts)
+			     const struct timespec *ts)
 {
 	int ret = 0;
 	struct mpipe_data *md = container_of(ptp, struct mpipe_data, caps);
@@ -873,7 +868,7 @@ static int ptp_mpipe_enable(struct ptp_clock_info *ptp,
 	return -EOPNOTSUPP;
 }
 
-static const struct ptp_clock_info ptp_mpipe_caps = {
+static struct ptp_clock_info ptp_mpipe_caps = {
 	.owner		= THIS_MODULE,
 	.name		= "mPIPE clock",
 	.max_adj	= 999999999,
@@ -882,17 +877,17 @@ static const struct ptp_clock_info ptp_mpipe_caps = {
 	.pps		= 0,
 	.adjfreq	= ptp_mpipe_adjfreq,
 	.adjtime	= ptp_mpipe_adjtime,
-	.gettime64	= ptp_mpipe_gettime,
-	.settime64	= ptp_mpipe_settime,
+	.gettime	= ptp_mpipe_gettime,
+	.settime	= ptp_mpipe_settime,
 	.enable		= ptp_mpipe_enable,
 };
 
 /* Sync mPIPE's timestamp up with Linux system time and register PTP clock. */
 static void register_ptp_clock(struct net_device *dev, struct mpipe_data *md)
 {
-	struct timespec64 ts;
+	struct timespec ts;
 
-	ktime_get_ts64(&ts);
+	getnstimeofday(&ts);
 	gxio_mpipe_set_timestamp(&md->context, &ts);
 
 	mutex_init(&md->ptp_lock);
@@ -1128,7 +1123,7 @@ static int alloc_percpu_mpipe_resources(struct net_device *dev,
 			addr + i * sizeof(struct tile_net_comps);
 
 	/* If this is a network cpu, create an iqueue. */
-	if (cpumask_test_cpu(cpu, &network_cpus_map)) {
+	if (cpu_isset(cpu, network_cpus_map)) {
 		order = get_order(NOTIF_RING_SIZE);
 		page = homecache_alloc_pages(GFP_KERNEL, order, cpu);
 		if (page == NULL) {
@@ -1304,7 +1299,7 @@ static int tile_net_init_mpipe(struct net_device *dev)
 	int first_ring, ring;
 	int instance = mpipe_instance(dev);
 	struct mpipe_data *md = &mpipe_data[instance];
-	int network_cpus_count = cpumask_weight(&network_cpus_map);
+	int network_cpus_count = cpus_weight(network_cpus_map);
 
 	if (!hash_default) {
 		netdev_err(dev, "Networking requires hash_default!\n");
@@ -2105,6 +2100,17 @@ static int tile_net_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	return -EOPNOTSUPP;
 }
 
+/* Change the MTU. */
+static int tile_net_change_mtu(struct net_device *dev, int new_mtu)
+{
+	if (new_mtu < 68)
+		return -EINVAL;
+	if (new_mtu > ((jumbo_num != 0) ? 9000 : 1500))
+		return -EINVAL;
+	dev->mtu = new_mtu;
+	return 0;
+}
+
 /* Change the Ethernet address of the NIC.
  *
  * The hypervisor driver does not support changing MAC address.  However,
@@ -2147,6 +2153,7 @@ static const struct net_device_ops tile_net_ops = {
 	.ndo_start_xmit = tile_net_tx,
 	.ndo_select_queue = tile_net_select_queue,
 	.ndo_do_ioctl = tile_net_ioctl,
+	.ndo_change_mtu = tile_net_change_mtu,
 	.ndo_tx_timeout = tile_net_tx_timeout,
 	.ndo_set_mac_address = tile_net_set_mac_address,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -2166,11 +2173,7 @@ static void tile_net_setup(struct net_device *dev)
 	ether_setup(dev);
 	dev->netdev_ops = &tile_net_ops;
 	dev->watchdog_timeo = TILE_NET_TIMEOUT;
-
-	/* MTU range: 68 - 1500 or 9000 */
-	dev->mtu = ETH_DATA_LEN;
-	dev->min_mtu = ETH_MIN_MTU;
-	dev->max_mtu = jumbo_num ? TILE_JUMBO_MAX_MTU : ETH_DATA_LEN;
+	dev->mtu = 1500;
 
 	features |= NETIF_F_HW_CSUM;
 	features |= NETIF_F_SG;
@@ -2270,8 +2273,7 @@ static int __init tile_net_init_module(void)
 		tile_net_dev_init(name, mac);
 
 	if (!network_cpus_init())
-		cpumask_and(&network_cpus_map, housekeeping_cpumask(),
-			    cpu_online_mask);
+		network_cpus_map = *cpu_online_mask;
 
 	return 0;
 }

@@ -260,7 +260,7 @@ int arch_setup_msi_irq(struct pci_dev *dev, struct msi_desc *desc)
 	if (ret < 0)
 		return ret;
 
-	pci_write_msi_msg(irq, &msg);
+	write_msi_msg(irq, &msg);
 	return 0;
 }
 #endif
@@ -315,7 +315,7 @@ static void xls_pcie_ack_b(struct irq_data *d)
 	}
 }
 
-int pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
+int __init pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	return get_irq_vector(dev);
 }

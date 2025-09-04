@@ -18,7 +18,7 @@
 #include <linux/rtc.h>
 #include <linux/types.h>
 
-enum rtc_spare_enum {
+typedef enum {
 	RTC_FGSOC = 0,
 	RTC_ANDROID,
 	RTC_FAC_RESET,
@@ -33,26 +33,21 @@ enum rtc_spare_enum {
 	RTC_PWRON_LOGO,
 	RTC_32K_LESS,
 	RTC_LP_DET,
-	RTC_FG_INIT,
-        /*Begin, for reboot condition, 20171106*/
-#if 0
-        RTC_SPAR0_FIH_FTM,
-        RTC_SPAR0_FIH_META,
-        RTC_SPAR0_FIH_PRELOADER,
-#endif
-	RTC_SPAR0_FIH_RAMTEST, /*OEM +*/
-        RTC_VBAT,
-        /*End, for reboot condition, 20171106*/
+	RTC_SPAR0_FIH_FTM,
+	RTC_SPAR0_FIH_META,
+	RTC_SPAR0_FIH_PRELOADER,
+	RTC_SPAR0_FIH_RAMTEST,
+	RTC_SPAR0_FIH_CHARGE,
+	RTC_SPAR0_FIH_NORMAL,
 	RTC_SPAR_NUM
-};
+} rtc_spare_enum;
 
-enum rtc_reg_set {
+typedef enum {
 	RTC_REG,
 	RTC_MASK,
 	RTC_SHIFT
-};
+} rtc_reg_set;
 
-#ifdef CONFIG_MTK_RTC
 extern u16 rtc_read(u16 addr);
 extern void rtc_write(u16 addr, u16 data);
 extern void rtc_write_trigger(void);
@@ -61,8 +56,8 @@ extern void hal_rtc_reload_power(void);
 extern void rtc_xosc_write(u16 val, bool reload);
 extern void rtc_set_writeif(bool enable);
 extern void rtc_bbpu_pwrdown(bool auto_boot);
-extern void hal_rtc_set_spare_register(enum rtc_spare_enum cmd, u16 val);
-extern u16 hal_rtc_get_spare_register(enum rtc_spare_enum cmd);
+extern void hal_rtc_set_spare_register(rtc_spare_enum cmd, u16 val);
+extern u16 hal_rtc_get_spare_register(rtc_spare_enum cmd);
 extern void hal_rtc_get_tick_time(struct rtc_time *tm);
 extern void hal_rtc_set_tick_time(struct rtc_time *tm);
 extern void hal_rtc_get_alarm_time(struct rtc_time *tm);
@@ -75,14 +70,4 @@ extern void hal_rtc_read_rg(void);
 extern void rtc_lp_exception(void);
 #endif
 
-#else
-static inline void hal_rtc_set_spare_register(enum rtc_spare_enum cmd, u16 val)
-{
-}
-
-static inline u16 hal_rtc_get_spare_register(enum rtc_spare_enum cmd)
-{
-	return 0;
-}
-#endif
 #endif

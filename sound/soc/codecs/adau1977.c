@@ -202,7 +202,7 @@ static const struct snd_soc_dapm_route adau1977_dapm_routes[] = {
 		ADAU1977_REG_DC_HPF_CAL, (x) - 1, 1, 0)
 
 #define ADAU1977_DC_SUB_SWITCH(x) \
-	SOC_SINGLE("ADC" #x " DC Subtraction Capture Switch", \
+	SOC_SINGLE("ADC" #x " DC Substraction Capture Switch", \
 		ADAU1977_REG_DC_HPF_CAL, (x) + 3, 1, 0)
 
 static const struct snd_kcontrol_new adau1977_snd_controls[] = {
@@ -388,7 +388,8 @@ static int adau1977_power_disable(struct adau1977 *adau1977)
 
 	regcache_mark_dirty(adau1977->regmap);
 
-	gpiod_set_value_cansleep(adau1977->reset_gpio, 0);
+	if (adau1977->reset_gpio)
+		gpiod_set_value_cansleep(adau1977->reset_gpio, 0);
 
 	regcache_cache_only(adau1977->regmap, true);
 
@@ -419,7 +420,8 @@ static int adau1977_power_enable(struct adau1977 *adau1977)
 			goto err_disable_avdd;
 	}
 
-	gpiod_set_value_cansleep(adau1977->reset_gpio, 1);
+	if (adau1977->reset_gpio)
+		gpiod_set_value_cansleep(adau1977->reset_gpio, 1);
 
 	regcache_cache_only(adau1977->regmap, false);
 
@@ -483,7 +485,7 @@ static int adau1977_set_bias_level(struct snd_soc_codec *codec,
 	case SND_SOC_BIAS_PREPARE:
 		break;
 	case SND_SOC_BIAS_STANDBY:
-		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF)
+		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF)
 			ret = adau1977_power_enable(adau1977);
 		break;
 	case SND_SOC_BIAS_OFF:
@@ -491,7 +493,12 @@ static int adau1977_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	}
 
-	return ret;
+	if (ret)
+		return ret;
+
+	codec->dapm.bias_level = level;
+
+	return 0;
 }
 
 static int adau1977_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
@@ -846,13 +853,12 @@ static int adau1977_set_sysclk(struct snd_soc_codec *codec,
 
 static int adau1977_codec_probe(struct snd_soc_codec *codec)
 {
-	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
 	struct adau1977 *adau1977 = snd_soc_codec_get_drvdata(codec);
 	int ret;
 
 	switch (adau1977->type) {
 	case ADAU1977:
-		ret = snd_soc_dapm_new_controls(dapm,
+		ret = snd_soc_dapm_new_controls(&codec->dapm,
 			adau1977_micbias_dapm_widgets,
 			ARRAY_SIZE(adau1977_micbias_dapm_widgets));
 		if (ret < 0)
@@ -865,20 +871,18 @@ static int adau1977_codec_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static const struct snd_soc_codec_driver adau1977_codec_driver = {
+static struct snd_soc_codec_driver adau1977_codec_driver = {
 	.probe = adau1977_codec_probe,
 	.set_bias_level = adau1977_set_bias_level,
 	.set_sysclk = adau1977_set_sysclk,
 	.idle_bias_off = true,
 
-	.component_driver = {
-		.controls		= adau1977_snd_controls,
-		.num_controls		= ARRAY_SIZE(adau1977_snd_controls),
-		.dapm_widgets		= adau1977_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(adau1977_dapm_widgets),
-		.dapm_routes		= adau1977_dapm_routes,
-		.num_dapm_routes	= ARRAY_SIZE(adau1977_dapm_routes),
-	},
+	.controls = adau1977_snd_controls,
+	.num_controls = ARRAY_SIZE(adau1977_snd_controls),
+	.dapm_widgets = adau1977_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(adau1977_dapm_widgets),
+	.dapm_routes = adau1977_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(adau1977_dapm_routes),
 };
 
 static int adau1977_setup_micbias(struct adau1977 *adau1977)
@@ -934,15 +938,22 @@ int adau1977_probe(struct device *dev, struct regmap *regmap,
 		adau1977->dvdd_reg = NULL;
 	}
 
-	adau1977->reset_gpio = devm_gpiod_get_optional(dev, "reset",
-						       GPIOD_OUT_LOW);
-	if (IS_ERR(adau1977->reset_gpio))
-		return PTR_ERR(adau1977->reset_gpio);
+	adau1977->reset_gpio = devm_gpiod_get(dev, "reset");
+	if (IS_ERR(adau1977->reset_gpio)) {
+		ret = PTR_ERR(adau1977->reset_gpio);
+		if (ret != -ENOENT && ret != -ENOSYS)
+			return PTR_ERR(adau1977->reset_gpio);
+		adau1977->reset_gpio = NULL;
+	}
 
 	dev_set_drvdata(dev, adau1977);
 
-	if (adau1977->reset_gpio)
+	if (adau1977->reset_gpio) {
+		ret = gpiod_direction_output(adau1977->reset_gpio, 0);
+		if (ret)
+			return ret;
 		ndelay(100);
+	}
 
 	ret = adau1977_power_enable(adau1977);
 	if (ret)

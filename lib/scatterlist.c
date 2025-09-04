@@ -56,38 +56,6 @@ int sg_nents(struct scatterlist *sg)
 }
 EXPORT_SYMBOL(sg_nents);
 
-/**
- * sg_nents_for_len - return total count of entries in scatterlist
- *                    needed to satisfy the supplied length
- * @sg:		The scatterlist
- * @len:	The total required length
- *
- * Description:
- * Determines the number of entries in sg that are required to meet
- * the supplied length, taking into acount chaining as well
- *
- * Returns:
- *   the number of sg entries needed, negative error on failure
- *
- **/
-int sg_nents_for_len(struct scatterlist *sg, u64 len)
-{
-	int nents;
-	u64 total;
-
-	if (!len)
-		return 0;
-
-	for (nents = 0, total = 0; sg; sg = sg_next(sg)) {
-		nents++;
-		total += sg->length;
-		if (total >= len)
-			return nents;
-	}
-
-	return -EINVAL;
-}
-EXPORT_SYMBOL(sg_nents_for_len);
 
 /**
  * sg_last - return the last scatterlist entry in a list
@@ -105,12 +73,16 @@ EXPORT_SYMBOL(sg_nents_for_len);
  **/
 struct scatterlist *sg_last(struct scatterlist *sgl, unsigned int nents)
 {
+#ifndef CONFIG_ARCH_HAS_SG_CHAIN
+	struct scatterlist *ret = &sgl[nents - 1];
+#else
 	struct scatterlist *sg, *ret = NULL;
 	unsigned int i;
 
 	for_each_sg(sgl, sg, nents, i)
 		ret = sg;
 
+#endif
 #ifdef CONFIG_DEBUG_SG
 	BUG_ON(sgl[0].sg_magic != SG_MAGIC);
 	BUG_ON(!sg_is_last(ret));
@@ -496,18 +468,17 @@ static bool sg_miter_get_next_page(struct sg_mapping_iter *miter)
 {
 	if (!miter->__remaining) {
 		struct scatterlist *sg;
+		unsigned long pgoffset;
 
 		if (!__sg_page_iter_next(&miter->piter))
 			return false;
 
 		sg = miter->piter.sg;
+		pgoffset = miter->piter.sg_pgoffset;
 
-		miter->__offset = miter->piter.sg_pgoffset ? 0 : sg->offset;
-		miter->piter.sg_pgoffset += miter->__offset >> PAGE_SHIFT;
-		miter->__offset &= PAGE_SIZE - 1;
+		miter->__offset = pgoffset ? 0 : sg->offset;
 		miter->__remaining = sg->offset + sg->length -
-				     (miter->piter.sg_pgoffset << PAGE_SHIFT) -
-				     miter->__offset;
+				(pgoffset << PAGE_SHIFT) - miter->__offset;
 		miter->__remaining = min_t(unsigned long, miter->__remaining,
 					   PAGE_SIZE - miter->__offset);
 	}
@@ -599,9 +570,9 @@ EXPORT_SYMBOL(sg_miter_next);
  *
  * Description:
  *   Stops mapping iterator @miter.  @miter should have been started
- *   using sg_miter_start().  A stopped iteration can be resumed by
- *   calling sg_miter_next() on it.  This is useful when resources (kmap)
- *   need to be released during iteration.
+ *   started using sg_miter_start().  A stopped iteration can be
+ *   resumed by calling sg_miter_next() on it.  This is useful when
+ *   resources (kmap) need to be released during iteration.
  *
  * Context:
  *   Preemption disabled if the SG_MITER_ATOMIC is set.  Don't care
@@ -647,11 +618,13 @@ EXPORT_SYMBOL(sg_miter_stop);
  * Returns the number of copied bytes.
  *
  **/
-size_t sg_copy_buffer(struct scatterlist *sgl, unsigned int nents, void *buf,
-		      size_t buflen, off_t skip, bool to_buffer)
+static size_t sg_copy_buffer(struct scatterlist *sgl, unsigned int nents,
+			     void *buf, size_t buflen, off_t skip,
+			     bool to_buffer)
 {
 	unsigned int offset = 0;
 	struct sg_mapping_iter miter;
+	unsigned long flags;
 	unsigned int sg_flags = SG_MITER_ATOMIC;
 
 	if (to_buffer)
@@ -664,7 +637,9 @@ size_t sg_copy_buffer(struct scatterlist *sgl, unsigned int nents, void *buf,
 	if (!sg_miter_skip(&miter, skip))
 		return false;
 
-	while ((offset < buflen) && sg_miter_next(&miter)) {
+	local_irq_save(flags);
+
+	while (sg_miter_next(&miter) && offset < buflen) {
 		unsigned int len;
 
 		len = min(miter.length, buflen - offset);
@@ -679,9 +654,9 @@ size_t sg_copy_buffer(struct scatterlist *sgl, unsigned int nents, void *buf,
 
 	sg_miter_stop(&miter);
 
+	local_irq_restore(flags);
 	return offset;
 }
-EXPORT_SYMBOL(sg_copy_buffer);
 
 /**
  * sg_copy_from_buffer - Copy from a linear buffer to an SG list
@@ -694,9 +669,9 @@ EXPORT_SYMBOL(sg_copy_buffer);
  *
  **/
 size_t sg_copy_from_buffer(struct scatterlist *sgl, unsigned int nents,
-			   const void *buf, size_t buflen)
+			   void *buf, size_t buflen)
 {
-	return sg_copy_buffer(sgl, nents, (void *)buf, buflen, 0, false);
+	return sg_copy_buffer(sgl, nents, buf, buflen, 0, false);
 }
 EXPORT_SYMBOL(sg_copy_from_buffer);
 
@@ -722,16 +697,16 @@ EXPORT_SYMBOL(sg_copy_to_buffer);
  * @sgl:		 The SG list
  * @nents:		 Number of SG entries
  * @buf:		 Where to copy from
- * @buflen:		 The number of bytes to copy
  * @skip:		 Number of bytes to skip before copying
+ * @buflen:		 The number of bytes to copy
  *
  * Returns the number of copied bytes.
  *
  **/
 size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents,
-			    const void *buf, size_t buflen, off_t skip)
+			    void *buf, size_t buflen, off_t skip)
 {
-	return sg_copy_buffer(sgl, nents, (void *)buf, buflen, skip, false);
+	return sg_copy_buffer(sgl, nents, buf, buflen, skip, false);
 }
 EXPORT_SYMBOL(sg_pcopy_from_buffer);
 
@@ -740,8 +715,8 @@ EXPORT_SYMBOL(sg_pcopy_from_buffer);
  * @sgl:		 The SG list
  * @nents:		 Number of SG entries
  * @buf:		 Where to copy to
- * @buflen:		 The number of bytes to copy
  * @skip:		 Number of bytes to skip before copying
+ * @buflen:		 The number of bytes to copy
  *
  * Returns the number of copied bytes.
  *
@@ -752,38 +727,3 @@ size_t sg_pcopy_to_buffer(struct scatterlist *sgl, unsigned int nents,
 	return sg_copy_buffer(sgl, nents, buf, buflen, skip, true);
 }
 EXPORT_SYMBOL(sg_pcopy_to_buffer);
-
-/**
- * sg_zero_buffer - Zero-out a part of a SG list
- * @sgl:		 The SG list
- * @nents:		 Number of SG entries
- * @buflen:		 The number of bytes to zero out
- * @skip:		 Number of bytes to skip before zeroing
- *
- * Returns the number of bytes zeroed.
- **/
-size_t sg_zero_buffer(struct scatterlist *sgl, unsigned int nents,
-		       size_t buflen, off_t skip)
-{
-	unsigned int offset = 0;
-	struct sg_mapping_iter miter;
-	unsigned int sg_flags = SG_MITER_ATOMIC | SG_MITER_TO_SG;
-
-	sg_miter_start(&miter, sgl, nents, sg_flags);
-
-	if (!sg_miter_skip(&miter, skip))
-		return false;
-
-	while (offset < buflen && sg_miter_next(&miter)) {
-		unsigned int len;
-
-		len = min(miter.length, buflen - offset);
-		memset(miter.addr, 0, len);
-
-		offset += len;
-	}
-
-	sg_miter_stop(&miter);
-	return offset;
-}
-EXPORT_SYMBOL(sg_zero_buffer);

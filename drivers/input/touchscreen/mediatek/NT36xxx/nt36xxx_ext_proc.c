@@ -1,8 +1,8 @@
 /*
  * Copyright (C) 2010 - 2017 Novatek, Inc.
  *
- * $Revision: 20251 $
- * $Date: 2017-12-13 17:41:29 +0800 (週三, 13 十二月 2017) $
+ * $Revision: 15382 $
+ * $Date: 2017-08-15 09:19:01 +0800 (週二, 15 八月 2017) $
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -360,10 +360,6 @@ static int32_t nvt_fw_version_open(struct inode *inode, struct file *file)
 
 	NVT_LOG("++\n");
 
-#if NVT_TOUCH_ESD_PROTECT
-	nvt_esd_check_enable(false);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
-
 	if (nvt_get_fw_info()) {
 		mutex_unlock(&ts->lock);
 		return -EAGAIN;
@@ -398,10 +394,6 @@ static int32_t nvt_baseline_open(struct inode *inode, struct file *file)
 	}
 
 	NVT_LOG("++\n");
-
-#if NVT_TOUCH_ESD_PROTECT
-	nvt_esd_check_enable(false);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
 
 	if (nvt_clear_fw_status()) {
 		mutex_unlock(&ts->lock);
@@ -458,10 +450,6 @@ static int32_t nvt_raw_open(struct inode *inode, struct file *file)
 	}
 
 	NVT_LOG("++\n");
-
-#if NVT_TOUCH_ESD_PROTECT
-	nvt_esd_check_enable(false);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
 
 	if (nvt_clear_fw_status()) {
 		mutex_unlock(&ts->lock);
@@ -526,10 +514,6 @@ static int32_t nvt_diff_open(struct inode *inode, struct file *file)
 
 	NVT_LOG("++\n");
 
-#if NVT_TOUCH_ESD_PROTECT
-	nvt_esd_check_enable(false);
-#endif /* #if NVT_TOUCH_ESD_PROTECT */
-
 	if (nvt_clear_fw_status()) {
 		mutex_unlock(&ts->lock);
 		return -EAGAIN;
@@ -577,115 +561,6 @@ static const struct file_operations nvt_diff_fops = {
 	.llseek = seq_lseek,
 	.release = seq_release,
 };
-
-//-----[20180507]Add Power Status Notify--------
-static int8_t nvt_customizeCmd(uint8_t u8Cmd)
-{
-	uint8_t buf[8] = {0};
-	uint8_t retry = 0;
-	int8_t ret = 0;
-
-	NVT_LOG("++ Cmd=0x%02X\n",u8Cmd);//[20171101]Modify
-	for (retry = 0; retry < 20; retry++) {
-		//---set xdata index to EVENT BUF ADDR---
-		buf[0] = 0xFF;
-		buf[1] = (ts->mmap->EVENT_BUF_ADDR >> 16) & 0xFF;
-		buf[2] = (ts->mmap->EVENT_BUF_ADDR >> 8) & 0xFF;
-		CTP_I2C_WRITE(ts->client, I2C_FW_Address, buf, 3);
-
-		//---switch HOST_CMD---
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = u8Cmd;
-		CTP_I2C_WRITE(ts->client, I2C_FW_Address, buf, 2);
-
-		msleep(35);
-
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = 0xFF;
-		CTP_I2C_READ(ts->client, I2C_FW_Address, buf, 2);
-
-		if (buf[1] == 0x00)
-			break;
-	}
-
-	if (unlikely(retry == 20)) {
-		NVT_ERR("customizeCmd 0x%02X failed, buf[1]=0x%02X\n", u8Cmd, buf[1]);
-		ret = -1;
-	}
-	NVT_LOG("--\n");
-	return ret;
-}
-
-#define	EVENTBUFFER_STATUS_OFF 	0x51
-#define	EVENTBUFFER_STATUS_DC	0x52
-#define	EVENTBUFFER_STATUS_AC	0x53
-
-
-int tpd_usb_plugin(int plugin)
-{
-	int ret = -1;
-	mutex_lock(&ts->lock);
-	
-	switch(plugin) {
-        case USB_PLUGOUT:
-            NVT_LOG("usb plug [out] .\n");
-            ret = nvt_customizeCmd(EVENTBUFFER_STATUS_OFF);
-            if (ret < 0)
-            {
-                NVT_LOG("tpd_usb_plugin 0x%02X cmd failed.\n", EVENTBUFFER_STATUS_OFF);
-            }
-            break;
-			
-        case USB_PLUGIN:
-		default:			//default is AC		
-            NVT_LOG("usb plug [in ] .\n");
-            ret = nvt_customizeCmd(EVENTBUFFER_STATUS_AC);
-            if (ret < 0)
-            {
-                NVT_LOG("tpd_usb_plugin 0x%02X cmd failed.\n", EVENTBUFFER_STATUS_AC);
-            }			
-            break;        
-    }
-    
-  
-	mutex_unlock(&ts->lock);
-	return ret;
-}
-
-int tpd_usb_plugin_nomutex(int plugin)
-{
-	int ret = -1;
-		
-	switch(plugin) {
-        case USB_PLUGOUT:
-            NVT_LOG("usb plug [out] .\n");
-            ret = nvt_customizeCmd(EVENTBUFFER_STATUS_OFF);
-            if (ret < 0)
-            {
-                NVT_LOG("tpd_usb_plugin 0x%02X cmd failed.\n", EVENTBUFFER_STATUS_OFF);
-            }
-            break;
-			
-        case USB_PLUGIN:
-		default:			//default is AC		
-            NVT_LOG("usb plug [in ] .\n");
-            ret = nvt_customizeCmd(EVENTBUFFER_STATUS_AC);
-            if (ret < 0)
-            {
-                NVT_LOG("tpd_usb_plugin 0x%02X cmd failed.\n", EVENTBUFFER_STATUS_AC);
-            }			
-            break;        
-    }
-    
-  
-	return ret;
-}
-
-EXPORT_SYMBOL(tpd_usb_plugin);
-//example
-//	tpd_usb_plugin(USB_PLUGOUT);
-//	tpd_usb_plugin(USB_PLUGIN);
-
 
 /*******************************************************
 Description:

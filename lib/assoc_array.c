@@ -1,6 +1,6 @@
 /* Generic associative array implementation.
  *
- * See Documentation/core-api/assoc_array.rst for information.
+ * See Documentation/assoc_array.txt for information.
  *
  * Copyright (C) 2013 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
@@ -11,7 +11,6 @@
  * 2 of the Licence, or (at your option) any later version.
  */
 //#define DEBUG
-#include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/assoc_array_priv.h>
@@ -781,11 +780,9 @@ all_leaves_cluster_together:
 		new_s0->index_key[i] =
 			ops->get_key_chunk(index_key, i * ASSOC_ARRAY_KEY_CHUNK_SIZE);
 
-	if (level & ASSOC_ARRAY_KEY_CHUNK_MASK) {
-		blank = ULONG_MAX << (level & ASSOC_ARRAY_KEY_CHUNK_MASK);
-		pr_devel("blank off [%zu] %d: %lx\n", keylen - 1, level, blank);
-		new_s0->index_key[keylen - 1] &= ~blank;
-	}
+	blank = ULONG_MAX << (level & ASSOC_ARRAY_KEY_CHUNK_MASK);
+	pr_devel("blank off [%zu] %d: %lx\n", keylen - 1, level, blank);
+	new_s0->index_key[keylen - 1] &= ~blank;
 
 	/* This now reduces to a node splitting exercise for which we'll need
 	 * to regenerate the disparity table.

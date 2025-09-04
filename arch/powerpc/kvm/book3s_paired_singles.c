@@ -352,7 +352,15 @@ static inline u32 inst_get_field(u32 inst, int msb, int lsb)
 	return kvmppc_get_field(inst, msb + 32, lsb + 32);
 }
 
-static bool kvmppc_inst_is_paired_single(struct kvm_vcpu *vcpu, u32 inst)
+/*
+ * Replaces inst bits with ordering according to spec.
+ */
+static inline u32 inst_set_field(u32 inst, int msb, int lsb, int value)
+{
+	return kvmppc_set_field(inst, msb + 32, lsb + 32, value);
+}
+
+bool kvmppc_inst_is_paired_single(struct kvm_vcpu *vcpu, u32 inst)
 {
 	if (!(vcpu->arch.hflags & BOOK3S_HFLAG_PAIRED_SINGLE))
 		return false;
@@ -1265,7 +1273,6 @@ int kvmppc_emulate_paired_single(struct kvm_run *run, struct kvm_vcpu *vcpu)
 	if (rcomp)
 		kvmppc_set_cr(vcpu, cr);
 
-	disable_kernel_fp();
 	preempt_enable();
 
 	return emulated;

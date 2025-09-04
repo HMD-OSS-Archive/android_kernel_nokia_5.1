@@ -45,7 +45,7 @@ static int snappercl15_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static const struct snd_soc_ops snappercl15_ops = {
+static struct snd_soc_ops snappercl15_ops = {
 	.hw_params	= snappercl15_hw_params,
 };
 
@@ -123,6 +123,7 @@ static int snappercl15_remove(struct platform_device *pdev)
 static struct platform_driver snappercl15_driver = {
 	.driver		= {
 		.name	= "snappercl15-audio",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= snappercl15_probe,
 	.remove		= snappercl15_remove,

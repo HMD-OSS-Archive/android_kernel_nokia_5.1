@@ -12,17 +12,13 @@
  */
 
 #include <linux/ring_buffer.h>
-#include <linux/trace_events.h>
+#include <linux/ftrace_event.h>
 #include "mtk_ftrace.h"
 #include "trace.h"
 
-#ifdef CONFIG_MTK_PERF_TRACKER
-#include <mt-plat/perf_tracker.h>
-#endif
-
 #ifdef CONFIG_MTK_KERNEL_MARKER
 static unsigned long __read_mostly mark_addr;
-static bool kernel_marker_on = true;
+static int kernel_marker_on;
 
 static inline void update_tracing_mark_write_addr(void)
 {
@@ -87,7 +83,7 @@ kernel_marker_on_simple_write(struct file *filp, const char __user *ubuf,
 
 	kernel_marker_on = !!val;
 
-	if (kernel_marker_on && !mark_addr)
+	if (kernel_marker_on)
 		update_tracing_mark_write_addr();
 
 	(*ppos)++;
@@ -104,17 +100,15 @@ static const struct file_operations kernel_marker_on_simple_fops = {
 
 static __init int init_kernel_marker(void)
 {
-	struct trace_array *tr;
 	struct dentry *d_tracer;
 
-	tr  = top_trace_array();
 	d_tracer = tracing_init_dentry();
-
-	if (!tr || IS_ERR(d_tracer))
+	if (!d_tracer)
 		return 0;
-	trace_create_file("kernel_marker_on", 0644, d_tracer, tr,
+
+	trace_create_file("kernel_marker_on", 0644, d_tracer, NULL,
 			  &kernel_marker_on_simple_fops);
-	update_tracing_mark_write_addr();
+
 	return 0;
 }
 
@@ -171,15 +165,10 @@ bool boot_ftrace_check(unsigned long trace_en)
 }
 
 #include <linux/rtc.h>
-#include <linux/sched.h>
-#include <linux/sched/clock.h>
-#include <linux/sched/stat.h>
-
-
 void print_enabled_events(struct trace_buffer *buf, struct seq_file *m)
 {
-	struct trace_event_call *call;
-	struct trace_event_file *file;
+	struct ftrace_event_call *call;
+	struct ftrace_event_file *file;
 	struct trace_array *tr;
 
 	unsigned long usec_rem;
@@ -191,19 +180,16 @@ void print_enabled_events(struct trace_buffer *buf, struct seq_file *m)
 		tr = buf->tr;
 	else
 		return;
-
 	if (tr->name != NULL)
 		seq_printf(m, "# instance: %s, enabled events:", tr->name);
 	else
 		seq_puts(m, "# enabled events:");
-
 	list_for_each_entry(file, &tr->events, list) {
 		call = file->event_call;
-		if (file->flags & EVENT_FILE_FL_ENABLED)
+		if (file->flags & FTRACE_EVENT_FL_ENABLED)
 			seq_printf(m, " %s:%s", call->class->system,
-				   trace_event_name(call));
+				   ftrace_event_name(call));
 	}
-
 	seq_puts(m, "\n");
 
 	t = sched_clock();
@@ -233,6 +219,9 @@ static void ftrace_events_enable(int enable)
 		trace_set_clr_event(NULL, "sched_switch", 1);
 		trace_set_clr_event(NULL, "sched_wakeup", 1);
 		trace_set_clr_event(NULL, "sched_wakeup_new", 1);
+		trace_set_clr_event(NULL, "softirq_entry", 1);
+		trace_set_clr_event(NULL, "softirq_exit", 1);
+		trace_set_clr_event(NULL, "softirq_raise", 1);
 #ifdef CONFIG_SMP
 		trace_set_clr_event(NULL, "sched_migrate_task", 1);
 #endif
@@ -245,32 +234,16 @@ static void ftrace_events_enable(int enable)
 		trace_set_clr_event(NULL, "block_rq_issue", 1);
 		trace_set_clr_event(NULL, "block_rq_insert", 1);
 		trace_set_clr_event(NULL, "block_rq_complete", 1);
-		trace_set_clr_event(NULL, "block_rq_requeue", 1);
 		trace_set_clr_event(NULL, "debug_allocate_large_pages", 1);
 		trace_set_clr_event(NULL, "dump_allocate_large_pages", 1);
-		trace_set_clr_event("mtk_events", NULL, 1);
 
-		if (boot_trace) {
-			trace_set_clr_event("android_fs", NULL, 1);
-			trace_set_clr_event(NULL, "sched_blocked_reason", 1);
-			/*trace_set_clr_event(NULL, "sched_waking", 1);*/
-		} else {
-			trace_set_clr_event("ipi", NULL, 1);
-			trace_set_clr_event(NULL, "softirq_entry", 1);
-			trace_set_clr_event(NULL, "softirq_exit", 1);
-			trace_set_clr_event(NULL, "softirq_raise", 1);
-			trace_set_clr_event(NULL, "irq_handler_entry", 1);
-			trace_set_clr_event(NULL, "irq_handler_exit", 1);
-#ifdef CONFIG_MTK_SCHED_MONITOR
-			trace_set_clr_event(NULL, "sched_mon_msg", 1);
-#endif
-#ifdef CONFIG_LOCKDEP
-			trace_set_clr_event(NULL, "lock_dbg", 1);
-			trace_set_clr_event(NULL, "lock_monitor_msg", 1);
-#endif
-			trace_set_clr_event("met_bio", NULL, 1);
-			trace_set_clr_event("met_fuse", NULL, 1);
-		}
+
+		trace_set_clr_event("mtk_events", NULL, 1);
+		trace_set_clr_event("mtk_nand", NULL, 1);
+		trace_set_clr_event("ipi", NULL, 1);
+
+		trace_set_clr_event("met_bio", NULL, 1);
+		trace_set_clr_event("met_fuse", NULL, 1);
 
 		tracing_on();
 	} else {
@@ -285,17 +258,10 @@ static __init int boot_ftrace(void)
 	int ret;
 
 	if (boot_trace) {
-#ifdef CONFIG_MTK_PERF_TRACKER
-		perf_tracker_enable(1);
-#endif
 		tr = top_trace_array();
 		ret = tracing_update_buffers();
 		if (ret != 0)
 			pr_debug("unable to expand buffer, ret=%d\n", ret);
-#ifdef CONFIG_SCHEDSTATS
-		force_schedstat_enabled();
-#endif
-
 		ftrace_events_enable(1);
 		set_tracer_flag(tr, TRACE_ITER_OVERWRITE, 0);
 		pr_debug("[ftrace]boot-time profiling...\n");
@@ -313,12 +279,10 @@ static __init int enable_ftrace(void)
 		/* enable ftrace facilities */
 		ftrace_events_enable(1);
 
-		/*
-		 * only update buffer eariler
+		/* only update buffer eariler
 		 * if we want to collect boot-time ftrace
 		 * to avoid the boot time impacted by
-		 * early-expanded ring buffer
-		 */
+		 * early-expanded ring buffer */
 		ret = tracing_update_buffers();
 		if (ret != 0)
 			pr_debug("fail to update buffer, ret=%d\n",
@@ -332,3 +296,43 @@ late_initcall(enable_ftrace);
 #endif
 #endif
 
+#if defined(CONFIG_MTK_SCHED_TRACERS) && defined(CONFIG_HOTPLUG_CPU)
+#include <linux/cpu.h>
+#include <trace/events/mtk_events.h>
+
+static DEFINE_PER_CPU(unsigned long long, last_event_ts);
+static struct notifier_block hotplug_event_notifier;
+
+static int
+hotplug_event_notify(struct notifier_block *self,
+		     unsigned long action, void *hcpu)
+{
+	long cpu = (long)hcpu;
+
+	switch (action) {
+	case CPU_STARTING:
+	case CPU_STARTING_FROZEN:
+		trace_cpu_hotplug(cpu, 1, per_cpu(last_event_ts, cpu));
+		per_cpu(last_event_ts, cpu) = ns2usecs(ftrace_now(cpu));
+		break;
+	case CPU_DYING:
+	case CPU_DYING_FROZEN:
+		trace_cpu_hotplug(cpu, 0, per_cpu(last_event_ts, cpu));
+		per_cpu(last_event_ts, cpu) = ns2usecs(ftrace_now(cpu));
+		break;
+	default:
+		break;
+	}
+	return NOTIFY_OK;
+}
+
+static __init int hotplug_events_init(void)
+{
+	hotplug_event_notifier.notifier_call = hotplug_event_notify;
+	hotplug_event_notifier.priority = 0;
+	register_cpu_notifier(&hotplug_event_notifier);
+	return 0;
+}
+
+early_initcall(hotplug_events_init);
+#endif

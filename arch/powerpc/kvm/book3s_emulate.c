@@ -23,7 +23,6 @@
 #include <asm/reg.h>
 #include <asm/switch_to.h>
 #include <asm/time.h>
-#include "book3s.h"
 
 #define OP_19_XOP_RFID		18
 #define OP_19_XOP_RFI		50
@@ -498,23 +497,14 @@ int kvmppc_core_emulate_mtspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong spr_val)
 	case SPRN_MMCR0:
 	case SPRN_MMCR1:
 	case SPRN_MMCR2:
-	case SPRN_UMMCR2:
 #endif
 		break;
 unprivileged:
 	default:
-		pr_info_ratelimited("KVM: invalid SPR write: %d\n", sprn);
-		if (sprn & 0x10) {
-			if (kvmppc_get_msr(vcpu) & MSR_PR) {
-				kvmppc_core_queue_program(vcpu, SRR1_PROGPRIV);
-				emulated = EMULATE_AGAIN;
-			}
-		} else {
-			if ((kvmppc_get_msr(vcpu) & MSR_PR) || sprn == 0) {
-				kvmppc_core_queue_program(vcpu, SRR1_PROGILL);
-				emulated = EMULATE_AGAIN;
-			}
-		}
+		printk(KERN_INFO "KVM: invalid SPR write: %d\n", sprn);
+#ifndef DEBUG_SPR
+		emulated = EMULATE_FAIL;
+#endif
 		break;
 	}
 
@@ -588,7 +578,7 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 		*spr_val = vcpu->arch.spurr;
 		break;
 	case SPRN_VTB:
-		*spr_val = to_book3s(vcpu)->vtb;
+		*spr_val = vcpu->arch.vtb;
 		break;
 	case SPRN_IC:
 		*spr_val = vcpu->arch.ic;
@@ -649,27 +639,16 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 	case SPRN_MMCR0:
 	case SPRN_MMCR1:
 	case SPRN_MMCR2:
-	case SPRN_UMMCR2:
 	case SPRN_TIR:
 #endif
 		*spr_val = 0;
 		break;
 	default:
 unprivileged:
-		pr_info_ratelimited("KVM: invalid SPR read: %d\n", sprn);
-		if (sprn & 0x10) {
-			if (kvmppc_get_msr(vcpu) & MSR_PR) {
-				kvmppc_core_queue_program(vcpu, SRR1_PROGPRIV);
-				emulated = EMULATE_AGAIN;
-			}
-		} else {
-			if ((kvmppc_get_msr(vcpu) & MSR_PR) || sprn == 0 ||
-			    sprn == 4 || sprn == 5 || sprn == 6) {
-				kvmppc_core_queue_program(vcpu, SRR1_PROGILL);
-				emulated = EMULATE_AGAIN;
-			}
-		}
-
+		printk(KERN_INFO "KVM: invalid SPR read: %d\n", sprn);
+#ifndef DEBUG_SPR
+		emulated = EMULATE_FAIL;
+#endif
 		break;
 	}
 

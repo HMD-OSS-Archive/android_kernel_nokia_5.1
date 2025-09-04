@@ -195,8 +195,11 @@ static int eem_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 		goto fail;
 
 	if (intf == eem->ctrl_id) {
-		DBG(cdev, "reset eem\n");
-		gether_disconnect(&eem->port);
+
+		if (eem->port.in_ep->driver_data) {
+			DBG(cdev, "reset eem\n");
+			gether_disconnect(&eem->port);
+		}
 
 		if (!eem->port.in_ep->desc || !eem->port.out_ep->desc) {
 			DBG(cdev, "init eem\n");
@@ -234,7 +237,7 @@ static void eem_disable(struct usb_function *f)
 
 	DBG(cdev, "eem deactivated\n");
 
-	if (eem->port.in_ep->enabled)
+	if (eem->port.in_ep->driver_data)
 		gether_disconnect(&eem->port);
 }
 
@@ -260,7 +263,9 @@ static int eem_bind(struct usb_configuration *c, struct usb_function *f)
 	 * with list_for_each_entry, so we assume no race condition
 	 * with regard to eem_opts->bound access
 	 */
-	if (!eem_opts->bound) {
+
+	/* if (!eem_opts->bound) { */
+	if (eem_opts && !eem_opts->bound) {
 		mutex_lock(&eem_opts->lock);
 		gether_set_gadget(eem_opts->net, cdev->gadget);
 		status = gether_register_netdev(eem_opts->net);
@@ -290,11 +295,13 @@ static int eem_bind(struct usb_configuration *c, struct usb_function *f)
 	if (!ep)
 		goto fail;
 	eem->port.in_ep = ep;
+	ep->driver_data = cdev;	/* claim */
 
 	ep = usb_ep_autoconfig(cdev->gadget, &eem_fs_out_desc);
 	if (!ep)
 		goto fail;
 	eem->port.out_ep = ep;
+	ep->driver_data = cdev;	/* claim */
 
 	status = -ENOMEM;
 
@@ -309,7 +316,7 @@ static int eem_bind(struct usb_configuration *c, struct usb_function *f)
 	eem_ss_out_desc.bEndpointAddress = eem_fs_out_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, eem_fs_function, eem_hs_function,
-			eem_ss_function, NULL);
+			eem_ss_function);
 	if (status)
 		goto fail;
 
@@ -320,6 +327,11 @@ static int eem_bind(struct usb_configuration *c, struct usb_function *f)
 	return 0;
 
 fail:
+	if (eem->port.out_ep)
+		eem->port.out_ep->driver_data = NULL;
+	if (eem->port.in_ep)
+		eem->port.in_ep->driver_data = NULL;
+
 	ERROR(cdev, "%s: can't bind, err %d\n", f->name, status);
 
 	return status;
@@ -341,15 +353,11 @@ static struct sk_buff *eem_wrap(struct gether *port, struct sk_buff *skb)
 {
 	struct sk_buff	*skb2 = NULL;
 	struct usb_ep	*in = port->in_ep;
-	int		headroom, tailroom, padlen = 0;
-	u16		len;
+	int		padlen = 0;
+	u16		len = skb->len;
 
-	if (!skb)
-		return NULL;
-
-	len = skb->len;
-	headroom = skb_headroom(skb);
-	tailroom = skb_tailroom(skb);
+	int headroom = skb_headroom(skb);
+	int tailroom = skb_tailroom(skb);
 
 	/* When (len + EEM_HLEN + ETH_FCS_LEN) % in->maxpacket) is 0,
 	 * stick two bytes of zero-length EEM packet on the end.
@@ -549,10 +557,10 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(eem);
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(eem);
 
 static struct configfs_attribute *eem_attrs[] = {
-	&eem_opts_attr_dev_addr,
-	&eem_opts_attr_host_addr,
-	&eem_opts_attr_qmult,
-	&eem_opts_attr_ifname,
+	&f_eem_opts_dev_addr.attr,
+	&f_eem_opts_host_addr.attr,
+	&f_eem_opts_qmult.attr,
+	&f_eem_opts_ifname.attr,
 	NULL,
 };
 
@@ -613,6 +621,68 @@ static void eem_unbind(struct usb_configuration *c, struct usb_function *f)
 	DBG(c->cdev, "eem unbind\n");
 
 	usb_free_all_descriptors(f);
+}
+
+static void
+eem_old_unbind(struct usb_configuration *c, struct usb_function *f)
+{
+	struct f_eem	*eem = func_to_eem(f);
+
+	DBG(c->cdev, "eem unbind\n");
+
+	usb_free_all_descriptors(f);
+	kfree(eem);
+}
+/**
+ * eem_bind_config - add CDC Ethernet (EEM) network link to a configuration
+ * @c: the configuration to support the network link
+ * Context: single threaded during gadget setup
+ *
+ * Returns zero on success, else negative errno.
+ *
+ * Caller must have called @gether_setup().  Caller is also responsible
+ * for calling @gether_cleanup() before module unload.
+ */
+int eem_bind_config(struct usb_configuration *c, struct eth_dev *dev)
+{
+	struct f_eem	*eem;
+	int		status;
+
+	/* maybe allocate device-global string IDs */
+	if (eem_string_defs[0].id == 0) {
+
+		/* control interface label */
+		status = usb_string_id(c->cdev);
+		if (status < 0)
+			return status;
+		eem_string_defs[0].id = status;
+		eem_intf.iInterface = status;
+	}
+
+	/* allocate and initialize one new instance */
+	eem = kzalloc(sizeof(*eem), GFP_KERNEL);
+	if (!eem)
+		return -ENOMEM;
+
+	eem->port.ioport = dev;
+	eem->port.cdc_filter = DEFAULT_FILTER;
+
+	eem->port.func.name = "cdc_eem";
+	eem->port.func.strings = eem_strings;
+	/* descriptors are per-instance copies */
+	eem->port.func.bind = eem_bind;
+	eem->port.func.unbind = eem_old_unbind;
+	eem->port.func.set_alt = eem_set_alt;
+	eem->port.func.setup = eem_setup;
+	eem->port.func.disable = eem_disable;
+	eem->port.wrap = eem_wrap;
+	eem->port.unwrap = eem_unwrap;
+	eem->port.header_len = EEM_HLEN;
+
+	status = usb_add_function(c, &eem->port.func);
+	if (status)
+		kfree(eem);
+	return status;
 }
 
 static struct usb_function *eem_alloc(struct usb_function_instance *fi)

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PERCPU_H
 #define _ASM_X86_PERCPU_H
 
@@ -65,7 +64,7 @@
 #define __percpu_prefix		""
 #endif
 
-#define __percpu_arg(x)		__percpu_prefix "%" #x
+#define __percpu_arg(x)		__percpu_prefix "%P" #x
 
 /*
  * Initialized pointers to per-cpu variables needed for the boot
@@ -180,58 +179,29 @@ do {									\
 	}								\
 } while (0)
 
-#define percpu_from_op(op, var)				\
+#define percpu_from_op(op, var, constraint)		\
 ({							\
 	typeof(var) pfo_ret__;				\
 	switch (sizeof(var)) {				\
 	case 1:						\
-		asm volatile(op "b "__percpu_arg(1)",%0"\
+		asm(op "b "__percpu_arg(1)",%0"		\
 		    : "=q" (pfo_ret__)			\
-		    : "m" (var));			\
+		    : constraint);			\
 		break;					\
 	case 2:						\
-		asm volatile(op "w "__percpu_arg(1)",%0"\
+		asm(op "w "__percpu_arg(1)",%0"		\
 		    : "=r" (pfo_ret__)			\
-		    : "m" (var));			\
+		    : constraint);			\
 		break;					\
 	case 4:						\
-		asm volatile(op "l "__percpu_arg(1)",%0"\
+		asm(op "l "__percpu_arg(1)",%0"		\
 		    : "=r" (pfo_ret__)			\
-		    : "m" (var));			\
+		    : constraint);			\
 		break;					\
 	case 8:						\
-		asm volatile(op "q "__percpu_arg(1)",%0"\
+		asm(op "q "__percpu_arg(1)",%0"		\
 		    : "=r" (pfo_ret__)			\
-		    : "m" (var));			\
-		break;					\
-	default: __bad_percpu_size();			\
-	}						\
-	pfo_ret__;					\
-})
-
-#define percpu_stable_op(op, var)			\
-({							\
-	typeof(var) pfo_ret__;				\
-	switch (sizeof(var)) {				\
-	case 1:						\
-		asm(op "b "__percpu_arg(P1)",%0"	\
-		    : "=q" (pfo_ret__)			\
-		    : "p" (&(var)));			\
-		break;					\
-	case 2:						\
-		asm(op "w "__percpu_arg(P1)",%0"	\
-		    : "=r" (pfo_ret__)			\
-		    : "p" (&(var)));			\
-		break;					\
-	case 4:						\
-		asm(op "l "__percpu_arg(P1)",%0"	\
-		    : "=r" (pfo_ret__)			\
-		    : "p" (&(var)));			\
-		break;					\
-	case 8:						\
-		asm(op "q "__percpu_arg(P1)",%0"	\
-		    : "=r" (pfo_ret__)			\
-		    : "p" (&(var)));			\
+		    : constraint);			\
 		break;					\
 	default: __bad_percpu_size();			\
 	}						\
@@ -389,11 +359,11 @@ do {									\
  * per-thread variables implemented as per-cpu variables and thus
  * stable for the duration of the respective task.
  */
-#define this_cpu_read_stable(var)	percpu_stable_op("mov", var)
+#define this_cpu_read_stable(var)	percpu_from_op("mov", var, "p" (&(var)))
 
-#define raw_cpu_read_1(pcp)		percpu_from_op("mov", pcp)
-#define raw_cpu_read_2(pcp)		percpu_from_op("mov", pcp)
-#define raw_cpu_read_4(pcp)		percpu_from_op("mov", pcp)
+#define raw_cpu_read_1(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
+#define raw_cpu_read_2(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
+#define raw_cpu_read_4(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
 
 #define raw_cpu_write_1(pcp, val)	percpu_to_op("mov", (pcp), val)
 #define raw_cpu_write_2(pcp, val)	percpu_to_op("mov", (pcp), val)
@@ -411,9 +381,9 @@ do {									\
 #define raw_cpu_xchg_2(pcp, val)	percpu_xchg_op(pcp, val)
 #define raw_cpu_xchg_4(pcp, val)	percpu_xchg_op(pcp, val)
 
-#define this_cpu_read_1(pcp)		percpu_from_op("mov", pcp)
-#define this_cpu_read_2(pcp)		percpu_from_op("mov", pcp)
-#define this_cpu_read_4(pcp)		percpu_from_op("mov", pcp)
+#define this_cpu_read_1(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
+#define this_cpu_read_2(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
+#define this_cpu_read_4(pcp)		percpu_from_op("mov", (pcp), "m"(pcp))
 #define this_cpu_write_1(pcp, val)	percpu_to_op("mov", (pcp), val)
 #define this_cpu_write_2(pcp, val)	percpu_to_op("mov", (pcp), val)
 #define this_cpu_write_4(pcp, val)	percpu_to_op("mov", (pcp), val)
@@ -465,7 +435,7 @@ do {									\
  * 32 bit must fall back to generic operations.
  */
 #ifdef CONFIG_X86_64
-#define raw_cpu_read_8(pcp)			percpu_from_op("mov", pcp)
+#define raw_cpu_read_8(pcp)			percpu_from_op("mov", (pcp), "m"(pcp))
 #define raw_cpu_write_8(pcp, val)		percpu_to_op("mov", (pcp), val)
 #define raw_cpu_add_8(pcp, val)			percpu_add_op((pcp), val)
 #define raw_cpu_and_8(pcp, val)			percpu_to_op("and", (pcp), val)
@@ -474,7 +444,7 @@ do {									\
 #define raw_cpu_xchg_8(pcp, nval)		percpu_xchg_op(pcp, nval)
 #define raw_cpu_cmpxchg_8(pcp, oval, nval)	percpu_cmpxchg_op(pcp, oval, nval)
 
-#define this_cpu_read_8(pcp)			percpu_from_op("mov", pcp)
+#define this_cpu_read_8(pcp)			percpu_from_op("mov", (pcp), "m"(pcp))
 #define this_cpu_write_8(pcp, val)		percpu_to_op("mov", (pcp), val)
 #define this_cpu_add_8(pcp, val)		percpu_add_op((pcp), val)
 #define this_cpu_and_8(pcp, val)		percpu_to_op("and", (pcp), val)
@@ -508,11 +478,20 @@ do {									\
 
 #endif
 
-static __always_inline bool x86_this_cpu_constant_test_bit(unsigned int nr,
+/* This is not atomic against other CPUs -- CPU preemption needs to be off */
+#define x86_test_and_clear_bit_percpu(bit, var)				\
+({									\
+	int old__;							\
+	asm volatile("btr %2,"__percpu_arg(1)"\n\tsbbl %0,%0"		\
+		     : "=r" (old__), "+m" (var)				\
+		     : "dIr" (bit));					\
+	old__;								\
+})
+
+static __always_inline int x86_this_cpu_constant_test_bit(unsigned int nr,
                         const unsigned long __percpu *addr)
 {
-	unsigned long __percpu *a =
-		(unsigned long __percpu *)addr + nr / BITS_PER_LONG;
+	unsigned long __percpu *a = (unsigned long *)addr + nr / BITS_PER_LONG;
 
 #ifdef CONFIG_X86_64
 	return ((1UL << (nr % BITS_PER_LONG)) & raw_cpu_read_8(*a)) != 0;
@@ -521,15 +500,15 @@ static __always_inline bool x86_this_cpu_constant_test_bit(unsigned int nr,
 #endif
 }
 
-static inline bool x86_this_cpu_variable_test_bit(int nr,
+static inline int x86_this_cpu_variable_test_bit(int nr,
                         const unsigned long __percpu *addr)
 {
-	bool oldbit;
+	int oldbit;
 
-	asm volatile("bt "__percpu_arg(2)",%1"
-			CC_SET(c)
-			: CC_OUT(c) (oldbit)
-			: "m" (*(unsigned long __percpu *)addr), "Ir" (nr));
+	asm volatile("bt "__percpu_arg(2)",%1\n\t"
+			"sbb %0,%0"
+			: "=r" (oldbit)
+			: "m" (*(unsigned long *)addr), "Ir" (nr));
 
 	return oldbit;
 }
@@ -543,7 +522,7 @@ static inline bool x86_this_cpu_variable_test_bit(int nr,
 #include <asm-generic/percpu.h>
 
 /* We can use this directly for local CPU (faster). */
-DECLARE_PER_CPU_READ_MOSTLY(unsigned long, this_cpu_off);
+DECLARE_PER_CPU(unsigned long, this_cpu_off);
 
 #endif /* !__ASSEMBLY__ */
 

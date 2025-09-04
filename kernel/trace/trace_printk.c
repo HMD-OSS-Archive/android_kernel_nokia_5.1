@@ -5,6 +5,7 @@
  *
  */
 #include <linux/seq_file.h>
+#include <linux/debugfs.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/ftrace.h>
@@ -14,6 +15,7 @@
 #include <linux/ctype.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/fs.h>
 
 #include "trace.h"
 
@@ -183,12 +185,6 @@ static inline void format_mod_start(void) { }
 static inline void format_mod_stop(void) { }
 #endif /* CONFIG_MODULES */
 
-static bool __read_mostly trace_printk_enabled = true;
-
-void trace_printk_control(bool enabled)
-{
-	trace_printk_enabled = enabled;
-}
 
 __initdata_or_module static
 struct notifier_block module_trace_bprintk_format_nb = {
@@ -203,7 +199,7 @@ int __trace_bprintk(unsigned long ip, const char *fmt, ...)
 	if (unlikely(!fmt))
 		return 0;
 
-	if (!trace_printk_enabled)
+	if (!(trace_flags & TRACE_ITER_PRINTK))
 		return 0;
 
 	va_start(ap, fmt);
@@ -218,7 +214,7 @@ int __ftrace_vbprintk(unsigned long ip, const char *fmt, va_list ap)
 	if (unlikely(!fmt))
 		return 0;
 
-	if (!trace_printk_enabled)
+	if (!(trace_flags & TRACE_ITER_PRINTK))
 		return 0;
 
 	return trace_vbprintk(ip, fmt, ap);
@@ -230,7 +226,7 @@ int __trace_printk(unsigned long ip, const char *fmt, ...)
 	int ret;
 	va_list ap;
 
-	if (!trace_printk_enabled)
+	if (!(trace_flags & TRACE_ITER_PRINTK))
 		return 0;
 
 	va_start(ap, fmt);
@@ -242,7 +238,7 @@ EXPORT_SYMBOL_GPL(__trace_printk);
 
 int __ftrace_vprintk(unsigned long ip, const char *fmt, va_list ap)
 {
-	if (!trace_printk_enabled)
+	if (!(trace_flags & TRACE_ITER_PRINTK))
 		return 0;
 
 	return trace_vprintk(ip, fmt, ap);
@@ -304,7 +300,7 @@ static int t_show(struct seq_file *m, void *v)
 	if (!*fmt)
 		return 0;
 
-	seq_printf(m, "0x%pK : \"", *(void **)fmt);
+	seq_printf(m, "0x%lx : \"", 0L);
 
 	/*
 	 * Tabs and new lines need to be converted.
@@ -318,7 +314,7 @@ static int t_show(struct seq_file *m, void *v)
 			seq_puts(m, "\\t");
 			break;
 		case '\\':
-			seq_putc(m, '\\');
+			seq_puts(m, "\\");
 			break;
 		case '"':
 			seq_puts(m, "\\\"");

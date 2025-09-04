@@ -4,9 +4,12 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/sensors-1.0/include
 
 obj-y   +=  accel.o accel_factory.o
 
-obj-$(CONFIG_MTK_ACCELHUB) += accelhub/
-obj-$(CONFIG_MTK_BMI160_I2C)   += bmi160-i2c/
-obj-$(CONFIG_MTK_LIS3DH_NEW) += lis3dh/
+obj-$(CONFIG_MTK_ACCELHUB)		+=	accelhub/
+obj-$(CONFIG_MTK_BMI160_SPI)   +=  bmi160-spi/
 obj-$(CONFIG_MTK_MC3410_I2C) += mc3410-i2c/
-obj-$(CONFIG_MTK_MC3433) += mc3433/
-obj-$(CONFIG_MTK_MPU6050G) += mpu6050g/
+obj-$(CONFIG_MTK_MPU6515A)		+= mpu6515/
+obj-$(CONFIG_MTK_BMA222E)		+= bma222e/
+obj-$(CONFIG_MTK_MPU6050G)   +=  mpu6050g/
+obj-$(CONFIG_MTK_STK8BAXX) += stk8baxx/
+obj-$(CONFIG_MTK_BMC156_ACC)	+= bmc156_acc/
+obj-$(CONFIG_MTK_BMI160_NEW)	+= bmi160_acc/

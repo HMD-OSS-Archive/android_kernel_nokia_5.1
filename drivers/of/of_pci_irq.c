@@ -38,8 +38,8 @@ int of_irq_parse_pci(const struct pci_dev *pdev, struct of_phandle_args *out_irq
 	 */
 	rc = pci_read_config_byte(pdev, PCI_INTERRUPT_PIN, &pin);
 	if (rc != 0)
-		goto err;
-	/* No pin, exit with no error message. */
+		return rc;
+	/* No pin, exit */
 	if (pin == 0)
 		return -ENODEV;
 
@@ -53,10 +53,8 @@ int of_irq_parse_pci(const struct pci_dev *pdev, struct of_phandle_args *out_irq
 			ppnode = pci_bus_to_OF_node(pdev->bus);
 
 			/* No node for host bridge ? give up */
-			if (ppnode == NULL) {
-				rc = -EINVAL;
-				goto err;
-			}
+			if (ppnode == NULL)
+				return -EINVAL;
 		} else {
 			/* We found a P2P bridge, check if it has a node */
 			ppnode = pci_device_to_OF_node(ppdev);
@@ -88,21 +86,7 @@ int of_irq_parse_pci(const struct pci_dev *pdev, struct of_phandle_args *out_irq
 	out_irq->args[0] = pin;
 	laddr[0] = cpu_to_be32((pdev->bus->number << 16) | (pdev->devfn << 8));
 	laddr[1] = laddr[2] = cpu_to_be32(0);
-	rc = of_irq_parse_raw(laddr, out_irq);
-	if (rc)
-		goto err;
-	return 0;
-err:
-	if (rc == -ENOENT) {
-		dev_warn(&pdev->dev,
-			"%s: no interrupt-map found, INTx interrupts not available\n",
-			__func__);
-		pr_warn_once("%s: possibly some PCI slots don't have level triggered interrupts capability\n",
-			__func__);
-	} else {
-		dev_err(&pdev->dev, "%s: failed with rc=%d\n", __func__, rc);
-	}
-	return rc;
+	return of_irq_parse_raw(laddr, out_irq);
 }
 EXPORT_SYMBOL_GPL(of_irq_parse_pci);
 
@@ -113,8 +97,7 @@ EXPORT_SYMBOL_GPL(of_irq_parse_pci);
  * @pin: PCI irq pin number; passed when used as map_irq callback. Unused
  *
  * @slot and @pin are unused, but included in the function so that this
- * function can be used directly as the map_irq callback to
- * pci_assign_irq() and struct pci_host_bridge.map_irq pointer
+ * function can be used directly as the map_irq callback to pci_fixup_irqs().
  */
 int of_irq_parse_and_map_pci(const struct pci_dev *dev, u8 slot, u8 pin)
 {
@@ -122,8 +105,10 @@ int of_irq_parse_and_map_pci(const struct pci_dev *dev, u8 slot, u8 pin)
 	int ret;
 
 	ret = of_irq_parse_pci(dev, &oirq);
-	if (ret)
+	if (ret) {
+		dev_err(&dev->dev, "of_irq_parse_pci() failed with rc=%d\n", ret);
 		return 0; /* Proper return code 0 == NO_IRQ */
+	}
 
 	return irq_create_of_mapping(&oirq);
 }

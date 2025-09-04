@@ -1,7 +1,6 @@
 /*
- * Copyright (c) 2016 MediaTek Inc.
+ * Copyright (c) 2015 MediaTek Inc.
  * Author: Ming Hsiu Tsai <minghsiu.tsai@mediatek.com>
- *         Rick Chang <rick.chang@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -12,6 +11,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+
 
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -26,8 +26,8 @@ enum mtk_jpeg_color {
 	MTK_JPEG_COLOR_422		= 0x00211111,
 	MTK_JPEG_COLOR_444		= 0x00111111,
 	MTK_JPEG_COLOR_422V		= 0x00121111,
-	MTK_JPEG_COLOR_422X2		= 0x00412121,
-	MTK_JPEG_COLOR_422VX2		= 0x00222121,
+	MTK_JPEG_COLOR_422x2		= 0x00412121,
+	MTK_JPEG_COLOR_422Vx2		= 0x00222121,
 	MTK_JPEG_COLOR_400		= 0x00110000
 };
 
@@ -54,19 +54,19 @@ static int mtk_jpeg_decide_format(struct mtk_jpeg_dec_param *param)
 	switch (param->src_color) {
 	case MTK_JPEG_COLOR_444:
 		param->uv_brz_w = 1;
-		param->dst_fourcc = V4L2_PIX_FMT_YUV422M;
+		param->dst_fourcc = V4L2_PIX_FMT_YUV422P;
 		break;
-	case MTK_JPEG_COLOR_422X2:
+	case MTK_JPEG_COLOR_422x2:
 	case MTK_JPEG_COLOR_422:
-		param->dst_fourcc = V4L2_PIX_FMT_YUV422M;
+		param->dst_fourcc = V4L2_PIX_FMT_YUV422P;
 		break;
 	case MTK_JPEG_COLOR_422V:
-	case MTK_JPEG_COLOR_422VX2:
+	case MTK_JPEG_COLOR_422Vx2:
 		param->uv_brz_w = 1;
-		param->dst_fourcc = V4L2_PIX_FMT_YUV420M;
+		param->dst_fourcc = V4L2_PIX_FMT_YUV420;
 		break;
 	case MTK_JPEG_COLOR_420:
-		param->dst_fourcc = V4L2_PIX_FMT_YUV420M;
+		param->dst_fourcc = V4L2_PIX_FMT_YUV420;
 		break;
 	case MTK_JPEG_COLOR_400:
 		param->dst_fourcc = V4L2_PIX_FMT_GREY;
@@ -122,13 +122,13 @@ static void mtk_jpeg_calc_dma_group(struct mtk_jpeg_dec_param *param)
 	u32 factor_mcu = 3;
 
 	if (param->src_color == MTK_JPEG_COLOR_444 &&
-	    param->dst_fourcc == V4L2_PIX_FMT_YUV422M)
+	    param->dst_fourcc == V4L2_PIX_FMT_YUV422P)
 		factor_mcu = 4;
 	else if (param->src_color == MTK_JPEG_COLOR_422V &&
-		 param->dst_fourcc == V4L2_PIX_FMT_YUV420M)
+		 param->dst_fourcc == V4L2_PIX_FMT_YUV420)
 		factor_mcu = 4;
-	else if (param->src_color == MTK_JPEG_COLOR_422X2 &&
-		 param->dst_fourcc == V4L2_PIX_FMT_YUV422M)
+	else if (param->src_color == MTK_JPEG_COLOR_422x2 &&
+		 param->dst_fourcc == V4L2_PIX_FMT_YUV422P)
 		factor_mcu = 2;
 	else if (param->src_color == MTK_JPEG_COLOR_400 ||
 		 (param->src_color & 0x0FFFF) == 0)
@@ -163,8 +163,7 @@ static int mtk_jpeg_calc_dst_size(struct mtk_jpeg_dec_param *param)
 		param->comp_w[i] = padding_w >> brz_w[i];
 		param->comp_w[i] = mtk_jpeg_align(param->comp_w[i],
 						  MTK_JPEG_DCTSIZE);
-		param->img_stride[i] = i ? mtk_jpeg_align(param->comp_w[i], 16)
-					: mtk_jpeg_align(param->comp_w[i], 32);
+		param->img_stride[i] = mtk_jpeg_align(param->comp_w[i], 16);
 		ds_row_h[i] = (MTK_JPEG_DCTSIZE * param->sampling_h[i]);
 	}
 	param->dec_w = param->img_stride[0];
@@ -212,13 +211,13 @@ u32 mtk_jpeg_dec_enum_result(u32 irq_result)
 {
 	if (irq_result & BIT_INQST_MASK_EOF)
 		return MTK_JPEG_DEC_RESULT_EOF_DONE;
-	if (irq_result & BIT_INQST_MASK_PAUSE)
+	else if (irq_result & BIT_INQST_MASK_PAUSE)
 		return MTK_JPEG_DEC_RESULT_PAUSE;
-	if (irq_result & BIT_INQST_MASK_UNDERFLOW)
+	else if (irq_result & BIT_INQST_MASK_UNDERFLOW)
 		return MTK_JPEG_DEC_RESULT_UNDERFLOW;
-	if (irq_result & BIT_INQST_MASK_OVERFLOW)
+	else if (irq_result & BIT_INQST_MASK_OVERFLOW)
 		return MTK_JPEG_DEC_RESULT_OVERFLOW;
-	if (irq_result & BIT_INQST_MASK_ERROR_BS)
+	else if (irq_result & BIT_INQST_MASK_ERROR_BS)
 		return MTK_JPEG_DEC_RESULT_ERROR_BS;
 
 	return MTK_JPEG_DEC_RESULT_ERROR_UNKNOWN;
@@ -381,9 +380,9 @@ static void mtk_jpeg_dec_set_sampling_factor(void __iomem *base, u32 comp_num,
 }
 
 void mtk_jpeg_dec_set_config(void __iomem *base,
-			     struct mtk_jpeg_dec_param *config,
-			     struct mtk_jpeg_bs *bs,
-			     struct mtk_jpeg_fb *fb)
+				  struct mtk_jpeg_dec_param *config,
+				  struct mtk_jpeg_bs *bs,
+				  struct mtk_jpeg_fb *fb)
 {
 	mtk_jpeg_dec_set_brz_factor(base, 0, 0, config->uv_brz_w, 0);
 	mtk_jpeg_dec_set_dec_mode(base, 0);
@@ -398,12 +397,9 @@ void mtk_jpeg_dec_set_config(void __iomem *base,
 	mtk_jpeg_dec_set_q_table(base, config->qtbl_num[0],
 				 config->qtbl_num[1], config->qtbl_num[2]);
 	mtk_jpeg_dec_set_sampling_factor(base, config->comp_num,
-					 config->sampling_w[0],
-					 config->sampling_h[0],
-					 config->sampling_w[1],
-					 config->sampling_h[1],
-					 config->sampling_w[2],
-					 config->sampling_h[2]);
+				config->sampling_w[0], config->sampling_h[0],
+				config->sampling_w[1], config->sampling_h[1],
+				config->sampling_w[2], config->sampling_h[2]);
 	mtk_jpeg_dec_set_mem_stride(base, config->mem_stride[0],
 				    config->mem_stride[1]);
 	mtk_jpeg_dec_set_img_stride(base, config->img_stride[0],
