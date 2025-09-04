@@ -71,9 +71,6 @@ static m4u_buf_info_t gMvaNode_unknown = {
 	.port = M4U_PORT_UNKNOWN,
 };
 
-
-
-
 /* -------------------------------------Global variables------------------------------------------------// */
 #ifdef M4U_PROFILE
 MMP_Event M4U_MMP_Events[M4U_MMP_MAX];
@@ -1532,16 +1529,20 @@ static int __m4u_sec_init(void)
 	void *pgd_va;
 	unsigned long pt_pa_nonsec;
 	unsigned int size;
-
+#ifdef CONFIG_ARCH_MT6755
+	unsigned int i = 0;
+#endif
 	mutex_lock(&m4u_tci_mutex);
 	if (NULL == m4u_tci_msg) {
 		M4UMSG("%s TCI/DCI error\n", __func__);
 		ret = MC_DRV_ERR_NO_FREE_MEMORY;
 		goto out;
 	}
-
 	m4u_get_pgd(NULL, 0, &pgd_va, (void *)&pt_pa_nonsec, &size);
-
+#ifdef CONFIG_ARCH_MT6755
+	for (i = 0; i < SMI_LARB_NR; i++)
+		larb_clock_on(i);
+#endif
 	m4u_tci_msg->cmd = CMD_M4UTL_INIT;
 	m4u_tci_msg->init_param.nonsec_pt_pa = pt_pa_nonsec;
 	m4u_tci_msg->init_param.l2_en = gM4U_L2_enable;
@@ -1554,7 +1555,10 @@ static int __m4u_sec_init(void)
 		ret = -1;
 		goto out;
 	}
-
+#ifdef CONFIG_ARCH_MT6755
+	for (i = 0; i < SMI_LARB_NR; i++)
+		larb_clock_off(i);
+#endif
 	ret = m4u_tci_msg->rsp;
 out:
 	mutex_unlock(&m4u_tci_mutex);

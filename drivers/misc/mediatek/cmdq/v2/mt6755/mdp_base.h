@@ -45,5 +45,4 @@ static u32 mdp_base[] = {
 	[ENGBASE_ISP_CAM_0] = 0x15004000,
 	[ENGBASE_ISP_CAM_3] = 0x15007000,
 };
-
 #endif

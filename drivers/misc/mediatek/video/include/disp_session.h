@@ -88,6 +88,11 @@ typedef enum {
 	DISP_FORMAT_PRGBA8888 = MAKE_DISP_FORMAT_ID(19, 4),
 	DISP_FORMAT_PBGRA8888 = MAKE_DISP_FORMAT_ID(20, 4),
 	DISP_FORMAT_DIM = MAKE_DISP_FORMAT_ID(21, 0),
+	DISP_FORMAT_RGBA1010102 =	MAKE_DISP_FORMAT_ID(22, 4),
+	DISP_FORMAT_PRGBA1010102 =	MAKE_DISP_FORMAT_ID(23, 4),
+	DISP_FORMAT_RGBA_FP16 =		MAKE_DISP_FORMAT_ID(24, 8),
+	DISP_FORMAT_PRGBA_FP16 =	MAKE_DISP_FORMAT_ID(25, 8),
+	DISP_FORMAT_NUM =	MAKE_DISP_FORMAT_ID(26, 0),
 	DISP_FORMAT_BPP_MASK = 0xFF,
 } DISP_FORMAT;
 
@@ -219,6 +224,7 @@ typedef struct disp_input_config_t {
 	DISP_ALPHA_TYPE src_alpha;
 	DISP_ALPHA_TYPE dst_alpha;
 	DISP_YUV_RANGE_ENUM yuv_range;
+	int dataspace;
 
 	DISP_ORIENTATION layer_rotation;
 	DISP_LAYER_TYPE layer_type;
@@ -235,6 +241,7 @@ typedef struct disp_input_config_t {
 	void *dirty_roi_addr;
 	uint16_t dirty_roi_num;
 
+	uint16_t src_v_pitch;
 	uint16_t src_pitch;
 	uint16_t src_offset_x, src_offset_y;
 	uint16_t src_width, src_height;
@@ -253,6 +260,8 @@ typedef struct disp_input_config_t {
 	uint8_t identity;
 	uint8_t connected_type;
 	uint8_t ext_sel_layer;
+
+	uint8_t compress;
 } disp_input_config;
 
 typedef struct disp_output_config_t {
@@ -327,6 +336,8 @@ struct disp_frame_cfg_t {
 
 	/* res_idx: SF/HWC selects which resolution to use */
 	int res_idx;
+	unsigned int hrt_weight;
+	unsigned int hrt_idx;
 };
 
 typedef struct disp_session_info_t {
@@ -407,6 +418,8 @@ typedef enum {
 	DISP_FEATURE_NO_PARGB = 0x00000020,
 	DISP_FEATURE_DISP_SELF_REFRESH = 0x00000040,
 	DISP_FEATURE_RPO = 0x00000080,
+	DISP_FEATURE_FBDC = 0x00000100,
+	DISP_FEATURE_FORCE_DISABLE_AOD = 0x00000200,
 } DISP_FEATURE;
 
 typedef struct disp_caps_t {
@@ -437,6 +450,10 @@ typedef struct disp_caps_t {
 	 *  0: not support three session at same time
 	 */
 	int is_support_three_session;
+	int lcm_color_mode;
+	unsigned int max_luminance;
+	unsigned int average_luminance;
+	unsigned int min_luminance;
 } disp_caps_info;
 
 typedef struct disp_session_buf_t {
@@ -449,16 +466,22 @@ enum LAYERING_CAPS {
 	MDP_RSZ_LAYER =		0x00000002,
 	DISP_RSZ_LAYER =	0x00000004,
 	MDP_ROT_LAYER =		0x00000008,
+	MDP_HDR_LAYER =		0x00000010,
+	NO_FBDC =		0x00000020,
 };
 
 typedef struct layer_config_t {
 	unsigned int ovl_id;
 	DISP_FORMAT src_fmt;
+	int dataspace;
 	unsigned int dst_offset_x, dst_offset_y;
 	unsigned int dst_width, dst_height;
 	unsigned int ext_sel_layer;
+	unsigned int src_offset_x, src_offset_y;
 	unsigned int src_width, src_height;
 	unsigned int layer_caps;
+	unsigned int clip; /* drv internal use */
+	uint8_t compress;
 } layer_config;
 
 typedef struct disp_layer_info_t {
@@ -470,6 +493,8 @@ typedef struct disp_layer_info_t {
 	int hrt_num;
 	/* res_idx: SF/HWC selects which resolution to use */
 	int res_idx;
+	unsigned int hrt_weight;
+	unsigned int hrt_idx;
 } disp_layer_info;
 
 enum DISP_SCENARIO {
