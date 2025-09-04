@@ -112,25 +112,21 @@ static imgsensor_info_struct imgsensor_info = {
 		.framelength = 917,
 		.startx = 0,
 		.starty = 0,
-		.grabwindow_width = 1280,
-		.grabwindow_height = 720,
+		.grabwindow_width = 1024,
+		.grabwindow_height = 768,
 		.mipi_data_lp2hs_settle_dc = 85,
 		.max_framerate = 1200,
 	},
 	.slim_video = {/*VT Call*/
-		.pclk = 560000000,				//record different mode's pclk
-		.linelength = 5088, 			//record different mode's linelength
-        .framelength = 1833,	        //record different mode's framelength
-        //.framelength = 1822,				//@2016.07.19 revised by dj for v0.03
-		.startx = 0,					//record different mode's startx of grabwindow
-		.starty = 0,					//record different mode's starty of grabwindow
-		.grabwindow_width = 1920,		//record different mode's width of grabwindow
-		.grabwindow_height = 1080,		//record different mode's height of grabwindow
-		/*	 following for MIPIDataLowPwr2HighSpeedSettleDelayCount by different scenario	*/
+		.pclk = 560000000,
+		.linelength = 5088,
+		.framelength = 917,
+		.startx = 0,
+		.starty = 0,
+		.grabwindow_width = 1024,
+		.grabwindow_height = 768,
 		.mipi_data_lp2hs_settle_dc = 85,
-		/*	 following for GetDefaultFramerateByScenario()	*/
-		.max_framerate = 600,
-		//.max_framerate = 600,			@2016.07.19 revised by dj for v0.03
+		.max_framerate = 1200,
 	},
 
 	.margin = 4,                    //sensor framelength & shutter margin
@@ -201,8 +197,9 @@ static SENSOR_WINSIZE_INFO_STRUCT imgsensor_winsize_info[5] =
 	{ 4640, 3488,	  0,	0, 4640, 3488, 2320, 1744, 0000, 0000, 2320, 1744,	    0,	0, 2320, 1744}, // Preview
 	{ 4640, 3488,	  0,	0, 4640, 3488, 4640, 3488, 0000, 0000, 4640, 3488,	    0,	0, 4640, 3488}, // capture
 	{ 4640, 3488,	  0,	0, 4640, 3488, 4640, 3488, 0000, 0000, 4640, 3488,	    0,	0, 4640, 3488}, // video
-	{ 4640, 3488,   400,  664, 3840, 2160, 1280,   720, 0000, 0000, 1280,  720,     0,  0, 1280,  720}, // hight speed video
-	{ 4640, 3488,   400,  664, 3840, 2160, 1920,  1080, 0000, 0000, 1920, 1080,     0,  0, 1920, 1080}, // slim video
+	{ 4640, 3488,   784,  592, 3072, 2304, 1024,   768, 0000, 0000, 1024,  768,     0,  0, 1024,  768}, // hight speed video
+	{ 4640, 3488,   784,  592, 3072, 2304, 1024,   768, 0000, 0000, 1024,  768,     0,  0, 1024,  768}, // slim video reuse highspeed
+//	{ 4640, 3488,   400,  664, 3840, 2160, 1920,  1080, 0000, 0000, 1920, 1080,     0,  0, 1920, 1080}, // slim video
 };
 
 
@@ -2234,7 +2231,7 @@ static void hs_video_setting(void)
     //720p 120fps
     write_cmos_sensor_8(0x0100,0x00);
     check_stremoff();
-	write_cmos_sensor(0x6028, 0x4000); 
+	write_cmos_sensor(0x6028, 0x4000);
 	write_cmos_sensor(0x6214, 0x7970);
 	write_cmos_sensor(0x6218, 0x7150);
 	write_cmos_sensor(0x6028, 0x2000);
@@ -2267,13 +2264,15 @@ static void hs_video_setting(void)
 	write_cmos_sensor(0x602A, 0x0C60);
 	write_cmos_sensor(0x6F12, 0x0002);
 	write_cmos_sensor(0x6F12, 0x0202);
+	write_cmos_sensor(0x602A, 0x1758);
+	write_cmos_sensor(0x6F12, 0x0020);
 	write_cmos_sensor(0x6028, 0x4000);
-	write_cmos_sensor(0x0344, 0x0180);
-	write_cmos_sensor(0x0346, 0x02A0);
-	write_cmos_sensor(0x0348, 0x10AF);
-	write_cmos_sensor(0x034A, 0x0B0F);
-	write_cmos_sensor(0x034C, 0x0500);
-	write_cmos_sensor(0x034E, 0x02D0);
+	write_cmos_sensor(0x0344, 0x0300);
+	write_cmos_sensor(0x0346, 0x0258);
+	write_cmos_sensor(0x0348, 0x0F2F);
+	write_cmos_sensor(0x034A, 0x0B57);
+	write_cmos_sensor(0x034C, 0x0400);
+	write_cmos_sensor(0x034E, 0x0300);
 	write_cmos_sensor(0x0350, 0x0008);
 	write_cmos_sensor(0x0900, 0x0113);
 	write_cmos_sensor(0x0380, 0x0001);
@@ -2294,7 +2293,7 @@ static void hs_video_setting(void)
 	write_cmos_sensor(0x030A, 0x0001);
 	write_cmos_sensor(0x030C, 0x0000);
 	write_cmos_sensor(0x030E, 0x0004);
-	write_cmos_sensor(0x0310, 0x007A);
+	write_cmos_sensor(0x0310, 0x0077);
 	write_cmos_sensor(0x0312, 0x0000);
 	write_cmos_sensor(0x0340, 0x0395);
 	write_cmos_sensor(0x0342, 0x13E0);
