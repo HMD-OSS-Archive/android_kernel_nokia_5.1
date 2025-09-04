@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/slab.h>
 #include <linux/file.h>
 #include <linux/fdtable.h>
@@ -16,6 +17,9 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/coredump.h>
+#include <linux/sched/coredump.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task_stack.h>
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
 #include <linux/module.h>
@@ -33,11 +37,11 @@
 #include <linux/pipe_fs_i.h>
 #include <linux/oom.h>
 #include <linux/compat.h>
-#include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/path.h>
+#include <linux/timekeeping.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
 #include <asm/exec.h>
@@ -74,7 +78,8 @@ static int expand_corename(struct core_name *cn, int size)
 	return 0;
 }
 
-static int cn_vprintf(struct core_name *cn, const char *fmt, va_list arg)
+static __printf(2, 0) int cn_vprintf(struct core_name *cn, const char *fmt,
+				     va_list arg)
 {
 	int free, need;
 	va_list arg_copy;
@@ -97,7 +102,7 @@ again:
 	return -ENOMEM;
 }
 
-static int cn_printf(struct core_name *cn, const char *fmt, ...)
+static __printf(2, 3) int cn_printf(struct core_name *cn, const char *fmt, ...)
 {
 	va_list arg;
 	int ret;
@@ -109,7 +114,8 @@ static int cn_printf(struct core_name *cn, const char *fmt, ...)
 	return ret;
 }
 
-static int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
+static __printf(2, 3)
+int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
 {
 	int cur = cn->used;
 	va_list arg;
@@ -118,6 +124,26 @@ static int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
 	va_start(arg, fmt);
 	ret = cn_vprintf(cn, fmt, arg);
 	va_end(arg);
+
+	if (ret == 0) {
+		/*
+		 * Ensure that this coredump name component can't cause the
+		 * resulting corefile path to consist of a ".." or ".".
+		 */
+		if ((cn->used - cur == 1 && cn->corename[cur] == '.') ||
+				(cn->used - cur == 2 && cn->corename[cur] == '.'
+				&& cn->corename[cur+1] == '.'))
+			cn->corename[cur] = '!';
+
+		/*
+		 * Empty names are fishy and could be used to create a "//" in a
+		 * corefile name, causing the coredump to happen one directory
+		 * level too high. Enforce that all components of the core
+		 * pattern are at least one character long.
+		 */
+		if (cn->used == cur)
+			ret = cn_printf(cn, "!");
+	}
 
 	for (; cur < cn->used; ++cur) {
 		if (cn->corename[cur] == '/')
@@ -136,13 +162,13 @@ static int cn_print_exe_file(struct core_name *cn)
 	if (!exe_file)
 		return cn_esc_printf(cn, "%s (path unknown)", current->comm);
 
-	pathbuf = kmalloc(PATH_MAX, GFP_TEMPORARY);
+	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!pathbuf) {
 		ret = -ENOMEM;
 		goto put_exe_file;
 	}
 
-	path = d_path(&exe_file->f_path, pathbuf, PATH_MAX);
+	path = file_path(exe_file, pathbuf, PATH_MAX);
 	if (IS_ERR(path)) {
 		ret = PTR_ERR(path);
 		goto free_buf;
@@ -213,11 +239,15 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 				break;
 			/* uid */
 			case 'u':
-				err = cn_printf(cn, "%d", cred->uid);
+				err = cn_printf(cn, "%u",
+						from_kuid(&init_user_ns,
+							  cred->uid));
 				break;
 			/* gid */
 			case 'g':
-				err = cn_printf(cn, "%d", cred->gid);
+				err = cn_printf(cn, "%u",
+						from_kgid(&init_user_ns,
+							  cred->gid));
 				break;
 			case 'd':
 				err = cn_printf(cn, "%d",
@@ -225,13 +255,15 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 				break;
 			/* signal that caused the coredump */
 			case 's':
-				err = cn_printf(cn, "%ld", cprm->siginfo->si_signo);
+				err = cn_printf(cn, "%d",
+						cprm->siginfo->si_signo);
 				break;
 			/* UNIX time of coredump */
 			case 't': {
-				struct timeval tv;
-				do_gettimeofday(&tv);
-				err = cn_printf(cn, "%lu", tv.tv_sec);
+				time64_t time;
+
+				time = ktime_get_real_seconds();
+				err = cn_printf(cn, "%lld", time);
 				break;
 			}
 			/* hostname */
@@ -277,23 +309,24 @@ out:
 	return ispipe;
 }
 
-static int zap_process(struct task_struct *start, int exit_code)
+static int zap_process(struct task_struct *start, int exit_code, int flags)
 {
 	struct task_struct *t;
 	int nr = 0;
 
+	/* ignore all signals except SIGKILL, see prepare_signal() */
+	start->signal->flags = SIGNAL_GROUP_COREDUMP | flags;
 	start->signal->group_exit_code = exit_code;
 	start->signal->group_stop_count = 0;
 
-	t = start;
-	do {
+	for_each_thread(start, t) {
 		task_clear_jobctl_pending(t, JOBCTL_PENDING_MASK);
 		if (t != current && t->mm) {
 			sigaddset(&t->pending.signal, SIGKILL);
 			signal_wake_up(t, 1);
 			nr++;
 		}
-	} while_each_thread(start, t);
+	}
 
 	return nr;
 }
@@ -308,10 +341,8 @@ static int zap_threads(struct task_struct *tsk, struct mm_struct *mm,
 	spin_lock_irq(&tsk->sighand->siglock);
 	if (!signal_group_exit(tsk->signal)) {
 		mm->core_state = core_state;
-		nr = zap_process(tsk, exit_code);
 		tsk->signal->group_exit_task = tsk;
-		/* ignore all signals except SIGKILL, see prepare_signal() */
-		tsk->signal->flags = SIGNAL_GROUP_COREDUMP;
+		nr = zap_process(tsk, exit_code, 0);
 		clear_tsk_thread_flag(tsk, TIF_SIGPENDING);
 	}
 	spin_unlock_irq(&tsk->sighand->siglock);
@@ -357,18 +388,18 @@ static int zap_threads(struct task_struct *tsk, struct mm_struct *mm,
 			continue;
 		if (g->flags & PF_KTHREAD)
 			continue;
-		p = g;
-		do {
-			if (p->mm) {
-				if (unlikely(p->mm == mm)) {
-					lock_task_sighand(p, &flags);
-					nr += zap_process(p, exit_code);
-					p->signal->flags = SIGNAL_GROUP_EXIT;
-					unlock_task_sighand(p, &flags);
-				}
-				break;
+
+		for_each_thread(g, p) {
+			if (unlikely(!p->mm))
+				continue;
+			if (unlikely(p->mm == mm)) {
+				lock_task_sighand(p, &flags);
+				nr += zap_process(p, exit_code,
+							SIGNAL_GROUP_EXIT);
+				unlock_task_sighand(p, &flags);
 			}
-		} while_each_thread(g, p);
+			break;
+		}
 	}
 	rcu_read_unlock();
 done:
@@ -386,7 +417,9 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	core_state->dumper.task = tsk;
 	core_state->dumper.next = NULL;
 
-	down_write(&mm->mmap_sem);
+	if (down_write_killable(&mm->mmap_sem))
+		return -EINTR;
+
 	if (!mm->core_state)
 		core_waiters = zap_threads(tsk, mm, core_state, exit_code);
 	up_write(&mm->mmap_sem);
@@ -448,7 +481,19 @@ static bool dump_interrupted(void)
 	 * but then we need to teach dump_write() to restart and clear
 	 * TIF_SIGPENDING.
 	 */
+#ifdef CONFIG_MTK_AEE_FEATURE
+	/* avoid coredump truncated */
+	int ret = signal_pending(current);
+
+	if (ret) {
+		pr_info("%s: clear sig pending flag\n", __func__);
+		clear_thread_flag(TIF_SIGPENDING);
+		ret = signal_pending(current);
+	}
+	return ret;
+#else
 	return signal_pending(current);
+#endif
 }
 
 static void wait_for_dump_helpers(struct file *file)
@@ -503,12 +548,13 @@ static int umh_pipe_setup(struct subprocess_info *info, struct cred *new)
 	return err;
 }
 
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MT_ENG_BUILD)
+#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
 #include <linux/suspend.h>
 
 static atomic_t coredump_request_count = ATOMIC_INIT(0);
 
-static int coredump_pm_notifier_cb(struct notifier_block *nb, unsigned long event, void *ptr)
+static int coredump_pm_notifier_cb(struct notifier_block *nb,
+	unsigned long event, void *ptr)
 {
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
@@ -534,7 +580,8 @@ static int __init init_coredump(void)
 	int ret = register_pm_notifier(&coredump_pm_notifier_block);
 
 	if (ret)
-		pr_err("%s: failed to register_pm_notifier(%d)\n", __func__, ret);
+		pr_info("%s: failed to register_pm_notifier(%d)\n",
+				__func__, ret);
 	return 0;
 }
 
@@ -575,7 +622,9 @@ void do_coredump(const siginfo_t *siginfo)
 		.mm_flags = mm->flags,
 	};
 
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MT_ENG_BUILD)
+#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
+	siginfo_t tmp_si;
+
 	atomic_inc(&coredump_request_count);
 #endif
 
@@ -614,9 +663,6 @@ void do_coredump(const siginfo_t *siginfo)
 		int dump_count;
 		char **helper_argv;
 		struct subprocess_info *sub_info;
-	#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MT_ENG_BUILD)
-		siginfo_t tmp_si;
-	#endif
 
 		if (ispipe < 0) {
 			printk(KERN_WARNING "format_corename failed\n");
@@ -629,7 +675,7 @@ void do_coredump(const siginfo_t *siginfo)
 			 *
 			 * Normally core limits are irrelevant to pipes, since
 			 * we're not writing to the file system, but we use
-			 * cprm.limit of 1 here as a speacial value, this is a
+			 * cprm.limit of 1 here as a special value, this is a
 			 * consistent way to catch recursive crashes.
 			 * We can still crash if the core_pattern binary sets
 			 * RLIM_CORE = !1, but it runs as root, and can do
@@ -663,7 +709,7 @@ void do_coredump(const siginfo_t *siginfo)
 			goto fail_dropcount;
 		}
 
-	#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MT_ENG_BUILD)
+	#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
 		if (likely(current->last_siginfo == NULL)) {
 			tmp_si = *siginfo;
 			current->last_siginfo = &tmp_si;
@@ -762,10 +808,14 @@ void do_coredump(const siginfo_t *siginfo)
 		if (!S_ISREG(inode->i_mode))
 			goto close_fail;
 		/*
-		 * Dont allow local users get cute and trick others to coredump
-		 * into their pre-created files.
+		 * Don't dump core if the filesystem changed owner or mode
+		 * of the file during file creation. This is an issue when
+		 * a process dumps core while its cwd is e.g. on a vfat
+		 * filesystem.
 		 */
 		if (!uid_eq(inode->i_uid, current_fsuid()))
+			goto close_fail;
+		if ((inode->i_mode & 0677) != 0600)
 			goto close_fail;
 		if (!(cprm.file->f_mode & FMODE_CAN_WRITE))
 			goto close_fail;
@@ -799,7 +849,7 @@ fail_unlock:
 fail_creds:
 	put_cred(cred);
 fail:
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MT_ENG_BUILD)
+#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
 	atomic_dec(&coredump_request_count);
 #endif
 	return;
@@ -819,16 +869,35 @@ int dump_emit(struct coredump_params *cprm, const void *addr, int nr)
 		return 0;
 	while (nr) {
 		if (dump_interrupted()) {
-			pr_err("%s: interrupted\n", __func__);
+			pr_info("%s: interrupted\n", __func__);
 			return 0;
 		}
 		n = __kernel_write(file, addr, nr, &pos);
 		if (n <= 0) {
-			pr_err("%s: __kernel_write fail: %zd\n", __func__, n);
+			pr_info("%s: __kernel_write fail: %zd\n", __func__, n);
+#ifdef CONFIG_MTK_AEE_FEATURE
+			/* retry for avoid coredump truncated */
+			if (n == -ERESTARTSYS) {
+				if (signal_pending(current)) {
+					pr_info("%s: clear sig pending flag\n",
+						__func__);
+					clear_thread_flag(TIF_SIGPENDING);
+				}
+				n = __kernel_write(file, addr, nr, &pos);
+				if (n <= 0) {
+					pr_info("%s: retry fail: %zd\n",
+						__func__, n);
+					return 0;
+				}
+			} else
+				return 0;
+#else
 			return 0;
+#endif
 		}
 		file->f_pos = pos;
 		cprm->written += n;
+		cprm->pos += n;
 		nr -= n;
 	}
 	return 1;
@@ -840,12 +909,10 @@ int dump_skip(struct coredump_params *cprm, size_t nr)
 	static char zeroes[PAGE_SIZE];
 	struct file *file = cprm->file;
 	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
-		if (cprm->written + nr > cprm->limit)
-			return 0;
 		if (dump_interrupted() ||
 		    file->f_op->llseek(file, nr, SEEK_CUR) < 0)
 			return 0;
-		cprm->written += nr;
+		cprm->pos += nr;
 		return 1;
 	} else {
 		while (nr > PAGE_SIZE) {
@@ -860,9 +927,27 @@ EXPORT_SYMBOL(dump_skip);
 
 int dump_align(struct coredump_params *cprm, int align)
 {
-	unsigned mod = cprm->written & (align - 1);
+	unsigned mod = cprm->pos & (align - 1);
 	if (align & (align - 1))
 		return 0;
 	return mod ? dump_skip(cprm, align - mod) : 1;
 }
 EXPORT_SYMBOL(dump_align);
+
+/*
+ * Ensures that file size is big enough to contain the current file
+ * postion. This prevents gdb from complaining about a truncated file
+ * if the last "write" to the file was dump_skip.
+ */
+void dump_truncate(struct coredump_params *cprm)
+{
+	struct file *file = cprm->file;
+	loff_t offset;
+
+	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
+		offset = file->f_op->llseek(file, 0, SEEK_CUR);
+		if (i_size_read(file->f_mapping->host) < offset)
+			do_truncate(file->f_path.dentry, offset, 0, file);
+	}
+}
+EXPORT_SYMBOL(dump_truncate);

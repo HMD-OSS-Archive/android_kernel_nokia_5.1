@@ -553,8 +553,8 @@ static int cg14_probe(struct platform_device *op)
 
 	dev_set_drvdata(&op->dev, info);
 
-	printk(KERN_INFO "%s: cgfourteen at %lx:%lx, %dMB\n",
-	       dp->full_name,
+	printk(KERN_INFO "%pOF: cgfourteen at %lx:%lx, %dMB\n",
+	       dp,
 	       par->iospace, info->fix.smem_start,
 	       par->ramsize >> 20);
 
@@ -597,7 +597,6 @@ MODULE_DEVICE_TABLE(of, cg14_match);
 static struct platform_driver cg14_driver = {
 	.driver = {
 		.name = "cg14",
-		.owner = THIS_MODULE,
 		.of_match_table = cg14_match,
 	},
 	.probe		= cg14_probe,

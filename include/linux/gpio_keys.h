@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _GPIO_KEYS_H
 #define _GPIO_KEYS_H
 
@@ -43,7 +44,7 @@ struct gpio_keys_button {
  * @name:		input device name
  */
 struct gpio_keys_platform_data {
-	struct gpio_keys_button *buttons;
+	const struct gpio_keys_button *buttons;
 	int nbuttons;
 	unsigned int poll_interval;
 	unsigned int rep:1;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 hostprogs-y := vdsomunge
 
 obj-vdso := vgettimeofday.o datapage.o
@@ -28,9 +29,6 @@ CFLAGS_vgettimeofday.o = -O2
 
 # Disable gcov profiling for VDSO code
 GCOV_PROFILE := n
-
-# Prevents link failures: __sanitizer_cov_trace_pc() is not linked in.
-KCOV_INSTRUMENT		:= n
 
 # Force dependency
 $(obj)/vdso.o : $(obj)/vdso.so

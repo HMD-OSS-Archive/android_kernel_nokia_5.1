@@ -56,7 +56,7 @@ static int au1xtoy_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static struct rtc_class_ops au1xtoy_rtc_ops = {
+static const struct rtc_class_ops au1xtoy_rtc_ops = {
 	.read_time	= au1xtoy_rtc_read_time,
 	.set_time	= au1xtoy_rtc_set_time,
 };
@@ -117,7 +117,6 @@ out_err:
 static struct platform_driver au1xrtc_driver = {
 	.driver		= {
 		.name	= "rtc-au1xxx",
-		.owner	= THIS_MODULE,
 	},
 };
 

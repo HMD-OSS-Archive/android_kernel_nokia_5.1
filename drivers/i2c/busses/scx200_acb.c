@@ -42,7 +42,7 @@ MODULE_LICENSE("GPL");
 
 #define MAX_DEVICES 4
 static int base[MAX_DEVICES] = { 0x820, 0x840 };
-module_param_array(base, int, NULL, 0);
+module_param_hw_array(base, int, ioport, NULL, 0);
 MODULE_PARM_DESC(base, "Base addresses for the ACCESS.bus controllers");
 
 #define POLL_TIMEOUT	(HZ/5)
@@ -544,7 +544,6 @@ static int scx200_remove(struct platform_device *pdev)
 static struct platform_driver scx200_pci_driver = {
 	.driver = {
 		.name = "cs5535-smb",
-		.owner = THIS_MODULE,
 	},
 	.probe = scx200_probe,
 	.remove = scx200_remove,

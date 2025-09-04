@@ -1,44 +1,50 @@
-/*
- * Copyright (c) 2017 FIH Mobile Limited.
- */
+/* Foxconn added , BokeeLi, 201/10/06 */
+/* Note:
+   (1) Refer to Mulberry project
+   (2) Reserve a partition for store Manufacture data
+*/
 
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/stat.h>
 #include <linux/fs.h>
+
 #include <linux/unistd.h>
 #include "Testflag.h"
 #include <asm/uaccess.h>
 
 #define FAILED -1;
 #define OK 1;
-
-/*add for proinfo partition cache*/
+/*J6000092 add for proinfo partition cache start*/
 static struct manuf_data fih_proinfo_data;
 static int read_flag = 0;
 static int write_flag = 0;
+static struct manuf_data manuf_data;
+/*J6000092 add for proinfo partition cache end*/
 
 int write_ef(struct manuf_data * wdata)
 {
 	int len = 0;
 
 	struct file *pid_filp = NULL;
-	char temp[80];
+//	char temp[80];
 	mm_segment_t oldfs;
-	int pid_len;
+//	int pid_len;
+        loff_t pos = 0;
 
 	printk("write_ef()\n");
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
-	pid_filp = filp_open(MANUF_FILE_LOCATION, O_RDWR, 0);
+	pid_filp = filp_open(MANUF_FILE_LOCATION, O_RDWR, 0);//O_RDONLY
 
 	if(!IS_ERR(pid_filp))
 	{
 		strncpy(wdata->sync_info, MANUF_SYNC_INFO_STRING, strlen(MANUF_SYNC_INFO_STRING));
-		len = pid_filp->f_op->write(pid_filp, &wdata->magic,sizeof(struct manuf_data), 
-                                            &pid_filp->f_pos);
+		//len = pid_filp->f_op->write(pid_filp, (char *)&wdata->magic,sizeof(struct manuf_data), &pid_filp->f_pos);
+		vfs_write(pid_filp, (char __user *)&wdata->magic, sizeof(struct manuf_data), &pos);
 
+		// added by sinkin after write action
 		vfs_fsync(pid_filp, 0);
 		printk("write_ef() len = %d\n", len);
 
@@ -46,20 +52,21 @@ int write_ef(struct manuf_data * wdata)
 
 		if (len != sizeof(struct manuf_data))
 		{
-			set_fs(oldfs);
 			return FILE_CORRUPTED;
 		}
 	}
 	else
 	{
 		printk("write_ef() open file fail %s\n", MANUF_FILE_LOCATION);
-		set_fs(oldfs);
 		return FILE_NOT_FOUND;
 	}
 
 	set_fs(oldfs);
+
+	/*J6000092 add for proinfo partition cache start*/
 	memcpy(&fih_proinfo_data, wdata, sizeof(struct manuf_data));
 	write_flag = 1;
+	/*J6000092 add for proinfo partition cache end*/
 
 	return 0;
 }
@@ -68,14 +75,16 @@ int write_ef(struct manuf_data * wdata)
 int read_ef(struct manuf_data * rdata)
 {
 	int len = 0;
-	int pid_len;
-	char temp[80];
+	//int pid_len;
+	//char temp[80];
 
 	mm_segment_t oldfs;
 	struct file *pid_filp = NULL;
+        loff_t pos = 0;
 
 	printk("read_ef() read_flag = %d, write_flag = %d\n", read_flag, write_flag);
 
+	/*J6000092 modify for proinfo partition cache start*/
 	if(read_flag == 0 || write_flag == 1)
 	{
 		oldfs = get_fs();
@@ -85,21 +94,19 @@ int read_ef(struct manuf_data * rdata)
 
 		if(!IS_ERR(pid_filp))
 		{
-			len = pid_filp->f_op->read(pid_filp, &rdata->magic, 
-                                                   sizeof(struct manuf_data), &pid_filp->f_pos);
+			//len = pid_filp->f_op->read(pid_filp, (char *)&rdata->magic, sizeof(struct manuf_data), &pid_filp->f_pos);
+			vfs_read(pid_filp, (char __user *)&rdata->magic, sizeof(struct manuf_data), &pos);
 			filp_close(pid_filp, NULL);
 
 			if (len != sizeof(struct manuf_data))
 			{
-				set_fs(oldfs);
 				return FILE_CORRUPTED;
 			}
 		}
 		else
 		{
-			printk("read_ef() failed to open PTR_ERR(pid_filp) = %ld\n", 
-                               PTR_ERR(pid_filp));
-			set_fs(oldfs);
+			printk("read_ef() failed to open PTR_ERR(pid_filp) = %ld\n", PTR_ERR(pid_filp));
+
 			return FILE_NOT_FOUND;
 		}
 		set_fs(oldfs);
@@ -110,8 +117,9 @@ int read_ef(struct manuf_data * rdata)
 	}
 	else
 	{
-		memcpy(rdata, &fih_proinfo_data, sizeof(struct manuf_data));
+		memcpy(rdata, &fih_proinfo_data, sizeof(struct manuf_data));        
 	}
+	/*J6000092 modify for proinfo partition cache end*/
 
 	return 0;
 }
@@ -119,9 +127,9 @@ int read_ef(struct manuf_data * rdata)
 
 int fih_read_pid(char* pid_str)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
-	int pid_len;
+	//int pid_len;
 
 	printk("fih_read_pid\n");
 
@@ -137,17 +145,14 @@ int fih_read_pid(char* pid_str)
 	}
 
 	/* check PID name */
-	if(strcmp(manuf_data.productid.name, MANUF_PRODUCTID_STRING) == 0 &&
-           manuf_data.productid.length <= MANUF_PRODUCTID_LEN)
+	if(strcmp(manuf_data.productid.name, MANUF_PRODUCTID_STRING) == 0 && manuf_data.productid.length <= MANUF_PRODUCTID_LEN)
 	{
-		printk("pid=%s, len=%d\n", manuf_data.productid.productid,
-                       manuf_data.productid.length);
+		printk("pid=%s, len=%d\n", manuf_data.productid.productid, manuf_data.productid.length);
 		strncpy(pid_str, manuf_data.productid.productid, manuf_data.productid.length);
 	}
 	else
 	{
-		printk("PID tag (0x%s 0x%x)mismatch)\n", manuf_data.productid.name,
-                       manuf_data.productid.length);
+		printk("PID tag (0x%s 0x%x)mismatch)\n", manuf_data.productid.name, manuf_data.productid.length);
 		return FAILED;
 	}
 
@@ -159,10 +164,10 @@ int fih_read_pid(char* pid_str)
 
 int fih_write_pid(char* pid_str)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
 
-	int temp_len = 0;
+	//int temp_len = 0;
 
 	//printk("fih_write_pid with pid=%s, len=%d\n", pid_str, strlen(pid_str));
 
@@ -200,9 +205,9 @@ int fih_write_pid(char* pid_str)
 
 int fih_read_CAVIS(char* pid_str, int i)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
-	int pid_len;
+	//int pid_len;
 
 	printk("fih_read_CAVIS()\n");
 
@@ -222,10 +227,8 @@ int fih_read_CAVIS(char* pid_str, int i)
 	{
 		if(strlen(manuf_data.CAVISflag.Register) <= sizeof(manuf_data.CAVISflag.Register))
 		{
-			//printk("pid=%s, len=%d\n", manuf_data.CAVISflag.Register,
-                  //strlen(manuf_data.CAVISflag.Register));
-			strncpy(pid_str, manuf_data.CAVISflag.Register,
-                                strlen(manuf_data.CAVISflag.Register));
+			//printk("pid=%s, len=%d\n", manuf_data.CAVISflag.Register, strlen(manuf_data.CAVISflag.Register));
+			strncpy(pid_str, manuf_data.CAVISflag.Register, strlen(manuf_data.CAVISflag.Register));
 		}
 		else
 		{
@@ -237,10 +240,8 @@ int fih_read_CAVIS(char* pid_str, int i)
 	{
 		if(strlen(manuf_data.CAVISflag.Retry) <= sizeof(manuf_data.CAVISflag.Retry))
 		{
-			//printk("pid=%s, len=%d\n", manuf_data.CAVISflag.Retry,
-                  //strlen(manuf_data.CAVISflag.Retry));
-			strncpy(pid_str, manuf_data.CAVISflag.Retry,
-                                strlen(manuf_data.CAVISflag.Retry));
+			//printk("pid=%s, len=%d\n", manuf_data.CAVISflag.Retry, strlen(manuf_data.CAVISflag.Retry));
+			strncpy(pid_str, manuf_data.CAVISflag.Retry, strlen(manuf_data.CAVISflag.Retry));
 		}
 		else
 		{
@@ -255,9 +256,10 @@ int fih_read_CAVIS(char* pid_str, int i)
 
 int fih_write_CAVIS(char* pid_str, int i)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
-	int temp_len = 0;
+
+	//int temp_len = 0;
 
 	//printk("[DW]fih_write_CAVIS with cavis=%s, len=%d, num=%d\n", pid_str, strlen(pid_str),i);
 
@@ -295,7 +297,7 @@ int fih_write_CAVIS(char* pid_str, int i)
 
 int fih_read_ps_thd(u8 cali[7])
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access, i, size;
 
 	printk("[DW] %s\n", __func__);
@@ -322,7 +324,7 @@ int fih_read_ps_thd(u8 cali[7])
 
 int fih_write_ps_thd(u8 cali[7])
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access, i, size;
 
 	printk("[DW] %s\n", __func__);
@@ -357,7 +359,7 @@ int fih_write_ps_thd(u8 cali[7])
 
 int fih_read_als_slope(u8 cali[16])
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access, i, size;
 
 	printk("[DW] %s\n", __func__);
@@ -384,7 +386,7 @@ int fih_read_als_slope(u8 cali[16])
 
 int fih_write_als_slope(u8 cali[16])
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access, i, size;
 
 	printk("[DW] %s\n", __func__);
@@ -419,8 +421,8 @@ int fih_write_als_slope(u8 cali[16])
 
 int fih_read_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p)
 {
-	struct manuf_data manuf_data;
-	int access, size;
+	//struct manuf_data manuf_data;
+	int access;//, size;
 
 	printk("[Kernel] %s\n", __func__);
 	memset(&manuf_data, '\0', sizeof(struct manuf_data));
@@ -445,7 +447,7 @@ int fih_read_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p)
 
 int fih_write_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
 
 	printk("[Kernel] %s\n", __func__);
@@ -477,11 +479,12 @@ int fih_write_tp_rawdata_range(struct manuf_tp_rawdata_range_t *p)
 
 	return OK;
 };
+/* add gsensor calibration for alex 20141205 begin*/
 
 int fih_read_gsensor_cali(struct manuf_gsensor_cali *p)
 {
-	int access, size;
-	struct manuf_data manuf_data;
+	int access;//, size;
+	//struct manuf_data manuf_data;
 
 	printk("[Kernel] %s\n", __func__);
 	memset(&manuf_data, '\0', sizeof(struct manuf_data) );
@@ -505,7 +508,7 @@ int fih_read_gsensor_cali(struct manuf_gsensor_cali *p)
 
 int fih_write_gsensor_cali(struct manuf_gsensor_cali *p)
 {
-	struct manuf_data manuf_data;
+	//struct manuf_data manuf_data;
 	int access;
 
 	printk("[Kernel] %s\n", __func__);
@@ -536,11 +539,13 @@ int fih_write_gsensor_cali(struct manuf_gsensor_cali *p)
 
 	return OK;
 };
+/* add gsensor calibration for alex 20141205 end*/
+
 
 int fih_read_skuid(char* skuid)
 {
-	int access, size;
-	struct manuf_data manuf_data;
+	int access;//, size;
+	//struct manuf_data manuf_data;
 
 	memset(&manuf_data, '\0', sizeof(struct manuf_data) );
 
@@ -561,3 +566,4 @@ int fih_read_skuid(char* skuid)
 
 	return OK;
 }
+

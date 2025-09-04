@@ -1,16 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
-* Copyright (c) 2014-2015 MediaTek Inc.
-* Author: Tianping.Fang <tianping.fang@mediatek.com>
-*
-* This program is free software; you can redistribute it and/or modify
-* it under the terms of the GNU General Public License version 2 as
-* published by the Free Software Foundation.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*/
+ * Copyright (c) 2019 MediaTek Inc.
+ */
 
 #include <linux/delay.h>
 #include <linux/init.h>
@@ -23,6 +14,7 @@
 #include <linux/of_irq.h>
 #include <linux/io.h>
 #include <linux/mfd/mt6397/core.h>
+#include <linux/mfd/mt6397/rtc_misc.h>
 #include <linux/pm.h>
 
 #define RTC_BBPU		0x0000
@@ -34,9 +26,12 @@
 #define RTC_PDN1		0x002c
 #define RTC_PDN2		0x002e
 #define RTC_SPAR0		0x0030
+#define RTC_CON			0x003e
 #define RTC_BBPU_KEY		(0x43 << 8)
 #define RTC_BBPU_AUTO		BIT(3)
 #define RTC_BBPU_PWREN		BIT(0)
+#define RTC_CON_F32KOB		BIT(5)
+#define RTC_GPIO_USER_MASK	0x1f00
 
 static const u16 rtc_spare_reg[][3] = {
 	{RTC_AL_HOU, 0x7f, 8},
@@ -80,10 +75,10 @@ enum rtc_reg_set {
 };
 
 struct mt6397_misc {
-	struct device		*dev;
-	struct mutex		lock;
-	struct regmap		*regmap;
-	u32			addr_base;
+	struct device	*dev;
+	struct mutex	lock;
+	struct regmap	*regmap;
+	u32		addr_base;
 };
 
 static struct mt6397_misc *rtc_misc;
@@ -94,13 +89,14 @@ static int mtk_rtc_write_trigger(void)
 	int ret;
 	u32 data;
 
-	ret = regmap_write(rtc_misc->regmap, rtc_misc->addr_base + RTC_WRTGR, 1);
+	ret = regmap_write(rtc_misc->regmap,
+			   rtc_misc->addr_base + RTC_WRTGR, 1);
 	if (ret < 0)
 		return ret;
 
 	while (1) {
-		ret = regmap_read(rtc_misc->regmap, rtc_misc->addr_base + RTC_BBPU,
-				  &data);
+		ret = regmap_read(rtc_misc->regmap,
+				  rtc_misc->addr_base + RTC_BBPU, &data);
 		if (ret < 0)
 			break;
 		if (!(data & RTC_BBPU_CBUSY))
@@ -122,7 +118,8 @@ static u32 __mtk_misc_get_spare_register(enum rtc_spare_enum cmd)
 
 	if (cmd >= 0 && cmd < RTC_SPAR_NUM) {
 		ret = regmap_read(rtc_misc->regmap,
-				rtc_misc->addr_base + rtc_spare_reg[cmd][RTC_REG], &data);
+				  rtc_misc->addr_base
+				  + rtc_spare_reg[cmd][RTC_REG], &data);
 
 		data = (data >> rtc_spare_reg[cmd][RTC_SHIFT]) &
 				rtc_spare_reg[cmd][RTC_MASK];
@@ -138,9 +135,11 @@ static void __mtk_misc_set_spare_register(enum rtc_spare_enum cmd, u32 val)
 
 	if (cmd >= 0 && cmd < RTC_SPAR_NUM) {
 		data = val << rtc_spare_reg[cmd][RTC_SHIFT];
-		mask = rtc_spare_reg[cmd][RTC_MASK] << rtc_spare_reg[cmd][RTC_SHIFT];
+		mask = rtc_spare_reg[cmd][RTC_MASK]
+			<< rtc_spare_reg[cmd][RTC_SHIFT];
 		ret = regmap_update_bits(rtc_misc->regmap,
-			rtc_misc->addr_base + rtc_spare_reg[cmd][RTC_REG], mask, data);
+			rtc_misc->addr_base + rtc_spare_reg[cmd][RTC_REG],
+			mask, data);
 		if (ret < 0)
 			dev_err(rtc_misc->dev, "regmap write error!!!\n");
 
@@ -180,6 +179,73 @@ bool mtk_misc_crystal_exist_status(void)
 	return !!ret;
 }
 EXPORT_SYMBOL(mtk_misc_crystal_exist_status);
+
+static void mtk_misc_set_gpio_32k_status(enum rtc_gpio_user_t user, bool enable)
+{
+	u32 pdn1, temp, con;
+	int ret;
+
+	ret = regmap_read(rtc_misc->regmap,
+			  rtc_misc->addr_base + RTC_PDN1, &pdn1);
+	if (ret < 0)
+		goto exit;
+	ret = regmap_read(rtc_misc->regmap,
+			  rtc_misc->addr_base + RTC_CON, &con);
+	if (ret < 0)
+		goto exit;
+
+	if (!enable) {
+		temp = pdn1 & ~(1 << user);
+		ret = regmap_write(rtc_misc->regmap,
+				rtc_misc->addr_base + RTC_PDN1, temp);
+		if (ret < 0)
+			goto exit;
+		mtk_rtc_write_trigger();
+		if (!(pdn1 & RTC_GPIO_USER_MASK))
+			con |= RTC_CON_F32KOB;
+	} else {
+		con &= ~RTC_CON_F32KOB;
+		pdn1 |= (1 << user);
+		ret = regmap_write(rtc_misc->regmap,
+				rtc_misc->addr_base + RTC_PDN1, pdn1);
+		if (ret < 0)
+			goto exit;
+		mtk_rtc_write_trigger();
+	}
+
+	ret = regmap_write(rtc_misc->regmap,
+			rtc_misc->addr_base + RTC_CON, con);
+	if (ret < 0)
+		goto exit;
+	mtk_rtc_write_trigger();
+
+	return;
+exit:
+	dev_err(rtc_misc->dev, "regmap write/read error!!!\n");
+}
+
+void rtc_gpio_enable_32k(enum rtc_gpio_user_t user)
+{
+	if (user < RTC_GPIO_USER_WIFI || user > RTC_GPIO_USER_PMIC)
+		return;
+	dev_info(rtc_misc->dev, "enable 32k clock output!!!\n");
+
+	mutex_lock(&rtc_misc->lock);
+	mtk_misc_set_gpio_32k_status(user, true);
+	mutex_unlock(&rtc_misc->lock);
+}
+EXPORT_SYMBOL(rtc_gpio_enable_32k);
+
+void rtc_gpio_disable_32k(enum rtc_gpio_user_t user)
+{
+	if (user < RTC_GPIO_USER_WIFI || user > RTC_GPIO_USER_PMIC)
+		return;
+
+	mutex_lock(&rtc_misc->lock);
+	mtk_misc_set_gpio_32k_status(user, false);
+	mutex_unlock(&rtc_misc->lock);
+}
+EXPORT_SYMBOL(rtc_gpio_disable_32k);
 
 bool mtk_misc_low_power_detected(void)
 {
@@ -256,6 +322,7 @@ static int mt6397_misc_probe(struct platform_device *pdev)
 static const struct of_device_id mt6397_misc_of_match[] = {
 	{ .compatible = "mediatek,mt6397-misc", },
 	{ .compatible = "mediatek,mt6323-misc", },
+	{ .compatible = "mediatek,mt6392-misc", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mt6397_misc_of_match);
@@ -273,4 +340,4 @@ module_platform_driver(mt6397_misc_driver);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Tianping Fang <tianping.fang@mediatek.com>");
 MODULE_DESCRIPTION("Misc Driver for MediaTek MT6323 PMIC");
-MODULE_ALIAS("platform:mt6323-misc");
+MODULE_ALIAS("platform:mt6397-misc");

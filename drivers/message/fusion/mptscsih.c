@@ -1176,8 +1176,6 @@ mptscsih_remove(struct pci_dev *pdev)
 	MPT_SCSI_HOST		*hd;
 	int sz1;
 
-	scsi_remove_host(host);
-
 	if((hd = shost_priv(host)) == NULL)
 		return;
 
@@ -1366,15 +1364,10 @@ mptscsih_qcmd(struct scsi_cmnd *SCpnt)
 	/* Default to untagged. Once a target structure has been allocated,
 	 * use the Inquiry data to determine if device supports tagged.
 	 */
-	if ((vdevice->vtarget->tflags & MPT_TARGET_FLAGS_Q_YES)
-	    && (SCpnt->device->tagged_supported)) {
+	if ((vdevice->vtarget->tflags & MPT_TARGET_FLAGS_Q_YES) &&
+	    SCpnt->device->tagged_supported)
 		scsictl = scsidir | MPI_SCSIIO_CONTROL_SIMPLEQ;
-		if (SCpnt->request && SCpnt->request->ioprio) {
-			if (((SCpnt->request->ioprio & 0x7) == 1) ||
-				!(SCpnt->request->ioprio & 0x7))
-				scsictl |= MPI_SCSIIO_CONTROL_HEADOFQ;
-		}
-	} else
+	else
 		scsictl = scsidir | MPI_SCSIIO_CONTROL_UNTAGGED;
 
 
@@ -2311,25 +2304,20 @@ mptscsih_slave_destroy(struct scsi_device *sdev)
  *	mptscsih_change_queue_depth - This function will set a devices queue depth
  *	@sdev: per scsi_device pointer
  *	@qdepth: requested queue depth
- *	@reason: calling context
  *
  *	Adding support for new 'change_queue_depth' api.
 */
 int
-mptscsih_change_queue_depth(struct scsi_device *sdev, int qdepth, int reason)
+mptscsih_change_queue_depth(struct scsi_device *sdev, int qdepth)
 {
 	MPT_SCSI_HOST		*hd = shost_priv(sdev->host);
 	VirtTarget 		*vtarget;
 	struct scsi_target 	*starget;
 	int			max_depth;
-	int			tagged;
 	MPT_ADAPTER		*ioc = hd->ioc;
 
 	starget = scsi_target(sdev);
 	vtarget = starget->hostdata;
-
-	if (reason != SCSI_QDEPTH_DEFAULT)
-		return -EOPNOTSUPP;
 
 	if (ioc->bus_type == SPI) {
 		if (!(vtarget->tflags & MPT_TARGET_FLAGS_Q_YES))
@@ -2347,13 +2335,8 @@ mptscsih_change_queue_depth(struct scsi_device *sdev, int qdepth, int reason)
 
 	if (qdepth > max_depth)
 		qdepth = max_depth;
-	if (qdepth == 1)
-		tagged = 0;
-	else
-		tagged = MSG_SIMPLE_TAG;
 
-	scsi_adjust_queue_depth(sdev, tagged, qdepth);
-	return sdev->queue_depth;
+	return scsi_change_queue_depth(sdev, qdepth);
 }
 
 /*
@@ -2397,12 +2380,10 @@ mptscsih_slave_configure(struct scsi_device *sdev)
 		    ioc->name, vtarget->negoFlags, vtarget->maxOffset,
 		    vtarget->minSyncFactor));
 
-	mptscsih_change_queue_depth(sdev, MPT_SCSI_CMD_PER_DEV_HIGH,
-				    SCSI_QDEPTH_DEFAULT);
+	mptscsih_change_queue_depth(sdev, MPT_SCSI_CMD_PER_DEV_HIGH);
 	dsprintk(ioc, printk(MYIOC_s_DEBUG_FMT
-		"tagged %d, simple %d, ordered %d\n",
-		ioc->name,sdev->tagged_supported, sdev->simple_tags,
-		sdev->ordered_tags));
+		"tagged %d, simple %d\n",
+		ioc->name,sdev->tagged_supported, sdev->simple_tags));
 
 	blk_queue_dma_alignment (sdev->request_queue, 512 - 1);
 

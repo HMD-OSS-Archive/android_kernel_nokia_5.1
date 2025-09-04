@@ -23,28 +23,27 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/syscalls.h>
 #include <linux/perf_event.h>
 
 #include <asm/opcodes.h>
 #include <asm/system_info.h>
 #include <asm/traps.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 /*
  * Error-checking SWP macros implemented using ldrex{b}/strex{b}
  */
 #define __user_swpX_asm(data, addr, res, temp, B)		\
-do {								\
-	errata_855872_dmb();					\
 	__asm__ __volatile__(					\
-	"	mov		%2, %1\n"			\
-	"0:	ldrex"B"	%1, [%3]\n"			\
-	"1:	strex"B"	%0, %2, [%3]\n"			\
+	"0:	ldrex"B"	%2, [%3]\n"			\
+	"1:	strex"B"	%0, %1, [%3]\n"			\
 	"	cmp		%0, #0\n"			\
+	"	moveq		%1, %2\n"			\
 	"	movne		%0, %4\n"			\
 	"2:\n"							\
-	"	.section	 .fixup,\"ax\"\n"		\
+	"	.section	 .text.fixup,\"ax\"\n"		\
 	"	.align		2\n"				\
 	"3:	mov		%0, %5\n"			\
 	"	b		2b\n"				\
@@ -56,8 +55,7 @@ do {								\
 	"	.previous"					\
 	: "=&r" (res), "+r" (data), "=&r" (temp)		\
 	: "r" (addr), "i" (-EAGAIN), "i" (-EFAULT)		\
-	: "cc", "memory");					\
-} while (0)
+	: "cc", "memory")
 
 #define __user_swp_asm(data, addr, res, temp) \
 	__user_swpX_asm(data, addr, res, temp, "")
@@ -266,7 +264,7 @@ static int __init swp_emulation_init(void)
 		return -ENOMEM;
 #endif /* CONFIG_PROC_FS */
 
-	printk(KERN_NOTICE "Registering SWP/SWPB emulation handler\n");
+	pr_notice("Registering SWP/SWPB emulation handler\n");
 	register_undef_hook(&swp_hook);
 
 	return 0;

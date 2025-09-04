@@ -1,5 +1,6 @@
 #include <linux/export.h>
 #include <linux/sched.h>
+#include <linux/sched/debug.h>
 #include <linux/stacktrace.h>
 
 #include <asm/stacktrace.h>
@@ -41,6 +42,9 @@ int notrace unwind_frame(struct stackframe *frame)
 	frame->pc = *(unsigned long *)(fp - 4);
 
 	if (ALIGN(frame->fp, THREAD_SIZE) != ALIGN(fp, THREAD_SIZE))
+		return -EINVAL;
+
+	if (ALIGN(frame->sp, THREAD_SIZE) != ALIGN(low, THREAD_SIZE))
 		return -EINVAL;
 
 	return 0;
@@ -139,12 +143,10 @@ static noinline void __save_stack_trace(struct task_struct *tsk,
 		frame.pc = thread_saved_pc(tsk);
 #endif
 	} else {
-		register unsigned long current_sp asm ("sp");
-
 		/* We don't want this function nor the caller */
 		data.skip += 2;
 		frame.fp = (unsigned long)__builtin_frame_address(0);
-		frame.sp = current_sp;
+		frame.sp = current_stack_pointer;
 		frame.lr = (unsigned long)__builtin_return_address(0);
 		frame.pc = (unsigned long)__save_stack_trace;
 	}
@@ -177,6 +179,7 @@ void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
 {
 	__save_stack_trace(tsk, trace, 1);
 }
+EXPORT_SYMBOL(save_stack_trace_tsk);
 
 void save_stack_trace(struct stack_trace *trace)
 {

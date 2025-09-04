@@ -1,682 +1,1055 @@
 /*
- * Mediatek XHCI driver for SSUSB.
+ * MediaTek xHCI Host Controller Driver
  *
- * Copyright (C) 2015 Mediatek Inc.
+ * Copyright (c) 2015 MediaTek Inc.
+ * Author:
+ *  Chunfeng Yun <chunfeng.yun@mediatek.com>
  *
- * Author:	Arvin Wang <arvin.wang@mediatek.com>,
- *		Macpaul Lin <macpaul.lin@mediatek.com>
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
-#include <linux/module.h>
+#include <linux/clk.h>
+#include <linux/dma-mapping.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
-#include <linux/slab.h>
-#include <linux/init.h>
-#include <linux/list.h>
+#include <linux/mfd/syscon.h>
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/phy/phy.h>
 #include <linux/platform_device.h>
-#include <linux/io.h>
+#include <linux/pm_runtime.h>
+#include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
+#include <linux/debugfs.h>
+#include <linux/uaccess.h>
+
+#include "xhci.h"
 #include "xhci-mtk.h"
 
-static struct sch_ep **ss_out_eps[MAX_EP_NUM];
-static struct sch_ep **ss_in_eps[MAX_EP_NUM];
-static struct sch_ep **hs_eps[MAX_EP_NUM];	/* including tt isoc */
-static struct sch_ep **tt_intr_eps[MAX_EP_NUM];
+/* ip_pw_ctrl0 register */
+#define CTRL0_IP_SW_RST	BIT(0)
 
-int mtk_xhci_scheduler_init(void)
+/* ip_pw_ctrl1 register */
+#define CTRL1_IP_HOST_PDN	BIT(0)
+
+/* ip_pw_ctrl2 register */
+#define CTRL2_IP_DEV_PDN	BIT(0)
+
+/* ip_pw_sts1 register */
+#define STS1_IP_SLEEP_STS	BIT(30)
+#define STS1_XHCI_RST		BIT(11)
+#define STS1_SYS125_RST	BIT(10)
+#define STS1_REF_RST		BIT(8)
+#define STS1_SYSPLL_STABLE	BIT(0)
+
+/* ip_xhci_cap register */
+#define CAP_U3_PORT_NUM(p)	((p) & 0xff)
+#define CAP_U2_PORT_NUM(p)	(((p) >> 8) & 0xff)
+
+/* u3_ctrl_p register */
+#define CTRL_U3_PORT_HOST_SEL	BIT(2)
+#define CTRL_U3_PORT_PDN	BIT(1)
+#define CTRL_U3_PORT_DIS	BIT(0)
+
+/* u2_ctrl_p register */
+#define CTRL_U2_PORT_HOST_SEL	BIT(2)
+#define CTRL_U2_PORT_PDN	BIT(1)
+#define CTRL_U2_PORT_DIS	BIT(0)
+
+/* u2_phy_pll register */
+#define CTRL_U2_FORCE_PLL_STB	BIT(28)
+
+#define PERI_WK_CTRL0		0x400
+#define UWK_CTR0_0P_LS_PE	BIT(8)  /* posedge */
+#define UWK_CTR0_0P_LS_NE	BIT(7)  /* negedge for 0p linestate*/
+#define UWK_CTL1_1P_LS_C(x)	(((x) & 0xf) << 1)
+#define UWK_CTL1_1P_LS_E	BIT(0)
+
+#define PERI_WK_CTRL1		0x404
+#define UWK_CTL1_IS_C(x)	(((x) & 0xf) << 26)
+#define UWK_CTL1_IS_E		BIT(25)
+#define UWK_CTL1_0P_LS_C(x)	(((x) & 0xf) << 21)
+#define UWK_CTL1_0P_LS_E	BIT(20)
+#define UWK_CTL1_IDDIG_C(x)	(((x) & 0xf) << 11)  /* cycle debounce */
+#define UWK_CTL1_IDDIG_E	BIT(10) /* enable debounce */
+#define UWK_CTL1_IDDIG_P	BIT(9)  /* polarity */
+#define UWK_CTL1_0P_LS_P	BIT(7)
+#define UWK_CTL1_IS_P		BIT(6)  /* polarity for ip sleep */
+
+/* test mode */
+#define HOST_CMD_TEST_J             0x1
+#define HOST_CMD_TEST_K             0x2
+#define HOST_CMD_TEST_SE0_NAK       0x3
+#define HOST_CMD_TEST_PACKET        0x4
+#define PMSC_PORT_TEST_CTRL_OFFSET  28
+
+static ssize_t xhci_mtk_test_mode_write(struct file *file,
+		const char __user *ubuf, size_t count, loff_t *ppos)
+
 {
+	struct seq_file *s = file->private_data;
+	struct xhci_hcd_mtk *mtk = s->private;
+	struct xhci_hcd *xhci = hcd_to_xhci(mtk->hcd);
+	int ports = HCS_MAX_PORTS(xhci->hcs_params1);
+	char buf[20];
+	u8 test = 0;
+	u32 temp;
+	u32 __iomem *addr;
 	int i;
 
-	for (i = 0; i < MAX_EP_NUM; i++)
-		ss_out_eps[i] = NULL;
+	memset(buf, 0x00, sizeof(buf));
 
-	for (i = 0; i < MAX_EP_NUM; i++)
-		ss_in_eps[i] = NULL;
+	if (copy_from_user(buf, ubuf,
+			min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
 
-	for (i = 0; i < MAX_EP_NUM; i++)
-		hs_eps[i] = NULL;
+	if (!strncmp(buf, "test packet", 10))
+		test = HOST_CMD_TEST_PACKET;
+	else if (!strncmp(buf, "test K", 6))
+		test = HOST_CMD_TEST_K;
+	else if (!strncmp(buf, "test J", 6))
+		test = HOST_CMD_TEST_J;
+	else if (!strncmp(buf, "test SE0 NAK", 12))
+		test = HOST_CMD_TEST_SE0_NAK;
 
-	for (i = 0; i < MAX_EP_NUM; i++)
-		tt_intr_eps[i] = NULL;
+	if (test) {
+		xhci_info(xhci, "set test mode %d\n", test);
+
+		/* set the Run/Stop in USBCMD to 0 */
+		addr = &xhci->op_regs->command;
+		temp = readl(addr);
+		temp &= ~CMD_RUN;
+		writel(temp, addr);
+
+		/*  wait for HCHalted */
+		xhci_halt(xhci);
+
+		/* test mode */
+		for (i = 0; i < ports; i++) {
+			addr = &xhci->op_regs->port_power_base +
+				NUM_PORT_REGS * (i & 0xff);
+			temp = readl(addr);
+			temp &= ~(0xf << PMSC_PORT_TEST_CTRL_OFFSET);
+			temp |= (test << PMSC_PORT_TEST_CTRL_OFFSET);
+			writel(temp, addr);
+		}
+	} else {
+		xhci_info(xhci, "test mode command error\n");
+	}
+
+	return count;
+}
+
+static int xhci_mtk_test_mode_show(struct seq_file *s, void *unused)
+{
+	seq_puts(s, "xhci_mtk test mode\n");
+	return 0;
+}
+
+
+static int xhci_mtk_test_mode_open(struct inode *inode,
+					struct file *file)
+{
+	return single_open(file, xhci_mtk_test_mode_show,
+					   inode->i_private);
+}
+
+static const struct file_operations xhci_mtk_test_mode_fops = {
+	.open = xhci_mtk_test_mode_open,
+	.write = xhci_mtk_test_mode_write,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int xhci_mtk_dbg_init(struct xhci_hcd_mtk *mtk)
+{
+	int ret = 0;
+	struct dentry *root;
+	struct dentry *file;
+
+	root = debugfs_create_dir("xhci_mtk_dbg", NULL);
+	if (IS_ERR_OR_NULL(root)) {
+		ret = PTR_ERR(root);
+		goto err0;
+	}
+
+	file = debugfs_create_file("testmode", 0644, root,
+						mtk, &xhci_mtk_test_mode_fops);
+	if (IS_ERR_OR_NULL(file)) {
+		ret = PTR_ERR(file);
+		goto err0;
+	}
+
+	mtk->debugfs_root = root;
+
+	return 0;
+err0:
+	return ret;
+}
+
+static int xhci_mtk_dbg_exit(struct xhci_hcd_mtk *mtk)
+{
+	debugfs_remove_recursive(mtk->debugfs_root);
+	return 0;
+}
+
+int mtk_xhci_wakelock_lock(struct xhci_hcd_mtk *mtk)
+{
+	struct device_node *of_node = mtk->dev->of_node;
+	struct xhci_hcd *xhci = hcd_to_xhci(mtk->hcd);
+
+	if (of_device_is_compatible(of_node, "mediatek,mt67xx-xhci")) {
+		pm_stay_awake(mtk->dev);
+		xhci_info(xhci, "wakelock_lock\n");
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mtk_xhci_wakelock_lock);
+
+int mtk_xhci_wakelock_unlock(struct xhci_hcd_mtk *mtk)
+{
+	struct device_node *of_node = mtk->dev->of_node;
+	struct xhci_hcd *xhci = hcd_to_xhci(mtk->hcd);
+
+	if (of_device_is_compatible(of_node, "mediatek,mt67xx-xhci")) {
+		pm_relax(mtk->dev);
+		xhci_info(xhci, "wakelock_unlock\n");
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mtk_xhci_wakelock_unlock);
+
+enum ssusb_wakeup_src {
+	SSUSB_WK_IP_SLEEP = 1,
+	SSUSB_WK_LINE_STATE = 2,
+};
+
+static int xhci_mtk_host_enable(struct xhci_hcd_mtk *mtk)
+{
+	struct mu3c_ippc_regs __iomem *ippc = mtk->ippc_regs;
+	u32 value, check_val;
+	int ret;
+	int i;
+
+	if (!mtk->has_ippc)
+		return 0;
+
+	/* power on host ip */
+	value = readl(&ippc->ip_pw_ctr1);
+	value &= ~CTRL1_IP_HOST_PDN;
+	writel(value, &ippc->ip_pw_ctr1);
+
+	/* power on and enable all u3 ports */
+	for (i = 0; i < mtk->num_u3_ports; i++) {
+		value = readl(&ippc->u3_ctrl_p[i]);
+		value &= ~(CTRL_U3_PORT_PDN | CTRL_U3_PORT_DIS);
+		value |= CTRL_U3_PORT_HOST_SEL;
+		writel(value, &ippc->u3_ctrl_p[i]);
+	}
+
+	/* power on and enable all u2 ports */
+	for (i = 0; i < mtk->num_u2_ports; i++) {
+		value = readl(&ippc->u2_ctrl_p[i]);
+		value &= ~(CTRL_U2_PORT_PDN | CTRL_U2_PORT_DIS);
+		value |= CTRL_U2_PORT_HOST_SEL;
+		writel(value, &ippc->u2_ctrl_p[i]);
+	}
+
+	/*
+	 * wait for clocks to be stable, and clock domains reset to
+	 * be inactive after power on and enable ports
+	 */
+	check_val = STS1_SYSPLL_STABLE | STS1_REF_RST |
+			STS1_SYS125_RST | STS1_XHCI_RST;
+
+	ret = readl_poll_timeout(&ippc->ip_pw_sts1, value,
+			  (check_val == (value & check_val)), 100, 20000);
+	if (ret) {
+		dev_err(mtk->dev, "clocks are not stable (0x%x)\n", value);
+		return ret;
+	}
 
 	return 0;
 }
 
-int add_sch_ep(int dev_speed, int is_in, int isTT, int ep_type, int maxp,
-	       int interval, int burst, int mult, int offset, int repeat,
-	       int pkts, int cs_count, int burst_mode, int bw_cost,
-	       mtk_u32 *ep, struct sch_ep *tmp_ep)
+static int xhci_mtk_host_disable(struct xhci_hcd_mtk *mtk)
 {
-
-	struct sch_ep **ep_array;
-	int i;
-
-	if (is_in && dev_speed == USB_SPEED_SUPER)
-		ep_array = (struct sch_ep **)ss_in_eps;
-	else if (dev_speed == USB_SPEED_SUPER)
-		ep_array = (struct sch_ep **)ss_out_eps;
-	else if (dev_speed == USB_SPEED_HIGH || (isTT && ep_type == USB_EP_ISOC))
-		ep_array = (struct sch_ep **)hs_eps;
-	else
-		ep_array = (struct sch_ep **)tt_intr_eps;
-
-	for (i = 0; i < MAX_EP_NUM; i++) {
-		if (ep_array[i] == NULL) {
-			tmp_ep->dev_speed = dev_speed;
-			tmp_ep->isTT = isTT;
-			tmp_ep->is_in = is_in;
-			tmp_ep->ep_type = ep_type;
-			tmp_ep->maxp = maxp;
-			tmp_ep->interval = interval;
-			tmp_ep->burst = burst;
-			tmp_ep->mult = mult;
-			tmp_ep->offset = offset;
-			tmp_ep->repeat = repeat;
-			tmp_ep->pkts = pkts;
-			tmp_ep->cs_count = cs_count;
-			tmp_ep->burst_mode = burst_mode;
-			tmp_ep->bw_cost = bw_cost;
-			tmp_ep->ep = ep;
-			ep_array[i] = tmp_ep;
-			return SCH_SUCCESS;
-		}
-	}
-	return SCH_FAIL;
-}
-
-int count_ss_bw(int is_in, int ep_type, int maxp, int interval, int burst,
-		int mult, int offset, int repeat, int td_size)
-{
-	int i, j, k;
-	int bw_required[3];
-	int final_bw_required;
-	int bw_required_per_repeat;
-	int tmp_bw_required;
-	struct sch_ep *cur_sch_ep;
-	struct sch_ep **ep_array;
-	int cur_offset;
-	int cur_ep_offset;
-	int tmp_offset;
-	int tmp_interval;
-	int ep_offset;
-	int ep_interval;
-	int ep_repeat;
-	int ep_mult;
-
-	if (is_in)
-		ep_array = (struct sch_ep **)ss_in_eps;
-	else
-		ep_array = (struct sch_ep **)ss_out_eps;
-
-
-	bw_required[0] = 0;
-	bw_required[1] = 0;
-	bw_required[2] = 0;
-
-	if (repeat == 0) {
-		final_bw_required = 0;
-		for (i = 0; i < MAX_EP_NUM; i++) {
-			cur_sch_ep = ep_array[i];
-			if (cur_sch_ep == NULL)
-				continue;
-
-			ep_interval = cur_sch_ep->interval;
-			ep_offset = cur_sch_ep->offset;
-			if (cur_sch_ep->repeat == 0) {
-				if (ep_interval >= interval) {
-					tmp_offset = ep_offset + ep_interval - offset;
-					tmp_interval = interval;
-				} else {
-					tmp_offset = offset + interval - ep_offset;
-					tmp_interval = ep_interval;
-				}
-				if (tmp_offset % tmp_interval == 0)
-					final_bw_required += cur_sch_ep->bw_cost;
-
-			} else {
-				ep_repeat = cur_sch_ep->repeat;
-				ep_mult = cur_sch_ep->mult;
-				for (k = 0; k <= ep_mult; k++) {
-					cur_ep_offset = ep_offset + (k * ep_repeat);
-					if (ep_interval >= interval) {
-						tmp_offset = cur_ep_offset + ep_interval - offset;
-						tmp_interval = interval;
-					} else {
-						tmp_offset = offset + interval - cur_ep_offset;
-						tmp_interval = ep_interval;
-					}
-					if (tmp_offset % tmp_interval == 0) {
-						final_bw_required += cur_sch_ep->bw_cost;
-						break;
-					}
-				}
-			}
-		}
-		final_bw_required += td_size;
-	} else {
-		bw_required_per_repeat = maxp * (burst + 1);
-		for (j = 0; j <= mult; j++) {
-			tmp_bw_required = 0;
-			cur_offset = offset + (j * repeat);
-			for (i = 0; i < MAX_EP_NUM; i++) {
-				cur_sch_ep = ep_array[i];
-				if (cur_sch_ep == NULL)
-					continue;
-
-				ep_interval = cur_sch_ep->interval;
-				ep_offset = cur_sch_ep->offset;
-				if (cur_sch_ep->repeat == 0) {
-					if (ep_interval >= interval) {
-						tmp_offset = ep_offset + ep_interval - cur_offset;
-						tmp_interval = interval;
-					} else {
-						tmp_offset = cur_offset + interval - ep_offset;
-						tmp_interval = ep_interval;
-					}
-					if (tmp_offset % tmp_interval == 0)
-						tmp_bw_required += cur_sch_ep->bw_cost;
-
-				} else {
-					ep_repeat = cur_sch_ep->repeat;
-					ep_mult = cur_sch_ep->mult;
-					for (k = 0; k <= ep_mult; k++) {
-						cur_ep_offset = ep_offset + (k * ep_repeat);
-					if (ep_interval >= interval) {
-						tmp_offset = cur_ep_offset + ep_interval - cur_offset;
-						tmp_interval = interval;
-					} else {
-						tmp_offset = cur_offset + interval - cur_ep_offset;
-						tmp_interval = ep_interval;
-					}
-					if (tmp_offset % tmp_interval == 0) {
-						tmp_bw_required += cur_sch_ep->bw_cost;
-						break;
-					}
-					}
-				}
-			}
-			bw_required[j] = tmp_bw_required;
-		}
-		final_bw_required = SS_BW_BOUND;
-		for (j = 0; j <= mult; j++) {
-			if (bw_required[j] < final_bw_required)
-				final_bw_required = bw_required[j];
-
-		}
-		final_bw_required += bw_required_per_repeat;
-	}
-	return final_bw_required;
-}
-
-int count_hs_bw(int ep_type, int maxp, int interval, int offset, int td_size)
-{
-	int i;
-	int bw_required;
-	struct sch_ep *cur_sch_ep;
-	int tmp_offset;
-	int tmp_interval;
-	int ep_offset;
-	int ep_interval;
-	int cur_tt_isoc_interval;	/* for isoc tt check */
-
-	bw_required = 0;
-	for (i = 0; i < MAX_EP_NUM; i++) {
-
-		cur_sch_ep = (struct sch_ep *)hs_eps[i];
-		if (cur_sch_ep == NULL)
-			continue;
-
-		ep_offset = cur_sch_ep->offset;
-		ep_interval = cur_sch_ep->interval;
-
-		if (cur_sch_ep->isTT && cur_sch_ep->ep_type == USB_EP_ISOC) {
-			cur_tt_isoc_interval = ep_interval << 3;
-			if (ep_interval >= interval) {
-				tmp_offset = ep_offset + cur_tt_isoc_interval - offset;
-				tmp_interval = interval;
-			} else {
-				tmp_offset = offset + interval - ep_offset;
-				tmp_interval = cur_tt_isoc_interval;
-			}
-			if (cur_sch_ep->is_in) {
-				if ((tmp_offset % tmp_interval >= 2)
-				    && (tmp_offset % tmp_interval <= cur_sch_ep->cs_count)) {
-					bw_required += 188;
-				}
-			} else {
-				if (tmp_offset % tmp_interval <= cur_sch_ep->cs_count)
-					bw_required += 188;
-
-			}
-		} else {
-			if (ep_interval >= interval) {
-				tmp_offset = ep_offset + ep_interval - offset;
-				tmp_interval = interval;
-			} else {
-				tmp_offset = offset + interval - ep_offset;
-				tmp_interval = ep_interval;
-			}
-			if (tmp_offset % tmp_interval == 0)
-				bw_required += cur_sch_ep->bw_cost;
-
-		}
-	}
-	bw_required += td_size;
-	return bw_required;
-}
-
-int count_tt_isoc_bw(int is_in, int maxp, int interval, int offset, int td_size)
-{
-	char is_cs;
-	int s_frame, s_mframe, cur_mframe;
-	int bw_required, max_bw;
-	int ss_cs_count;
-	int cs_mframe;
-	int i, j;
-	struct sch_ep *cur_sch_ep;
-	int ep_offset;
-	int ep_interval;
-	int tt_isoc_interval;	/* for isoc tt check */
-	int cur_tt_isoc_interval;	/* for isoc tt check */
-	int tmp_offset;
-	int tmp_interval;
-
-	is_cs = 0;
-
-	tt_isoc_interval = interval << 3;	/* frame to mframe */
-	if (is_in)
-		is_cs = 1;
-
-	s_frame = offset / 8;
-	s_mframe = offset % 8;
-	ss_cs_count = (maxp + (188 - 1)) / 188;
-	if (is_cs) {
-		cs_mframe = offset % 8 + 2 + ss_cs_count;
-		if (cs_mframe <= 6)
-			ss_cs_count += 2;
-		else if (cs_mframe == 7)
-			ss_cs_count++;
-		else if (cs_mframe > 8)
-			return -1;
-	}
-	max_bw = 0;
-	if (is_in)
-		i = 2;
-	else
-		i = 0;
-
-	for (cur_mframe = offset + i; i < ss_cs_count; cur_mframe++, i++) {
-		bw_required = 0;
-		for (j = 0; j < MAX_EP_NUM; j++) {
-			cur_sch_ep = (struct sch_ep *)hs_eps[j];
-			if (cur_sch_ep == NULL)
-				continue;
-
-			ep_offset = cur_sch_ep->offset;
-			ep_interval = cur_sch_ep->interval;
-			if (cur_sch_ep->isTT && cur_sch_ep->ep_type == USB_EP_ISOC) {
-				/* isoc tt */
-				/* check if mframe offset overlap */
-				/* if overlap, add 188 to the bw */
-				cur_tt_isoc_interval = ep_interval << 3;
-				if (cur_tt_isoc_interval >= tt_isoc_interval) {
-					tmp_offset =
-					    (ep_offset + cur_tt_isoc_interval) - cur_mframe;
-					tmp_interval = tt_isoc_interval;
-				} else {
-					tmp_offset = (cur_mframe + tt_isoc_interval) - ep_offset;
-					tmp_interval = cur_tt_isoc_interval;
-				}
-				if (cur_sch_ep->is_in) {
-					if ((tmp_offset % tmp_interval >= 2)
-					    && (tmp_offset % tmp_interval <= cur_sch_ep->cs_count)) {
-						bw_required += 188;
-					}
-				} else {
-					if (tmp_offset % tmp_interval <= cur_sch_ep->cs_count)
-						bw_required += 188;
-
-				}
-
-			} else if (cur_sch_ep->ep_type == USB_EP_INT
-				   || cur_sch_ep->ep_type == USB_EP_ISOC) {
-				/* check if mframe */
-				if (ep_interval >= tt_isoc_interval) {
-					tmp_offset = (ep_offset + ep_interval) - cur_mframe;
-					tmp_interval = tt_isoc_interval;
-				} else {
-					tmp_offset = (cur_mframe + tt_isoc_interval) - ep_offset;
-					tmp_interval = ep_interval;
-				}
-				if (tmp_offset % tmp_interval == 0)
-					bw_required += cur_sch_ep->bw_cost;
-
-			}
-		}
-		bw_required += 188;
-		if (bw_required > max_bw)
-			max_bw = bw_required;
-
-	}
-	return max_bw;
-}
-
-int count_tt_intr_bw(int interval, int frame_offset)
-{
-	/* check all eps in tt_intr_eps */
+	struct mu3c_ippc_regs __iomem *ippc = mtk->ippc_regs;
+	u32 value;
 	int ret;
 	int i;
-	int ep_offset;
-	int ep_interval;
-	int tmp_offset;
-	int tmp_interval;
-	struct sch_ep *cur_sch_ep;
 
-	ret = SCH_SUCCESS;
+	if (!mtk->has_ippc)
+		return 0;
 
-	for (i = 0; i < MAX_EP_NUM; i++) {
-		cur_sch_ep = (struct sch_ep *)tt_intr_eps[i];
-		if (cur_sch_ep == NULL)
-			continue;
-
-		ep_offset = cur_sch_ep->offset;
-		ep_interval = cur_sch_ep->interval;
-		if (ep_interval >= interval) {
-			tmp_offset = ep_offset + ep_interval - frame_offset;
-			tmp_interval = interval;
-		} else {
-			tmp_offset = frame_offset + interval - ep_offset;
-			tmp_interval = ep_interval;
-		}
-
-		if (tmp_offset % tmp_interval == 0)
-			return SCH_FAIL;
-
+	/* power down all u3 ports */
+	for (i = 0; i < mtk->num_u3_ports; i++) {
+		value = readl(&ippc->u3_ctrl_p[i]);
+		value |= CTRL_U3_PORT_PDN;
+		writel(value, &ippc->u3_ctrl_p[i]);
 	}
-	return SCH_SUCCESS;
+
+	/* power down all u2 ports */
+	for (i = 0; i < mtk->num_u2_ports; i++) {
+		value = readl(&ippc->u2_ctrl_p[i]);
+		value |= CTRL_U2_PORT_PDN;
+		writel(value, &ippc->u2_ctrl_p[i]);
+	}
+
+	/* power down host ip */
+	value = readl(&ippc->ip_pw_ctr1);
+	value |= CTRL1_IP_HOST_PDN;
+	writel(value, &ippc->ip_pw_ctr1);
+
+	/* wait for host ip to sleep */
+	ret = readl_poll_timeout(&ippc->ip_pw_sts1, value,
+			  (value & STS1_IP_SLEEP_STS), 100, 100000);
+	if (ret) {
+		dev_err(mtk->dev, "ip sleep failed!!!\n");
+		return ret;
+	}
+	return 0;
 }
 
-struct sch_ep *mtk_xhci_scheduler_remove_ep(int dev_speed, int is_in, int isTT,
-					    int ep_type, mtk_u32 *ep)
+static int xhci_mtk_ssusb_config(struct xhci_hcd_mtk *mtk)
+{
+	struct mu3c_ippc_regs __iomem *ippc = mtk->ippc_regs;
+	u32 value;
+
+	if (!mtk->has_ippc)
+		return 0;
+
+	/* reset whole ip */
+	value = readl(&ippc->ip_pw_ctr0);
+	value |= CTRL0_IP_SW_RST;
+	writel(value, &ippc->ip_pw_ctr0);
+	udelay(1);
+	value = readl(&ippc->ip_pw_ctr0);
+	value &= ~CTRL0_IP_SW_RST;
+	writel(value, &ippc->ip_pw_ctr0);
+
+	/*
+	 * device ip is default power-on in fact
+	 * power down device ip, otherwise ip-sleep will fail
+	 */
+	value = readl(&ippc->ip_pw_ctr2);
+	value |= CTRL2_IP_DEV_PDN;
+	writel(value, &ippc->ip_pw_ctr2);
+
+	value = readl(&ippc->ip_xhci_cap);
+	mtk->num_u3_ports = CAP_U3_PORT_NUM(value);
+	mtk->num_u2_ports = CAP_U2_PORT_NUM(value);
+	dev_dbg(mtk->dev, "%s u2p:%d, u3p:%d\n", __func__,
+			mtk->num_u2_ports, mtk->num_u3_ports);
+
+	return xhci_mtk_host_enable(mtk);
+}
+
+static int xhci_mtk_clks_enable(struct xhci_hcd_mtk *mtk)
+{
+	int ret;
+
+	ret = clk_prepare_enable(mtk->ref_clk);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable ref_clk\n");
+		goto ref_clk_err;
+	}
+
+	ret = clk_prepare_enable(mtk->sys_clk);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable sys_clk\n");
+		goto sys_clk_err;
+	}
+
+	if (mtk->wakeup_src) {
+		ret = clk_prepare_enable(mtk->wk_deb_p0);
+		if (ret) {
+			dev_err(mtk->dev, "failed to enable wk_deb_p0\n");
+			goto usb_p0_err;
+		}
+
+		ret = clk_prepare_enable(mtk->wk_deb_p1);
+		if (ret) {
+			dev_err(mtk->dev, "failed to enable wk_deb_p1\n");
+			goto usb_p1_err;
+		}
+	}
+	return 0;
+
+usb_p1_err:
+	clk_disable_unprepare(mtk->wk_deb_p0);
+usb_p0_err:
+	clk_disable_unprepare(mtk->sys_clk);
+sys_clk_err:
+	clk_disable_unprepare(mtk->ref_clk);
+ref_clk_err:
+	return -EINVAL;
+}
+
+static void xhci_mtk_clks_disable(struct xhci_hcd_mtk *mtk)
+{
+	if (mtk->wakeup_src) {
+		clk_disable_unprepare(mtk->wk_deb_p1);
+		clk_disable_unprepare(mtk->wk_deb_p0);
+	}
+	clk_disable_unprepare(mtk->sys_clk);
+	clk_disable_unprepare(mtk->ref_clk);
+}
+
+/* only clocks can be turn off for ip-sleep wakeup mode */
+static void usb_wakeup_ip_sleep_en(struct xhci_hcd_mtk *mtk)
+{
+	u32 tmp;
+	struct regmap *pericfg = mtk->pericfg;
+
+	regmap_read(pericfg, PERI_WK_CTRL1, &tmp);
+	tmp &= ~UWK_CTL1_IS_P;
+	tmp &= ~(UWK_CTL1_IS_C(0xf));
+	tmp |= UWK_CTL1_IS_C(0x8);
+	regmap_write(pericfg, PERI_WK_CTRL1, tmp);
+	regmap_write(pericfg, PERI_WK_CTRL1, tmp | UWK_CTL1_IS_E);
+
+	regmap_read(pericfg, PERI_WK_CTRL1, &tmp);
+	dev_dbg(mtk->dev, "%s(): WK_CTRL1[P6,E25,C26:29]=%#x\n",
+		__func__, tmp);
+}
+
+static void usb_wakeup_ip_sleep_dis(struct xhci_hcd_mtk *mtk)
+{
+	u32 tmp;
+
+	regmap_read(mtk->pericfg, PERI_WK_CTRL1, &tmp);
+	tmp &= ~UWK_CTL1_IS_E;
+	regmap_write(mtk->pericfg, PERI_WK_CTRL1, tmp);
+}
+
+/*
+* for line-state wakeup mode, phy's power should not power-down
+* and only support cable plug in/out
+*/
+static void usb_wakeup_line_state_en(struct xhci_hcd_mtk *mtk)
+{
+	u32 tmp;
+	struct regmap *pericfg = mtk->pericfg;
+
+	/* line-state of u2-port0 */
+	regmap_read(pericfg, PERI_WK_CTRL1, &tmp);
+	tmp &= ~UWK_CTL1_0P_LS_P;
+	tmp &= ~(UWK_CTL1_0P_LS_C(0xf));
+	tmp |= UWK_CTL1_0P_LS_C(0x8);
+	regmap_write(pericfg, PERI_WK_CTRL1, tmp);
+	regmap_read(pericfg, PERI_WK_CTRL1, &tmp);
+	regmap_write(pericfg, PERI_WK_CTRL1, tmp | UWK_CTL1_0P_LS_E);
+
+	/* line-state of u2-port1 */
+	regmap_read(pericfg, PERI_WK_CTRL0, &tmp);
+	tmp &= ~(UWK_CTL1_1P_LS_C(0xf));
+	tmp |= UWK_CTL1_1P_LS_C(0x8);
+	regmap_write(pericfg, PERI_WK_CTRL0, tmp);
+	regmap_write(pericfg, PERI_WK_CTRL0, tmp | UWK_CTL1_1P_LS_E);
+}
+
+static void usb_wakeup_line_state_dis(struct xhci_hcd_mtk *mtk)
+{
+	u32 tmp;
+	struct regmap *pericfg = mtk->pericfg;
+
+	/* line-state of u2-port0 */
+	regmap_read(pericfg, PERI_WK_CTRL1, &tmp);
+	tmp &= ~UWK_CTL1_0P_LS_E;
+	regmap_write(pericfg, PERI_WK_CTRL1, tmp);
+
+	/* line-state of u2-port1 */
+	regmap_read(pericfg, PERI_WK_CTRL0, &tmp);
+	tmp &= ~UWK_CTL1_1P_LS_E;
+	regmap_write(pericfg, PERI_WK_CTRL0, tmp);
+}
+
+static void usb_wakeup_enable(struct xhci_hcd_mtk *mtk)
+{
+	if (mtk->wakeup_src == SSUSB_WK_IP_SLEEP)
+		usb_wakeup_ip_sleep_en(mtk);
+	else if (mtk->wakeup_src == SSUSB_WK_LINE_STATE)
+		usb_wakeup_line_state_en(mtk);
+}
+
+static void usb_wakeup_disable(struct xhci_hcd_mtk *mtk)
+{
+	if (mtk->wakeup_src == SSUSB_WK_IP_SLEEP)
+		usb_wakeup_ip_sleep_dis(mtk);
+	else if (mtk->wakeup_src == SSUSB_WK_LINE_STATE)
+		usb_wakeup_line_state_dis(mtk);
+}
+
+static int usb_wakeup_of_property_parse(struct xhci_hcd_mtk *mtk,
+				struct device_node *dn)
+{
+	struct device *dev = mtk->dev;
+
+	/*
+	* wakeup function is optional, so it is not an error if this property
+	* does not exist, and in such case, no need to get relative
+	* properties anymore.
+	*/
+	of_property_read_u32(dn, "mediatek,wakeup-src", &mtk->wakeup_src);
+	if (!mtk->wakeup_src)
+		return 0;
+
+	mtk->wk_deb_p0 = devm_clk_get(dev, "wakeup_deb_p0");
+	if (IS_ERR(mtk->wk_deb_p0)) {
+		dev_err(dev, "fail to get wakeup_deb_p0\n");
+		return PTR_ERR(mtk->wk_deb_p0);
+	}
+
+	mtk->wk_deb_p1 = devm_clk_get(dev, "wakeup_deb_p1");
+	if (IS_ERR(mtk->wk_deb_p1)) {
+		dev_err(dev, "fail to get wakeup_deb_p1\n");
+		return PTR_ERR(mtk->wk_deb_p1);
+	}
+
+	mtk->pericfg = syscon_regmap_lookup_by_phandle(dn,
+						"mediatek,syscon-wakeup");
+	if (IS_ERR(mtk->pericfg)) {
+		dev_err(dev, "fail to get pericfg regs\n");
+		return PTR_ERR(mtk->pericfg);
+	}
+
+	return 0;
+}
+
+static int xhci_mtk_setup(struct usb_hcd *hcd);
+static const struct xhci_driver_overrides xhci_mtk_overrides __initconst = {
+	.reset = xhci_mtk_setup,
+};
+
+static struct hc_driver __read_mostly xhci_mtk_hc_driver;
+
+static int xhci_mtk_phy_init(struct xhci_hcd_mtk *mtk)
 {
 	int i;
-	struct sch_ep **ep_array;
-	struct sch_ep *cur_ep;
-
-	if (is_in && dev_speed == USB_SPEED_SUPER)
-		ep_array = (struct sch_ep **)ss_in_eps;
-	else if (dev_speed == USB_SPEED_SUPER)
-		ep_array = (struct sch_ep **)ss_out_eps;
-	else if (dev_speed == USB_SPEED_HIGH || (isTT && ep_type == USB_EP_ISOC))
-		ep_array = (struct sch_ep **)hs_eps;
-	else
-		ep_array = (struct sch_ep **)tt_intr_eps;
-
-	for (i = 0; i < MAX_EP_NUM; i++) {
-		cur_ep = (struct sch_ep *)ep_array[i];
-		if (cur_ep != NULL && cur_ep->ep == ep) {
-			ep_array[i] = NULL;
-			return cur_ep;
-		}
-	}
-	return NULL;
-}
-
-int mtk_xhci_scheduler_add_ep(int dev_speed, int is_in, int isTT, int ep_type,
-			      int maxp, int interval, int burst, int mult,
-			      mtk_u32 *ep, mtk_u32 *ep_ctx,
-			      struct sch_ep *sch_ep)
-{
-	mtk_u32 bPkts = 0;
-	mtk_u32 bCsCount = 0;
-	mtk_u32 bBm = 1;
-	mtk_u32 bOffset = 0;
-	mtk_u32 bRepeat = 0;
 	int ret;
-	struct mtk_xhci_ep_ctx *temp_ep_ctx;
-	int td_size;
-	int mframe_idx, frame_idx;
-	int bw_cost;
-	int cur_bw, best_bw, best_bw_idx, repeat, max_repeat, best_bw_repeat;
-	int cur_offset, cs_mframe;
-	int break_out;
-	int frame_interval;
 
-	best_bw_repeat = 0;
-	pr_debug("add_ep parameters, dev_speed : %d\n"
-		"is_in   : %d\n"
-		"isTT    : %d\n"
-		"ep_type : %d\n"
-		"maxp    : %d\n"
-		"interval: %d\n"
-		"burst   : %d\n"
-		"mult    : %d\n"
-		"ep      : 0x%p\n"
-		"ep_ctx      : 0x%p\n"
-		"sch_ep      : 0x%p\n",
-		dev_speed, is_in, isTT, ep_type,
-		maxp, interval, burst, mult,
-		ep, ep_ctx, sch_ep);
-
-	ret = SCH_FAIL; /* default value */
-
-	if (isTT && ep_type == USB_EP_INT
-	    && ((dev_speed == USB_SPEED_LOW) || (dev_speed == USB_SPEED_FULL))) {
-		frame_interval = interval >> 3;
-		for (frame_idx = 0; frame_idx < frame_interval; frame_idx++) {
-			pr_debug("check tt_intr_bw interval %d, frame_idx %d\n",
-				 frame_interval, frame_idx);
-			if (count_tt_intr_bw(frame_interval, frame_idx) == SCH_SUCCESS) {
-				pr_debug("check OK............\n");
-				bOffset = frame_idx << 3;
-				bPkts = 1;
-				bCsCount = 3;
-				bw_cost = maxp;
-				bRepeat = 0;
-				if (add_sch_ep
-				    (dev_speed, is_in, isTT, ep_type, maxp, frame_interval, burst,
-				     mult, bOffset, bRepeat, bPkts, bCsCount, bBm, maxp, ep,
-				     sch_ep) == SCH_FAIL) {
-					return SCH_FAIL;
-				}
-				ret = SCH_SUCCESS;
-				break;
-			}
-		}
-	} else if (isTT && ep_type == USB_EP_ISOC) {
-		best_bw = HS_BW_BOUND;
-		best_bw_idx = -1;
-		cur_bw = 0;
-		td_size = maxp;
-		break_out = 0;
-		frame_interval = interval >> 3;
-		for (frame_idx = 0; frame_idx < frame_interval && !break_out; frame_idx++) {
-			for (mframe_idx = 0; mframe_idx < 8; mframe_idx++) {
-				cur_offset = (frame_idx * 8) + mframe_idx;
-				cur_bw =
-				    count_tt_isoc_bw(is_in, maxp, frame_interval, cur_offset,
-						     td_size);
-				if (cur_bw > 0 && cur_bw < best_bw) {
-					best_bw_idx = cur_offset;
-					best_bw = cur_bw;
-					if (cur_bw == td_size || cur_bw < (HS_BW_BOUND >> 1)) {
-						break_out = 1;
-						break;
-					}
-				}
-			}
-		}
-		if (best_bw_idx == -1)
-			return SCH_FAIL;
-
-		bOffset = best_bw_idx;
-		bPkts = 1;
-		bCsCount = maxp + (188 - 1) / 188;
-		if (is_in) {
-			cs_mframe = bOffset % 8 + 2 + bCsCount;
-			if (cs_mframe <= 6)
-				bCsCount += 2;
-			else if (cs_mframe == 7)
-				bCsCount++;
-		}
-		bw_cost = 188;
-		bRepeat = 0;
-		if (add_sch_ep
-		    (dev_speed, is_in, isTT, ep_type, maxp, interval, burst, mult, bOffset,
-		     bRepeat, bPkts, bCsCount, bBm, bw_cost, ep, sch_ep) == SCH_FAIL) {
-			return SCH_FAIL;
-		}
-		ret = SCH_SUCCESS;
-	} else if ((dev_speed == USB_SPEED_FULL || dev_speed == USB_SPEED_LOW)
-		   && ep_type == USB_EP_INT) {
-		bPkts = 1;
-		ret = SCH_SUCCESS;
-	} else if (dev_speed == USB_SPEED_FULL && ep_type == USB_EP_ISOC) {
-		bPkts = 1;
-		ret = SCH_SUCCESS;
-	} else if (dev_speed == USB_SPEED_HIGH && (ep_type == USB_EP_INT || ep_type == USB_EP_ISOC)) {
-		best_bw = HS_BW_BOUND;
-		best_bw_idx = -1;
-		cur_bw = 0;
-		td_size = maxp * (burst + 1);
-		for (cur_offset = 0; cur_offset < interval; cur_offset++) {
-			cur_bw = count_hs_bw(ep_type, maxp, interval, cur_offset, td_size);
-			if (cur_bw > 0 && cur_bw < best_bw) {
-				best_bw_idx = cur_offset;
-				best_bw = cur_bw;
-				if (cur_bw == td_size || cur_bw < (HS_BW_BOUND >> 1))
-					break;
-
-			}
-		}
-		if (best_bw_idx == -1)
-			return SCH_FAIL;
-
-		bOffset = best_bw_idx;
-		bPkts = burst + 1;
-		bCsCount = 0;
-		bw_cost = td_size;
-		bRepeat = 0;
-		if (add_sch_ep
-		    (dev_speed, is_in, isTT, ep_type, maxp, interval, burst, mult, bOffset,
-		     bRepeat, bPkts, bCsCount, bBm, bw_cost, ep, sch_ep) == SCH_FAIL) {
-			return SCH_FAIL;
-		}
-		ret = SCH_SUCCESS;
-	} else if (dev_speed == USB_SPEED_SUPER
-		   && (ep_type == USB_EP_INT || ep_type == USB_EP_ISOC)) {
-		best_bw = SS_BW_BOUND;
-		best_bw_idx = -1;
-		cur_bw = 0;
-		td_size = maxp * (mult + 1) * (burst + 1);
-		if (mult == 0)
-			max_repeat = 0;
-		else
-			max_repeat = (interval - 1) / (mult + 1);
-
-		break_out = 0;
-		for (frame_idx = 0; (frame_idx < interval) && !break_out; frame_idx++) {
-			for (repeat = max_repeat; repeat >= 0; repeat--) {
-				cur_bw =
-				    count_ss_bw(is_in, ep_type, maxp, interval, burst, mult,
-						frame_idx, repeat, td_size);
-				pr_debug
-				    ("count_ss_bw, frame_idx %d, repeat %d, td_size %d, result bw %d\n",
-				     frame_idx, repeat, td_size, cur_bw);
-				if (cur_bw > 0 && cur_bw < best_bw) {
-					best_bw_idx = frame_idx;
-					best_bw_repeat = repeat;
-					best_bw = cur_bw;
-					if (cur_bw <= td_size || cur_bw < (HS_BW_BOUND >> 1)) {
-						break_out = 1;
-						break;
-					}
-				}
-			}
-		}
-		pr_debug("final best idx %d, best repeat %d\n", best_bw_idx, best_bw_repeat);
-		if (best_bw_idx == -1)
-			return SCH_FAIL;
-
-		bOffset = best_bw_idx;
-		bCsCount = 0;
-		bRepeat = best_bw_repeat;
-		if (bRepeat == 0) {
-			bw_cost = (burst + 1) * (mult + 1) * maxp;
-			bPkts = (burst + 1) * (mult + 1);
-		} else {
-			bw_cost = (burst + 1) * maxp;
-			bPkts = (burst + 1);
-		}
-		if (add_sch_ep
-		    (dev_speed, is_in, isTT, ep_type, maxp, interval, burst, mult, bOffset,
-		     bRepeat, bPkts, bCsCount, bBm, bw_cost, ep, sch_ep) == SCH_FAIL) {
-			return SCH_FAIL;
-		}
-		ret = SCH_SUCCESS;
-	} else {
-		bPkts = 1;
-		ret = SCH_SUCCESS;
+	for (i = 0; i < mtk->num_phys; i++) {
+		ret = phy_init(mtk->phys[i]);
+		if (ret)
+			goto exit_phy;
 	}
-	if (ret == SCH_SUCCESS) {
-		temp_ep_ctx = (struct mtk_xhci_ep_ctx *)ep_ctx;
-		temp_ep_ctx->reserved[0] |= (BPKTS(bPkts) | BCSCOUNT(bCsCount) | BBM(bBm));
-		temp_ep_ctx->reserved[1] |= (BOFFSET(bOffset) | BREPEAT(bRepeat));
-		pr_debug("[DBG] BPKTS: %x, BCSCOUNT: %x, BBM: %x\n", (unsigned int)bPkts,
-			 (unsigned int)bCsCount, (unsigned int)bBm);
-		pr_debug("[DBG] BOFFSET: %x, BREPEAT: %x\n", (unsigned int)bOffset,
-			 (unsigned int)bRepeat);
-		return SCH_SUCCESS;
-	} else {
-		return SCH_FAIL;
-	}
+	return 0;
+
+exit_phy:
+	for (; i > 0; i--)
+		phy_exit(mtk->phys[i - 1]);
+
+	return ret;
 }
 
-void mtk_xhci_vbus_on(struct platform_device *pdev)
+static int xhci_mtk_phy_exit(struct xhci_hcd_mtk *mtk)
 {
-	struct pinctrl *pinctrl;
-	struct pinctrl_state *pinctrl_drvvbus_high;
+	int i;
 
-	pinctrl = devm_pinctrl_get(&pdev->dev);
+	for (i = 0; i < mtk->num_phys; i++)
+		phy_exit(mtk->phys[i]);
 
-	if (IS_ERR(pinctrl)) {
-		dev_err(&pdev->dev, "Cannot find usb pinctrl!\n");
-		return;
-	}
-
-	pinctrl_drvvbus_high = pinctrl_lookup_state(pinctrl, "drvvbus_high");
-
-	if (IS_ERR(pinctrl_drvvbus_high)) {
-		dev_err(&pdev->dev, "Cannot find usb pinctrl drvvbus_high\n");
-		return;
-	}
-	pinctrl_select_state(pinctrl, pinctrl_drvvbus_high);
+	return 0;
 }
 
-void mtk_xhci_vbus_off(struct platform_device *pdev)
+static int xhci_mtk_phy_power_on(struct xhci_hcd_mtk *mtk)
 {
-	struct pinctrl *pinctrl;
-	struct pinctrl_state *pinctrl_drvvbus_low;
+	int i;
+	int ret;
 
-	pinctrl = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(pinctrl)) {
-		dev_err(&pdev->dev, "Cannot find usb pinctrl!\n");
-		return;
+	for (i = 0; i < mtk->num_phys; i++) {
+		ret = phy_power_on(mtk->phys[i]);
+		if (ret)
+			goto power_off_phy;
 	}
+	return 0;
 
-	pinctrl_drvvbus_low = pinctrl_lookup_state(pinctrl, "drvvbus_low");
+power_off_phy:
+	for (; i > 0; i--)
+		phy_power_off(mtk->phys[i - 1]);
 
-	if (IS_ERR(pinctrl_drvvbus_low)) {
-		dev_err(&pdev->dev, "Cannot find usb pinctrl drvvbus_low\n");
-		return;
-	}
-	pinctrl_select_state(pinctrl, pinctrl_drvvbus_low);
+	return ret;
 }
 
-MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_AUTHOR("Arvin Wang <arvin.wang@mediatek.com>");
-MODULE_AUTHOR("Macpaul Lin <macpaul.lin@mediatek.com>");
-MODULE_LICENSE("GPL");
+static void xhci_mtk_phy_power_off(struct xhci_hcd_mtk *mtk)
+{
+	unsigned int i;
+
+	for (i = 0; i < mtk->num_phys; i++)
+		phy_power_off(mtk->phys[i]);
+}
+
+static int xhci_mtk_ldos_enable(struct xhci_hcd_mtk *mtk)
+{
+	int ret;
+
+	ret = regulator_enable(mtk->vbus);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable vbus\n");
+		return ret;
+	}
+
+	ret = regulator_enable(mtk->vusb33);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable vusb33\n");
+		regulator_disable(mtk->vbus);
+		return ret;
+	}
+	return 0;
+}
+
+static void xhci_mtk_ldos_disable(struct xhci_hcd_mtk *mtk)
+{
+	regulator_disable(mtk->vbus);
+	regulator_disable(mtk->vusb33);
+}
+
+static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
+{
+	struct usb_hcd *hcd = xhci_to_hcd(xhci);
+	struct xhci_hcd_mtk *mtk = hcd_to_mtk(hcd);
+
+	/*
+	 * As of now platform drivers don't provide MSI support so we ensure
+	 * here that the generic code does not try to make a pci_dev from our
+	 * dev struct in order to setup MSI
+	 */
+	xhci->quirks |= XHCI_PLAT;
+	xhci->quirks |= XHCI_MTK_HOST;
+	/*
+	 * MTK host controller gives a spurious successful event after a
+	 * short transfer. Ignore it.
+	 */
+	xhci->quirks |= XHCI_SPURIOUS_SUCCESS;
+	if (mtk->lpm_support)
+		xhci->quirks |= XHCI_LPM_SUPPORT;
+}
+
+/* called during probe() after chip reset completes */
+static int xhci_mtk_setup(struct usb_hcd *hcd)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	struct xhci_hcd_mtk *mtk = hcd_to_mtk(hcd);
+	int ret;
+
+	if (usb_hcd_is_primary_hcd(hcd)) {
+		ret = xhci_mtk_ssusb_config(mtk);
+		if (ret)
+			return ret;
+	}
+
+	ret = xhci_gen_setup(hcd, xhci_mtk_quirks);
+	if (ret)
+		return ret;
+
+	if (usb_hcd_is_primary_hcd(hcd)) {
+		mtk->num_u3_ports = xhci->num_usb3_ports;
+		mtk->num_u2_ports = xhci->num_usb2_ports;
+		ret = xhci_mtk_sch_init(mtk);
+		if (ret)
+			return ret;
+	}
+
+	/* set runtime pm available */
+	pm_runtime_put_noidle(mtk->dev);
+	return ret;
+}
+
+static int xhci_mtk_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct device_node *node = dev->of_node;
+	struct xhci_hcd_mtk *mtk;
+	const struct hc_driver *driver;
+	struct xhci_hcd *xhci;
+	struct resource *res;
+	struct usb_hcd *hcd;
+	struct phy *phy;
+	int phy_num;
+	int ret = -ENODEV;
+	int irq;
+
+	if (usb_disabled())
+		return -ENODEV;
+
+	driver = &xhci_mtk_hc_driver;
+	mtk = devm_kzalloc(dev, sizeof(*mtk), GFP_KERNEL);
+	if (!mtk)
+		return -ENOMEM;
+
+	mtk->dev = dev;
+	mtk->vbus = devm_regulator_get(dev, "vbus");
+	if (IS_ERR(mtk->vbus)) {
+		dev_err(dev, "fail to get vbus\n");
+		return PTR_ERR(mtk->vbus);
+	}
+
+	mtk->vusb33 = devm_regulator_get(dev, "vusb33");
+	if (IS_ERR(mtk->vusb33)) {
+		dev_err(dev, "fail to get vusb33\n");
+		return PTR_ERR(mtk->vusb33);
+	}
+
+	mtk->sys_clk = devm_clk_get(dev, "sys_ck");
+	if (IS_ERR(mtk->sys_clk)) {
+		dev_err(dev, "fail to get sys_ck\n");
+		return PTR_ERR(mtk->sys_clk);
+	}
+
+	/*
+	 * reference clock is usually a "fixed-clock", make it optional
+	 * for backward compatibility and ignore the error if it does
+	 * not exist.
+	 */
+	mtk->ref_clk = devm_clk_get(dev, "ref_ck");
+	if (IS_ERR(mtk->ref_clk)) {
+		if (PTR_ERR(mtk->ref_clk) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
+		mtk->ref_clk = NULL;
+	}
+
+	mtk->lpm_support = of_property_read_bool(node, "usb3-lpm-capable");
+
+	ret = usb_wakeup_of_property_parse(mtk, node);
+	if (ret)
+		return ret;
+
+	mtk->num_phys = of_count_phandle_with_args(node,
+			"phys", "#phy-cells");
+	if (mtk->num_phys > 0) {
+		mtk->phys = devm_kcalloc(dev, mtk->num_phys,
+					sizeof(*mtk->phys), GFP_KERNEL);
+		if (!mtk->phys)
+			return -ENOMEM;
+	} else {
+		mtk->num_phys = 0;
+	}
+	pm_runtime_enable(dev);
+	pm_runtime_get_noresume(dev);
+	device_enable_async_suspend(dev);
+
+	ret = xhci_mtk_ldos_enable(mtk);
+	if (ret)
+		goto disable_pm;
+
+	ret = xhci_mtk_clks_enable(mtk);
+	if (ret)
+		goto disable_ldos;
+
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		ret = irq;
+		goto disable_clk;
+	}
+
+	/* Initialize dma_mask and coherent_dma_mask to 32-bits */
+	ret = dma_set_coherent_mask(dev, DMA_BIT_MASK(32));
+	if (ret)
+		goto disable_clk;
+
+	if (!dev->dma_mask)
+		dev->dma_mask = &dev->coherent_dma_mask;
+	else
+		dma_set_mask(dev, DMA_BIT_MASK(32));
+
+	hcd = usb_create_hcd(driver, dev, dev_name(dev));
+	if (!hcd) {
+		ret = -ENOMEM;
+		goto disable_clk;
+	}
+
+	/*
+	 * USB 2.0 roothub is stored in the platform_device.
+	 * Swap it with mtk HCD.
+	 */
+	mtk->hcd = platform_get_drvdata(pdev);
+	platform_set_drvdata(pdev, mtk);
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mac");
+	hcd->regs = devm_ioremap_resource(dev, res);
+	if (IS_ERR(hcd->regs)) {
+		ret = PTR_ERR(hcd->regs);
+		goto put_usb2_hcd;
+	}
+	hcd->rsrc_start = res->start;
+	hcd->rsrc_len = resource_size(res);
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ippc");
+	if (res) {	/* ippc register is optional */
+		mtk->ippc_regs = devm_ioremap_resource(dev, res);
+		if (IS_ERR(mtk->ippc_regs)) {
+			ret = PTR_ERR(mtk->ippc_regs);
+			goto put_usb2_hcd;
+		}
+		mtk->has_ippc = true;
+	} else {
+		mtk->has_ippc = false;
+	}
+
+	for (phy_num = 0; phy_num < mtk->num_phys; phy_num++) {
+		phy = devm_of_phy_get_by_index(dev, node, phy_num);
+		if (IS_ERR(phy)) {
+			ret = PTR_ERR(phy);
+			goto put_usb2_hcd;
+		}
+		mtk->phys[phy_num] = phy;
+	}
+
+	ret = xhci_mtk_phy_init(mtk);
+	if (ret)
+		goto put_usb2_hcd;
+
+	ret = xhci_mtk_phy_power_on(mtk);
+	if (ret)
+		goto exit_phys;
+
+	device_init_wakeup(dev, true);
+
+	xhci = hcd_to_xhci(hcd);
+	xhci->main_hcd = hcd;
+	xhci->shared_hcd = usb_create_shared_hcd(driver, dev,
+			dev_name(dev), hcd);
+	if (!xhci->shared_hcd) {
+		ret = -ENOMEM;
+		goto power_off_phys;
+	}
+
+	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
+	if (ret)
+		goto put_usb3_hcd;
+
+	if (HCC_MAX_PSA(xhci->hcc_params) >= 4)
+		xhci->shared_hcd->can_do_streams = 1;
+
+	ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
+	if (ret)
+		goto dealloc_usb2_hcd;
+
+	xhci_mtk_dbg_init(mtk);
+
+#if IS_ENABLED(CONFIG_USB_XHCI_MTK_SUSPEND)
+	device_set_wakeup_enable(&hcd->self.root_hub->dev, 1);
+	device_set_wakeup_enable(&xhci->shared_hcd->self.root_hub->dev, 1);
+#endif
+	mtk_xhci_wakelock_lock(mtk);
+	return 0;
+
+dealloc_usb2_hcd:
+	usb_remove_hcd(hcd);
+
+put_usb3_hcd:
+	xhci_mtk_sch_exit(mtk);
+	usb_put_hcd(xhci->shared_hcd);
+
+power_off_phys:
+	xhci_mtk_phy_power_off(mtk);
+	device_init_wakeup(dev, false);
+
+exit_phys:
+	xhci_mtk_phy_exit(mtk);
+
+put_usb2_hcd:
+	usb_put_hcd(hcd);
+
+disable_clk:
+	xhci_mtk_clks_disable(mtk);
+
+disable_ldos:
+	xhci_mtk_ldos_disable(mtk);
+
+disable_pm:
+	pm_runtime_put_noidle(dev);
+	pm_runtime_disable(dev);
+	return ret;
+}
+
+static int xhci_mtk_remove(struct platform_device *dev)
+{
+	struct xhci_hcd_mtk *mtk = platform_get_drvdata(dev);
+	struct usb_hcd	*hcd = mtk->hcd;
+	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
+	struct usb_hcd  *shared_hcd = xhci->shared_hcd;
+
+	xhci->xhc_state |= XHCI_STATE_REMOVING;
+
+	usb_remove_hcd(shared_hcd);
+	xhci->shared_hcd = NULL;
+	xhci_mtk_phy_power_off(mtk);
+	xhci_mtk_phy_exit(mtk);
+	device_init_wakeup(&dev->dev, false);
+
+	mtk_xhci_wakelock_unlock(mtk);
+	xhci_mtk_dbg_exit(mtk);
+	usb_remove_hcd(hcd);
+	usb_put_hcd(shared_hcd);
+	usb_put_hcd(hcd);
+	xhci_mtk_sch_exit(mtk);
+	xhci_mtk_clks_disable(mtk);
+	xhci_mtk_ldos_disable(mtk);
+	pm_runtime_put_noidle(&dev->dev);
+	pm_runtime_disable(&dev->dev);
+
+	return 0;
+}
+
+static int __maybe_unused xhci_mtk_runtime_suspend(struct device *dev)
+{
+	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
+	struct xhci_hcd *xhci = hcd_to_xhci(mtk->hcd);
+
+	xhci_info(xhci, "%s\n", __func__);
+	xhci_mtk_host_disable(mtk);
+#if IS_ENABLED(CONFIG_MTK_UAC_POWER_SAVING)
+	xhci_mtk_set_sleep(true);
+#endif
+	return 0;
+}
+
+static int __maybe_unused xhci_mtk_runtime_resume(struct device *dev)
+{
+	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
+	struct xhci_hcd *xhci = hcd_to_xhci(mtk->hcd);
+
+	xhci_info(xhci, "%s\n", __func__);
+	xhci_mtk_host_enable(mtk);
+#if IS_ENABLED(CONFIG_MTK_UAC_POWER_SAVING)
+	xhci_mtk_set_sleep(false);
+#endif
+	return 0;
+}
+
+/*
+ * if ip sleep fails, and all clocks are disabled, access register will hang
+ * AHB bus, so stop polling roothubs to avoid regs access on bus suspend.
+ * and no need to check whether ip sleep failed or not; this will cause SPM
+ * to wake up system immediately after system suspend complete if ip sleep
+ * fails, it is what we wanted.
+ */
+static int __maybe_unused xhci_mtk_suspend(struct device *dev)
+{
+	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
+	struct usb_hcd *hcd = mtk->hcd;
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+
+	xhci_info(xhci, "%s\n", __func__);
+	xhci_dbg(xhci, "%s: stop port polling\n", __func__);
+	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
+	del_timer_sync(&hcd->rh_timer);
+	clear_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+	del_timer_sync(&xhci->shared_hcd->rh_timer);
+
+	xhci_mtk_host_disable(mtk);
+	xhci_mtk_phy_power_off(mtk);
+	xhci_mtk_clks_disable(mtk);
+	usb_wakeup_enable(mtk);
+	return 0;
+}
+
+static int __maybe_unused xhci_mtk_resume(struct device *dev)
+{
+	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
+	struct usb_hcd *hcd = mtk->hcd;
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+
+	xhci_info(xhci, "%s\n", __func__);
+	usb_wakeup_disable(mtk);
+	xhci_mtk_clks_enable(mtk);
+	xhci_mtk_phy_power_on(mtk);
+	xhci_mtk_host_enable(mtk);
+
+	xhci_dbg(xhci, "%s: restart port polling\n", __func__);
+	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+	usb_hcd_poll_rh_status(xhci->shared_hcd);
+	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
+	usb_hcd_poll_rh_status(hcd);
+	return 0;
+}
+
+static const struct dev_pm_ops xhci_mtk_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(xhci_mtk_suspend, xhci_mtk_resume)
+};
+#define DEV_PM_OPS IS_ENABLED(CONFIG_PM) ? &xhci_mtk_pm_ops : NULL
+
+static const struct dev_pm_ops xhci_mtk_phone_pm_ops = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(xhci_mtk_suspend, xhci_mtk_resume)
+	SET_RUNTIME_PM_OPS(xhci_mtk_runtime_suspend,
+			xhci_mtk_runtime_resume, NULL)
+};
+#define DEV_PHONE_PM_OPS (IS_ENABLED(CONFIG_PM) ? &xhci_mtk_phone_pm_ops : NULL)
+
+
+#ifdef CONFIG_OF
+static const struct of_device_id mtk_xhci_of_match[] = {
+	{ .compatible = "mediatek,mt8173-xhci"},
+	{ .compatible = "mediatek,mtk-xhci"},
+	{ },
+};
+MODULE_DEVICE_TABLE(of, mtk_xhci_of_match);
+
+static const struct of_device_id mtk_xhci_phone_of_match[] = {
+	{ .compatible = "mediatek,mt67xx-xhci"},
+	{ },
+};
+MODULE_DEVICE_TABLE(of, mtk_xhci_phone_of_match);
+
+#endif
+
+static struct platform_driver mtk_xhci_driver = {
+	.probe	= xhci_mtk_probe,
+	.remove	= xhci_mtk_remove,
+	.driver	= {
+		.name = "xhci-mtk",
+		.pm = DEV_PM_OPS,
+		.of_match_table = of_match_ptr(mtk_xhci_of_match),
+	},
+};
+
+static struct platform_driver mtk_xhci_phone_driver = {
+	.probe	= xhci_mtk_probe,
+	.remove	= xhci_mtk_remove,
+	.driver	= {
+		.name = "xhci-mtk-phone",
+		.pm = DEV_PHONE_PM_OPS,
+		.of_match_table = of_match_ptr(mtk_xhci_phone_of_match),
+	},
+};
+
+MODULE_ALIAS("platform:xhci-mtk");
+
+int xhci_mtk_register_plat(void)
+{
+	return platform_driver_register(&mtk_xhci_phone_driver);
+}
+
+void xhci_mtk_unregister_plat(void)
+{
+	platform_driver_unregister(&mtk_xhci_phone_driver);
+}
+
+static int __init xhci_mtk_init(void)
+{
+	xhci_init_driver(&xhci_mtk_hc_driver, &xhci_mtk_overrides);
+	return platform_driver_register(&mtk_xhci_driver);
+}
+module_init(xhci_mtk_init);
+
+static void __exit xhci_mtk_exit(void)
+{
+	platform_driver_unregister(&mtk_xhci_driver);
+}
+module_exit(xhci_mtk_exit);
+
+MODULE_AUTHOR("Chunfeng Yun <chunfeng.yun@mediatek.com>");
+MODULE_DESCRIPTION("MediaTek xHCI Host Controller Driver");
+MODULE_LICENSE("GPL v2");

@@ -9,10 +9,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -34,7 +30,6 @@
 static inline void byte0_out(unsigned char data);
 static inline void byte1_out(unsigned char data);
 static inline void xl_cclk_b(int32_t i);
-
 
 /* Assert and Deassert CCLK */
 void xl_shift_cclk(int count)
@@ -79,15 +74,6 @@ void xl_shift_bytes_out(enum wbus bus_byte, unsigned char *pdata)
 /*
  * generic bit swap for xilinx SYSTEMMAP FPGA programming
  */
-static inline unsigned char bitswap(unsigned char s)
-{
-	unsigned char d;
-
-	d = (((s&0x80)>>7) | ((s&0x40)>>5) | ((s&0x20)>>3) | ((s&0x10)>>1) |
-		((s&0x08)<<1) | ((s&0x04)<<3) | ((s&0x02)<<5) | ((s&0x01)<<7));
-	return d;
-}
-
 void xl_program_b(int32_t i)
 {
 }

@@ -20,152 +20,11 @@
 
 struct dir_context;
 
-/*
- * Directory offset/block conversion functions.
- *
- * DB blocks here are logical directory block numbers, not filesystem blocks.
- */
-
-/*
- * Convert dataptr to byte in file space
- */
-static inline xfs_dir2_off_t
-xfs_dir2_dataptr_to_byte(xfs_dir2_dataptr_t dp)
-{
-	return (xfs_dir2_off_t)dp << XFS_DIR2_DATA_ALIGN_LOG;
-}
-
-/*
- * Convert byte in file space to dataptr.  It had better be aligned.
- */
-static inline xfs_dir2_dataptr_t
-xfs_dir2_byte_to_dataptr(xfs_dir2_off_t by)
-{
-	return (xfs_dir2_dataptr_t)(by >> XFS_DIR2_DATA_ALIGN_LOG);
-}
-
-/*
- * Convert byte in space to (DB) block
- */
-static inline xfs_dir2_db_t
-xfs_dir2_byte_to_db(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
-{
-	return (xfs_dir2_db_t)(by >> geo->blklog);
-}
-
-/*
- * Convert dataptr to a block number
- */
-static inline xfs_dir2_db_t
-xfs_dir2_dataptr_to_db(struct xfs_da_geometry *geo, xfs_dir2_dataptr_t dp)
-{
-	return xfs_dir2_byte_to_db(geo, xfs_dir2_dataptr_to_byte(dp));
-}
-
-/*
- * Convert byte in space to offset in a block
- */
-static inline xfs_dir2_data_aoff_t
-xfs_dir2_byte_to_off(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
-{
-	return (xfs_dir2_data_aoff_t)(by & (geo->blksize - 1));
-}
-
-/*
- * Convert dataptr to a byte offset in a block
- */
-static inline xfs_dir2_data_aoff_t
-xfs_dir2_dataptr_to_off(struct xfs_da_geometry *geo, xfs_dir2_dataptr_t dp)
-{
-	return xfs_dir2_byte_to_off(geo, xfs_dir2_dataptr_to_byte(dp));
-}
-
-/*
- * Convert block and offset to byte in space
- */
-static inline xfs_dir2_off_t
-xfs_dir2_db_off_to_byte(struct xfs_da_geometry *geo, xfs_dir2_db_t db,
-			xfs_dir2_data_aoff_t o)
-{
-	return ((xfs_dir2_off_t)db << geo->blklog) + o;
-}
-
-/*
- * Convert block (DB) to block (dablk)
- */
-static inline xfs_dablk_t
-xfs_dir2_db_to_da(struct xfs_da_geometry *geo, xfs_dir2_db_t db)
-{
-	return (xfs_dablk_t)(db << (geo->blklog - geo->fsblog));
-}
-
-/*
- * Convert byte in space to (DA) block
- */
-static inline xfs_dablk_t
-xfs_dir2_byte_to_da(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
-{
-	return xfs_dir2_db_to_da(geo, xfs_dir2_byte_to_db(geo, by));
-}
-
-/*
- * Convert block and offset to dataptr
- */
-static inline xfs_dir2_dataptr_t
-xfs_dir2_db_off_to_dataptr(struct xfs_da_geometry *geo, xfs_dir2_db_t db,
-			   xfs_dir2_data_aoff_t o)
-{
-	return xfs_dir2_byte_to_dataptr(xfs_dir2_db_off_to_byte(geo, db, o));
-}
-
-/*
- * Convert block (dablk) to block (DB)
- */
-static inline xfs_dir2_db_t
-xfs_dir2_da_to_db(struct xfs_da_geometry *geo, xfs_dablk_t da)
-{
-	return (xfs_dir2_db_t)(da >> (geo->blklog - geo->fsblog));
-}
-
-/*
- * Convert block (dablk) to byte offset in space
- */
-static inline xfs_dir2_off_t
-xfs_dir2_da_to_byte(struct xfs_da_geometry *geo, xfs_dablk_t da)
-{
-	return xfs_dir2_db_off_to_byte(geo, xfs_dir2_da_to_db(geo, da), 0);
-}
-
-/*
- * Directory tail pointer accessor functions. Based on block geometry.
- */
-static inline struct xfs_dir2_block_tail *
-xfs_dir2_block_tail_p(struct xfs_da_geometry *geo, struct xfs_dir2_data_hdr *hdr)
-{
-	return ((struct xfs_dir2_block_tail *)
-		((char *)hdr + geo->blksize)) - 1;
-}
-
-static inline struct xfs_dir2_leaf_tail *
-xfs_dir2_leaf_tail_p(struct xfs_da_geometry *geo, struct xfs_dir2_leaf *lp)
-{
-	return (struct xfs_dir2_leaf_tail *)
-		((char *)lp + geo->blksize -
-		  sizeof(struct xfs_dir2_leaf_tail));
-}
-
 /* xfs_dir2.c */
-extern int xfs_dir_ino_validate(struct xfs_mount *mp, xfs_ino_t ino);
 extern int xfs_dir2_grow_inode(struct xfs_da_args *args, int space,
 				xfs_dir2_db_t *dbp);
 extern int xfs_dir_cilookup_result(struct xfs_da_args *args,
 				const unsigned char *name, int len);
-
-#define S_SHIFT 12
-extern const unsigned char xfs_mode_to_ftype[];
-
-extern unsigned char xfs_dir3_get_dtype(struct xfs_mount *mp,
-					__uint8_t filetype);
 
 
 /* xfs_dir2_block.c */
@@ -199,6 +58,8 @@ extern int xfs_dir3_data_init(struct xfs_da_args *args, xfs_dir2_db_t blkno,
 		struct xfs_buf **bpp);
 
 /* xfs_dir2_leaf.c */
+extern int xfs_dir3_leaf_read(struct xfs_trans *tp, struct xfs_inode *dp,
+		xfs_dablk_t fbno, xfs_daddr_t mappedbno, struct xfs_buf **bpp);
 extern int xfs_dir3_leafn_read(struct xfs_trans *tp, struct xfs_inode *dp,
 		xfs_dablk_t fbno, xfs_daddr_t mappedbno, struct xfs_buf **bpp);
 extern int xfs_dir2_block_to_leaf(struct xfs_da_args *args,
@@ -210,7 +71,7 @@ extern void xfs_dir3_leaf_compact_x1(struct xfs_dir3_icleaf_hdr *leafhdr,
 		struct xfs_dir2_leaf_entry *ents, int *indexp,
 		int *lowstalep, int *highstalep, int *lowlogp, int *highlogp);
 extern int xfs_dir3_leaf_get_buf(struct xfs_da_args *args, xfs_dir2_db_t bno,
-		struct xfs_buf **bpp, __uint16_t magic);
+		struct xfs_buf **bpp, uint16_t magic);
 extern void xfs_dir3_leaf_log_ents(struct xfs_da_args *args,
 		struct xfs_buf *bp, int first, int last);
 extern void xfs_dir3_leaf_log_header(struct xfs_da_args *args,
@@ -234,7 +95,7 @@ extern bool xfs_dir3_leaf_check_int(struct xfs_mount *mp, struct xfs_inode *dp,
 /* xfs_dir2_node.c */
 extern int xfs_dir2_leaf_to_node(struct xfs_da_args *args,
 		struct xfs_buf *lbp);
-extern xfs_dahash_t xfs_dir2_leafn_lasthash(struct xfs_inode *dp,
+extern xfs_dahash_t xfs_dir2_leaf_lasthash(struct xfs_inode *dp,
 		struct xfs_buf *bp, int *count);
 extern int xfs_dir2_leafn_lookup_int(struct xfs_buf *bp,
 		struct xfs_da_args *args, int *indexp,
@@ -266,9 +127,10 @@ extern int xfs_dir2_sf_create(struct xfs_da_args *args, xfs_ino_t pino);
 extern int xfs_dir2_sf_lookup(struct xfs_da_args *args);
 extern int xfs_dir2_sf_removename(struct xfs_da_args *args);
 extern int xfs_dir2_sf_replace(struct xfs_da_args *args);
+extern int xfs_dir2_sf_verify(struct xfs_inode *ip);
 
 /* xfs_dir2_readdir.c */
-extern int xfs_readdir(struct xfs_inode *dp, struct dir_context *ctx,
-		       size_t bufsize);
+extern int xfs_readdir(struct xfs_trans *tp, struct xfs_inode *dp,
+		       struct dir_context *ctx, size_t bufsize);
 
 #endif /* __XFS_DIR2_PRIV_H__ */

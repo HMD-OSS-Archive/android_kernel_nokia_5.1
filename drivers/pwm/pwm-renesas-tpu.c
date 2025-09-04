@@ -301,7 +301,7 @@ static int tpu_pwm_config(struct pwm_chip *chip, struct pwm_device *_pwm,
 	pwm->duty = duty;
 
 	/* If the channel is disabled we're done. */
-	if (!test_bit(PWMF_ENABLED, &_pwm->flags))
+	if (!pwm_is_enabled(_pwm))
 		return 0;
 
 	if (duty_only && pwm->timer_on) {
@@ -455,7 +455,6 @@ static const struct of_device_id tpu_of_table[] = {
 	{ .compatible = "renesas,tpu-r8a73a4", },
 	{ .compatible = "renesas,tpu-r8a7740", },
 	{ .compatible = "renesas,tpu-r8a7790", },
-	{ .compatible = "renesas,tpu-sh7372", },
 	{ .compatible = "renesas,tpu", },
 	{ },
 };
@@ -468,7 +467,6 @@ static struct platform_driver tpu_driver = {
 	.remove		= tpu_remove,
 	.driver		= {
 		.name	= "renesas-tpu-pwm",
-		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(tpu_of_table),
 	}
 };

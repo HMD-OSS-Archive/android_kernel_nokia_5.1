@@ -166,7 +166,7 @@ static int usX2Y_urb_play_prepare(struct snd_usX2Y_substream *subs,
 			/* set the buffer pointer */
 			urb->transfer_buffer = runtime->dma_area + subs->hwptr * usX2Y->stride;
 			if ((subs->hwptr += count) >= runtime->buffer_size)
-			subs->hwptr -= runtime->buffer_size;			
+				subs->hwptr -= runtime->buffer_size;
 		}
 	else
 		urb->transfer_buffer = subs->tmpbuf;
@@ -272,13 +272,8 @@ static void usX2Y_clients_stop(struct usX2Ydev *usX2Y)
 	for (s = 0; s < 4; s++) {
 		struct snd_usX2Y_substream *subs = usX2Y->subs[s];
 		if (subs) {
-			if (atomic_read(&subs->state) >= state_PRERUNNING) {
-				unsigned long flags;
-
-				snd_pcm_stream_lock_irqsave(subs->pcm_substream, flags);
-				snd_pcm_stop(subs->pcm_substream, SNDRV_PCM_STATE_XRUN);
-				snd_pcm_stream_unlock_irqrestore(subs->pcm_substream, flags);
-			}
+			if (atomic_read(&subs->state) >= state_PRERUNNING)
+				snd_pcm_stop_xrun(subs->pcm_substream);
 			for (u = 0; u < NRURBS; u++) {
 				struct urb *urb = subs->urb[u];
 				if (NULL != urb)
@@ -424,10 +419,8 @@ static int usX2Y_urbs_allocate(struct snd_usX2Y_substream *subs)
 
 	if (is_playback && NULL == subs->tmpbuf) {	/* allocate a temporary buffer for playback */
 		subs->tmpbuf = kcalloc(nr_of_packs(), subs->maxpacksize, GFP_KERNEL);
-		if (NULL == subs->tmpbuf) {
-			snd_printk(KERN_ERR "cannot malloc tmpbuf\n");
+		if (!subs->tmpbuf)
 			return -ENOMEM;
-		}
 	}
 	/* allocate and initialize data urbs */
 	for (i = 0; i < NRURBS; i++) {
@@ -912,7 +905,7 @@ static int snd_usX2Y_pcm_close(struct snd_pcm_substream *substream)
 }
 
 
-static struct snd_pcm_ops snd_usX2Y_pcm_ops = 
+static const struct snd_pcm_ops snd_usX2Y_pcm_ops =
 {
 	.open =		snd_usX2Y_pcm_open,
 	.close =	snd_usX2Y_pcm_close,
@@ -954,10 +947,9 @@ static int usX2Y_audio_stream_new(struct snd_card *card, int playback_endpoint, 
 	for (i = playback_endpoint ? SNDRV_PCM_STREAM_PLAYBACK : SNDRV_PCM_STREAM_CAPTURE;
 	     i <= SNDRV_PCM_STREAM_CAPTURE; ++i) {
 		usX2Y_substream[i] = kzalloc(sizeof(struct snd_usX2Y_substream), GFP_KERNEL);
-		if (NULL == usX2Y_substream[i]) {
-			snd_printk(KERN_ERR "cannot malloc\n");
+		if (!usX2Y_substream[i])
 			return -ENOMEM;
-		}
+
 		usX2Y_substream[i]->usX2Y = usX2Y(card);
 	}
 

@@ -42,7 +42,7 @@ extern struct _ddebug __stop___verbose[];
 
 struct ddebug_table {
 	struct list_head link;
-	char *mod_name;
+	const char *mod_name;
 	unsigned int num_ddebugs;
 	struct _ddebug *ddebugs;
 };
@@ -188,6 +188,13 @@ static int ddebug_change(const struct ddebug_query *query,
 			newflags = (dp->flags & mask) | flags;
 			if (newflags == dp->flags)
 				continue;
+#ifdef HAVE_JUMP_LABEL
+			if (dp->flags & _DPRINTK_FLAGS_PRINT) {
+				if (!(flags & _DPRINTK_FLAGS_PRINT))
+					static_branch_disable(&dp->key.dd_key_true);
+			} else if (flags & _DPRINTK_FLAGS_PRINT)
+				static_branch_enable(&dp->key.dd_key_true);
+#endif
 			dp->flags = newflags;
 			vpr_info("changed %s:%d [%s]%s =%s\n",
 				 trim_prefix(dp->filename), dp->lineno,
@@ -352,6 +359,10 @@ static int ddebug_parse_query(char *words[], int nwords,
 				/* range <first>-<last> */
 				if (parse_lineno(last, &query->last_lineno) < 0)
 					return -EINVAL;
+
+				/* special case for last lineno not specified */
+				if (query->last_lineno == 0)
+					query->last_lineno = UINT_MAX;
 
 				if (query->last_lineno < query->first_lineno) {
 					pr_err("last-line:%d < 1st-line:%d\n",
@@ -537,6 +548,146 @@ static char *dynamic_emit_prefix(const struct _ddebug *desc, char *buf)
 	return buf;
 }
 
+void __dynamic_pr_emerg(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_EMERG "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_emerg);
+
+void __dynamic_pr_alert(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_ALERT "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_alert);
+
+void __dynamic_pr_crit(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_CRIT "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_crit);
+
+void __dynamic_pr_err(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_ERR "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_err);
+
+void __dynamic_pr_warn(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_WARNING "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_warn);
+
+void __dynamic_pr_notice(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_NOTICE "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_notice);
+
+void __dynamic_pr_info(struct _ddebug *descriptor, const char *fmt, ...)
+{
+	va_list args;
+	struct va_format vaf;
+	char buf[PREFIX_SIZE];
+
+	BUG_ON(!descriptor);
+	BUG_ON(!fmt);
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_INFO "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL(__dynamic_pr_info);
+
 void __dynamic_pr_debug(struct _ddebug *descriptor, const char *fmt, ...)
 {
 	va_list args;
@@ -576,7 +727,7 @@ void __dynamic_dev_dbg(struct _ddebug *descriptor,
 	} else {
 		char buf[PREFIX_SIZE];
 
-		dev_printk_emit(7, dev, "%s%s %s: %pV",
+		dev_printk_emit(LOGLEVEL_DEBUG, dev, "%s%s %s: %pV",
 				dynamic_emit_prefix(descriptor, buf),
 				dev_driver_string(dev), dev_name(dev),
 				&vaf);
@@ -605,7 +756,7 @@ void __dynamic_netdev_dbg(struct _ddebug *descriptor,
 	if (dev && dev->dev.parent) {
 		char buf[PREFIX_SIZE];
 
-		dev_printk_emit(7, dev->dev.parent,
+		dev_printk_emit(LOGLEVEL_DEBUG, dev->dev.parent,
 				"%s%s %s %s%s: %pV",
 				dynamic_emit_prefix(descriptor, buf),
 				dev_driver_string(dev->dev.parent),
@@ -641,7 +792,7 @@ static __init int ddebug_setup_query(char *str)
 __setup("ddebug_query=", ddebug_setup_query);
 
 /*
- * File_ops->write method for <debugfs>/dynamic_debug/conrol.  Gathers the
+ * File_ops->write method for <debugfs>/dynamic_debug/control.  Gathers the
  * command text from userspace, parses and executes it.
  */
 #define USER_BUF_PAGE 4096
@@ -657,14 +808,9 @@ static ssize_t ddebug_proc_write(struct file *file, const char __user *ubuf,
 		pr_warn("expected <%d bytes into control\n", USER_BUF_PAGE);
 		return -E2BIG;
 	}
-	tmpbuf = kmalloc(len + 1, GFP_KERNEL);
-	if (!tmpbuf)
-		return -ENOMEM;
-	if (copy_from_user(tmpbuf, ubuf, len)) {
-		kfree(tmpbuf);
-		return -EFAULT;
-	}
-	tmpbuf[len] = '\0';
+	tmpbuf = memdup_user_nul(ubuf, len);
+	if (IS_ERR(tmpbuf))
+		return PTR_ERR(tmpbuf);
 	vpr_info("read %d bytes from userspace\n", (int)len);
 
 	ret = ddebug_exec_queries(tmpbuf, NULL);
@@ -841,12 +987,12 @@ int ddebug_add_module(struct _ddebug *tab, unsigned int n,
 			     const char *name)
 {
 	struct ddebug_table *dt;
-	char *new_name;
+	const char *new_name;
 
 	dt = kzalloc(sizeof(*dt), GFP_KERNEL);
 	if (dt == NULL)
 		return -ENOMEM;
-	new_name = kstrdup(name, GFP_KERNEL);
+	new_name = kstrdup_const(name, GFP_KERNEL);
 	if (new_name == NULL) {
 		kfree(dt);
 		return -ENOMEM;
@@ -887,7 +1033,7 @@ static int ddebug_dyndbg_param_cb(char *param, char *val,
 
 /* handle both dyndbg and $module.dyndbg params at boot */
 static int ddebug_dyndbg_boot_param_cb(char *param, char *val,
-				const char *unused)
+				const char *unused, void *arg)
 {
 	vpr_info("%s=\"%s\"\n", param, val);
 	return ddebug_dyndbg_param_cb(param, val, NULL, 0);
@@ -907,7 +1053,7 @@ int ddebug_dyndbg_module_param_cb(char *param, char *val, const char *module)
 static void ddebug_table_free(struct ddebug_table *dt)
 {
 	list_del_init(&dt->link);
-	kfree(dt->mod_name);
+	kfree_const(dt->mod_name);
 	kfree(dt);
 }
 
@@ -1028,7 +1174,7 @@ static int __init dynamic_debug_init(void)
 	 */
 	cmdline = kstrdup(saved_command_line, GFP_KERNEL);
 	parse_args("dyndbg params", cmdline, NULL,
-		   0, 0, 0, &ddebug_dyndbg_boot_param_cb);
+		   0, 0, 0, NULL, &ddebug_dyndbg_boot_param_cb);
 	kfree(cmdline);
 	return 0;
 

@@ -15,10 +15,6 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -62,6 +58,7 @@ struct xc5000_priv {
 	unsigned int mode;
 	u8  rf_mode;
 	u8  radio_input;
+	u16  output_amp;
 
 	int chip_id;
 	u16 pll_register_no;
@@ -568,38 +565,16 @@ static int xc_get_totalgain(struct xc5000_priv *priv, u16 *totalgain)
 	return xc5000_readreg(priv, XREG_TOTALGAIN, totalgain);
 }
 
-static u16 wait_for_lock(struct xc5000_priv *priv)
-{
-	u16 lock_state = 0;
-	int watch_dog_count = 40;
-
-	while ((lock_state == 0) && (watch_dog_count > 0)) {
-		xc_get_lock_status(priv, &lock_state);
-		if (lock_state != 1) {
-			msleep(5);
-			watch_dog_count--;
-		}
-	}
-	return lock_state;
-}
-
 #define XC_TUNE_ANALOG  0
 #define XC_TUNE_DIGITAL 1
 static int xc_tune_channel(struct xc5000_priv *priv, u32 freq_hz, int mode)
 {
-	int found = 0;
-
 	dprintk(1, "%s(%u)\n", __func__, freq_hz);
 
 	if (xc_set_rf_frequency(priv, freq_hz) != 0)
-		return 0;
+		return -EREMOTEIO;
 
-	if (mode == XC_TUNE_ANALOG) {
-		if (wait_for_lock(priv) == 1)
-			found = 1;
-	}
-
-	return found;
+	return 0;
 }
 
 static int xc_set_xtal(struct dvb_frontend *fe)
@@ -744,7 +719,9 @@ static int xc5000_tune_digital(struct dvb_frontend *fe)
 		return -EIO;
 	}
 
-	xc_write_reg(priv, XREG_OUTPUT_AMP, 0x8a);
+	dprintk(1, "%s() setting OUTPUT_AMP to 0x%x\n",
+		__func__, priv->output_amp);
+	xc_write_reg(priv, XREG_OUTPUT_AMP, priv->output_amp);
 
 	xc_tune_channel(priv, priv->freq_hz, XC_TUNE_DIGITAL);
 
@@ -789,6 +766,7 @@ static int xc5000_set_digital_params(struct dvb_frontend *fe)
 		if (!bw)
 			bw = 6000000;
 		/* fall to OFDM handling */
+		/* fall through */
 	case SYS_DMBTH:
 	case SYS_DVBT:
 	case SYS_DVBT2:
@@ -1145,7 +1123,7 @@ static int xc_load_fw_and_init_tuner(struct dvb_frontend *fe, int force)
 			pr_err("xc5000: Upload failed. rc %d\n", ret);
 			return ret;
 		}
-		dprintk(1, "firmware read %Zu bytes.\n", fw->size);
+		dprintk(1, "firmware read %zu bytes.\n", fw->size);
 
 		if (fw->size != desired_fw->size) {
 			pr_err("xc5000: Firmware file with incorrect size\n");
@@ -1185,8 +1163,7 @@ static int xc_load_fw_and_init_tuner(struct dvb_frontend *fe, int force)
 		/* Start the tuner self-calibration process */
 		ret = xc_initialize(priv);
 		if (ret) {
-			printk(KERN_ERR
-			       "xc5000: Can't request Self-callibration.");
+			printk(KERN_ERR "xc5000: Can't request self-calibration.");
 			continue;
 		}
 
@@ -1323,7 +1300,7 @@ static int xc5000_init(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int xc5000_release(struct dvb_frontend *fe)
+static void xc5000_release(struct dvb_frontend *fe)
 {
 	struct xc5000_priv *priv = fe->tuner_priv;
 
@@ -1333,16 +1310,16 @@ static int xc5000_release(struct dvb_frontend *fe)
 
 	if (priv) {
 		cancel_delayed_work(&priv->timer_sleep);
-		if (priv->firmware)
+		if (priv->firmware) {
 			release_firmware(priv->firmware);
+			priv->firmware = NULL;
+		}
 		hybrid_tuner_release_state(priv);
 	}
 
 	mutex_unlock(&xc5000_list_mutex);
 
 	fe->tuner_priv = NULL;
-
-	return 0;
 }
 
 static int xc5000_set_config(struct dvb_frontend *fe, void *priv_cfg)
@@ -1357,6 +1334,9 @@ static int xc5000_set_config(struct dvb_frontend *fe, void *priv_cfg)
 
 	if (p->radio_input)
 		priv->radio_input = p->radio_input;
+
+	if (p->output_amp)
+		priv->output_amp = p->output_amp;
 
 	return 0;
 }
@@ -1437,6 +1417,12 @@ struct dvb_frontend *xc5000_attach(struct dvb_frontend *fe,
 		/* use default chip id if none specified, set to 0 so
 		   it can be overridden if this is a hybrid driver */
 		priv->chip_id = (cfg->chip_id) ? cfg->chip_id : 0;
+
+	/* don't override output_amp if it's already been set
+	   unless explicitly specified */
+	if ((priv->output_amp == 0) || (cfg->output_amp))
+		/* use default output_amp value if none specified */
+		priv->output_amp = (cfg->output_amp) ? cfg->output_amp : 0x8a;
 
 	/* Check if firmware has been loaded. It is possible that another
 	   instance of the driver has loaded the firmware.

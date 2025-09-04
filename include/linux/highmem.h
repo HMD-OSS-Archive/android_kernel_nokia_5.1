@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_HIGHMEM_H
 #define _LINUX_HIGHMEM_H
 
@@ -65,6 +66,7 @@ static inline void kunmap(struct page *page)
 
 static inline void *kmap_atomic(struct page *page)
 {
+	preempt_disable();
 	pagefault_disable();
 	return page_address(page);
 }
@@ -73,10 +75,10 @@ static inline void *kmap_atomic(struct page *page)
 static inline void __kunmap_atomic(void *addr)
 {
 	pagefault_enable();
+	preempt_enable();
 }
 
 #define kmap_atomic_pfn(pfn)	kmap_atomic(pfn_to_page(pfn))
-#define kmap_atomic_to_page(ptr)	virt_to_page(ptr)
 
 #define kmap_flush_unused()	do {} while(0)
 #endif
@@ -168,8 +170,7 @@ __alloc_zeroed_user_highpage(gfp_t movableflags,
 #endif
 
 /**
- * alloc_zeroed_user_highpage_movable - Allocate a zeroed HIGHMEM page for
- *					a VMA that the caller knows can move
+ * alloc_zeroed_user_highpage_movable - Allocate a zeroed HIGHMEM page for a VMA that the caller knows can move
  * @vma: The VMA the page is to be allocated for
  * @vaddr: The virtual address the page will be inserted into
  *
@@ -178,16 +179,10 @@ __alloc_zeroed_user_highpage(gfp_t movableflags,
  */
 static inline struct page *
 alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
-				   unsigned long vaddr)
+					unsigned long vaddr)
 {
-	return __alloc_zeroed_user_highpage(__GFP_MOVABLE | __GFP_CMA, vma, vaddr);
-}
-
-static inline struct page *
-alloc_zeroed_user_highpage(gfp_t gfp, struct vm_area_struct *vma,
-			   unsigned long vaddr)
-{
-	return __alloc_zeroed_user_highpage(gfp, vma, vaddr);
+	return __alloc_zeroed_user_highpage(__GFP_MOVABLE | __GFP_CMA,
+			vma, vaddr);
 }
 
 static inline void clear_highpage(struct page *page)

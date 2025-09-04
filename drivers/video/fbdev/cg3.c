@@ -412,8 +412,8 @@ static int cg3_probe(struct platform_device *op)
 
 	dev_set_drvdata(&op->dev, info);
 
-	printk(KERN_INFO "%s: cg3 at %lx:%lx\n",
-	       dp->full_name, par->which_io, info->fix.smem_start);
+	printk(KERN_INFO "%pOF: cg3 at %lx:%lx\n",
+	       dp, par->which_io, info->fix.smem_start);
 
 	return 0;
 
@@ -463,7 +463,6 @@ MODULE_DEVICE_TABLE(of, cg3_match);
 static struct platform_driver cg3_driver = {
 	.driver = {
 		.name = "cg3",
-		.owner = THIS_MODULE,
 		.of_match_table = cg3_match,
 	},
 	.probe		= cg3_probe,

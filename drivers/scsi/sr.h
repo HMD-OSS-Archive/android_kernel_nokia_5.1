@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *      sr.h by David Giller
  *      CD-ROM disk driver header file
@@ -57,8 +58,7 @@ typedef struct scsi_cd {
 } Scsi_CD;
 
 #define sr_printk(prefix, cd, fmt, a...) \
-	sdev_printk(prefix, (cd)->device, "[%s] " fmt, \
-		    (cd)->cdi.name, ##a)
+	sdev_prefix_printk(prefix, (cd)->device, (cd)->cdi.name, fmt, ##a)
 
 int sr_do_ioctl(Scsi_CD *, struct packet_command *);
 

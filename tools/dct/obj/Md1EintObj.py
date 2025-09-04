@@ -15,6 +15,8 @@
 import ConfigParser
 import string
 import xml.dom.minidom
+from itertools import dropwhile
+import re
 
 from utility import util
 from utility.util import sorted_key
@@ -39,11 +41,19 @@ class Md1EintObj(ModuleObj):
                 self.__bSrcPinEnable = False
 
         if(self.__bSrcPinEnable):
-            for option in cp.options('SRC_PIN'):
-                value = cp.get('SRC_PIN', option)
-                value = value[1:]
-                temp = value.split('=')
-                self.__srcPin[temp[0]] = temp[1]
+            #for option in cp.options('SRC_PIN'):
+                #value = cp.get('SRC_PIN', option)
+                #value = value[1:]
+                #temp = value.split('=')
+                #self.__srcPin[temp[0]] = temp[1]
+
+            with open(ModuleObj.get_figPath()) as file:
+                src_pin_expr = r"^.+\s*::\s*(\w+)\s*=\s*(\w+)\s*$"
+                reg = re.compile(src_pin_expr)
+                for line in dropwhile(lambda line: not line.lstrip().startswith("[SRC_PIN]"), file):
+                    match_obj = reg.match(line)
+                    if match_obj:
+                        self.__srcPin[match_obj.group(1)] = match_obj.group(2)
         else:
             self.__srcPin[''] = '-1'
 
@@ -179,5 +189,53 @@ class Md1EintObj(ModuleObj):
             gen_str += '''\n'''
 
         gen_str += '''};\n'''
+
+        return gen_str
+
+    def get_srcPin(self):
+        return self.__srcPin
+
+    def get_srcPinEnable(self):
+        return self.__bSrcPinEnable
+
+class Md1EintObj_MT6739(Md1EintObj):
+    def __init__(self):
+        Md1EintObj.__init__(self)
+
+    def fill_dtsiFile(self):
+        gen_str = ''
+        for key in sorted_key(ModuleObj.get_data(self).keys()):
+            value = ModuleObj.get_data(self)[key]
+            if cmp(value.get_varName(), 'NC') == 0:
+                continue
+            num = key[4:]
+            gen_str += '''&%s {\n''' % (value.get_varName().lower())
+            gen_str += '''\tcompatible = \"mediatek,%s-eint\";\n''' % (value.get_varName().lower())
+
+            type = 1
+            polarity = value.get_polarity()
+            sensitive = value.get_sensitiveLevel()
+
+            if cmp(polarity, 'High') == 0 and cmp(sensitive, 'Edge') == 0:
+                type = 1
+            elif cmp(polarity, 'Low') == 0 and cmp(sensitive, 'Edge') == 0:
+                type = 2
+            elif cmp(polarity, 'High') == 0 and cmp(sensitive, 'Level') == 0:
+                type = 4
+            elif cmp(polarity, 'Low') == 0 and cmp(sensitive, 'Level') == 0:
+                type = 8
+
+            gen_str += '''\tinterrupts = <%s %d>;\n''' % (num, type)
+            gen_str += '''\tdebounce = <%s %d>;\n''' % (num, (string.atoi(value.get_debounceTime())) * 1000)
+            gen_str += '''\tdedicated = <%s %d>;\n''' % (num, int(value.get_dedicatedEn()))
+            if self.get_srcPinEnable():
+                gen_str += '''\tsrc_pin = <%s %s>;\n''' % (num, self.get_srcPin()[value.get_srcPin()])
+            else:
+                gen_str += '''\tsrc_pin = <%s %s>;\n''' % (num, -1)
+            gen_str += '''\tsockettype = <%s %s>;\n''' % (num, value.get_socketType())
+            gen_str += '''\tstatus = \"okay\";\n'''
+            gen_str += '''};\n'''
+
+            gen_str += '''\n'''
 
         return gen_str

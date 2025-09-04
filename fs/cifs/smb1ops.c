@@ -36,11 +36,11 @@
  * SMB_COM_NT_CANCEL request and then sends it.
  */
 static int
-send_nt_cancel(struct TCP_Server_Info *server, void *buf,
+send_nt_cancel(struct TCP_Server_Info *server, struct smb_rqst *rqst,
 	       struct mid_q_entry *mid)
 {
 	int rc = 0;
-	struct smb_hdr *in_buf = (struct smb_hdr *)buf;
+	struct smb_hdr *in_buf = (struct smb_hdr *)rqst->rq_iov[0].iov_base;
 
 	/* -4 for RFC1001 length and +2 for BCC field */
 	in_buf->smb_buf_length = cpu_to_be32(sizeof(struct smb_hdr) - 4  + 2);
@@ -105,6 +105,7 @@ cifs_find_mid(struct TCP_Server_Info *server, char *buffer)
 		if (compare_mid(mid->mid, buf) &&
 		    mid->mid_state == MID_REQUEST_SUBMITTED &&
 		    le16_to_cpu(mid->command) == buf->Command) {
+			kref_get(&mid->refcount);
 			spin_unlock(&GlobalMid_Lock);
 			return mid;
 		}
@@ -305,7 +306,7 @@ coalesce_t2(char *second_buf, struct smb_hdr *target_hdr)
 	remaining = tgt_total_cnt - total_in_tgt;
 
 	if (remaining < 0) {
-		cifs_dbg(FYI, "Server sent too much data. tgt_total_cnt=%hu total_in_tgt=%hu\n",
+		cifs_dbg(FYI, "Server sent too much data. tgt_total_cnt=%hu total_in_tgt=%u\n",
 			 tgt_total_cnt, total_in_tgt);
 		return -EPROTO;
 	}
@@ -722,7 +723,7 @@ cifs_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 static void
 cifs_set_fid(struct cifsFileInfo *cfile, struct cifs_fid *fid, __u32 oplock)
 {
-	struct cifsInodeInfo *cinode = CIFS_I(cfile->dentry->d_inode);
+	struct cifsInodeInfo *cinode = CIFS_I(d_inode(cfile->dentry));
 	cfile->fid.netfid = fid->netfid;
 	cifs_set_oplock_level(cinode, oplock);
 	cinode->can_cache_brlcks = CIFS_CACHE_WRITE(cinode);
@@ -965,7 +966,8 @@ cifs_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 	/* Check for unix extensions */
 	if (cap_unix(tcon->ses)) {
 		rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path, target_path,
-					     cifs_sb->local_nls);
+					     cifs_sb->local_nls,
+					     cifs_remap(cifs_sb));
 		if (rc == -EREMOTE)
 			rc = cifs_unix_dfs_readlink(xid, tcon, full_path,
 						    target_path,
@@ -1101,6 +1103,7 @@ struct smb_version_operations smb1_operations = {
 	.is_read_op = cifs_is_read_op,
 	.wp_retry_size = cifs_wp_retry_size,
 	.dir_needs_close = cifs_dir_needs_close,
+	.select_sectype = cifs_select_sectype,
 #ifdef CONFIG_CIFS_XATTR
 	.query_all_EAs = CIFSSMBQAllEAs,
 	.set_EA = CIFSSMBSetEA,

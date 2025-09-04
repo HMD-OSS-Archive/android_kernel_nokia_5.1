@@ -21,13 +21,12 @@
  */
 
 #include <linux/slab.h>
-#include <linux/debugfs.h>
 #include <linux/spinlock.h>
 #include <asm/smp.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/firmware.h>
 #include <asm/lppaca.h>
-#include <asm/debug.h>
+#include <asm/debugfs.h>
 #include <asm/plpar_wrappers.h>
 #include <asm/machdep.h>
 
@@ -75,7 +74,7 @@ static atomic_t dtl_count;
  */
 static void consume_dtle(struct dtl_entry *dtle, u64 index)
 {
-	struct dtl_ring *dtlr = &__get_cpu_var(dtl_rings);
+	struct dtl_ring *dtlr = this_cpu_ptr(&dtl_rings);
 	struct dtl_entry *wp = dtlr->write_ptr;
 	struct lppaca *vpa = local_paca->lppaca_ptr;
 

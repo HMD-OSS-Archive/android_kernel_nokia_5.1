@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _SCSI_SCSI_HOST_H
 #define _SCSI_SCSI_HOST_H
 
@@ -37,7 +38,7 @@ struct blk_queue_tags;
  *	 used in one scatter-gather request.
  */
 #define SG_NONE 0
-#define SG_ALL	SCSI_MAX_SG_SEGMENTS
+#define SG_ALL	SG_CHUNK_SIZE
 
 #define MODE_UNKNOWN 0x00
 #define MODE_INITIATOR 0x01
@@ -45,12 +46,6 @@ struct blk_queue_tags;
 
 #define DISABLE_CLUSTERING 0
 #define ENABLE_CLUSTERING 1
-
-enum {
-	SCSI_QDEPTH_DEFAULT,	/* default requested change, e.g. from sysfs */
-	SCSI_QDEPTH_QFULL,	/* scsi-ml requested due to queue full */
-	SCSI_QDEPTH_RAMP_UP,	/* scsi-ml requested due to threshold event */
-};
 
 struct scsi_host_template {
 	struct module *module;
@@ -195,7 +190,7 @@ struct scsi_host_template {
 	 * Things currently recommended to be handled at this time include:
 	 *
 	 * 1.  Setting the device queue depth.  Proper setting of this is
-	 *     described in the comments for scsi_adjust_queue_depth.
+	 *     described in the comments for scsi_change_queue_depth.
 	 * 2.  Determining if the device supports the various synchronous
 	 *     negotiation protocols.  The device struct will already have
 	 *     responded to INQUIRY and the results of the standard items
@@ -281,20 +276,15 @@ struct scsi_host_template {
 	 *
 	 * Status: OPTIONAL
 	 */
-	int (* change_queue_depth)(struct scsi_device *, int, int);
+	int (* change_queue_depth)(struct scsi_device *, int);
 
 	/*
-	 * Fill in this function to allow the changing of tag types
-	 * (this also allows the enabling/disabling of tag command
-	 * queueing).  An error should only be returned if something
-	 * went wrong in the driver while trying to set the tag type.
-	 * If the driver doesn't support the requested tag type, then
-	 * it should set the closest type it does support without
-	 * returning an error.  Returns the actual tag type set.
+	 * This functions lets the driver expose the queue mapping
+	 * to the block layer.
 	 *
 	 * Status: OPTIONAL
 	 */
-	int (* change_queue_type)(struct scsi_device *, int);
+	int (* map_queues)(struct Scsi_Host *shost);
 
 	/*
 	 * This function determines the BIOS parameters for a given
@@ -421,6 +411,14 @@ struct scsi_host_template {
 	 */
 	unsigned char present;
 
+	/* If use block layer to manage tags, this is tag allocation policy */
+	int tag_alloc_policy;
+
+	/*
+	 * Track QUEUE_FULL events and reduce queue depth on demand.
+	 */
+	unsigned track_queue_depth:1;
+
 	/*
 	 * This specifies the mode that a LLD supports.
 	 */
@@ -451,18 +449,11 @@ struct scsi_host_template {
 	 */
 	unsigned skip_settle_delay:1;
 
-	/*
-	 * True if we are using ordered write support.
-	 */
-	unsigned ordered_tag:1;
-
 	/* True if the controller does not support WRITE SAME */
 	unsigned no_write_same:1;
 
-	/*
-	 * True if asynchronous aborts are not supported
-	 */
-	unsigned no_async_abort:1;
+	/* True if the low-level driver supports blk-mq only */
+	unsigned force_blk_mq:1;
 
 	/*
 	 * Countdown for host blocking with no commands outstanding.
@@ -511,9 +502,6 @@ struct scsi_host_template {
 	 */
 	unsigned int cmd_size;
 	struct scsi_host_cmd_pool *cmd_pool;
-
-	/* temporary flag to disable blk-mq I/O path */
-	bool disable_blk_mq;
 };
 
 /*
@@ -555,16 +543,13 @@ struct Scsi_Host {
 	 * __devices is protected by the host_lock, but you should
 	 * usually use scsi_device_lookup / shost_for_each_device
 	 * to access it and don't care about locking yourself.
-	 * In the rare case of beeing in irq context you can use
+	 * In the rare case of being in irq context you can use
 	 * their __ prefixed variants with the lock held. NEVER
 	 * access this list directly from a driver.
 	 */
 	struct list_head	__devices;
 	struct list_head	__targets;
 	
-	struct scsi_host_cmd_pool *cmd_pool;
-	spinlock_t		free_list_lock;
-	struct list_head	free_list; /* backup store of cmd structs */
 	struct list_head	starved_list;
 
 	spinlock_t		default_lock;
@@ -638,6 +623,14 @@ struct Scsi_Host {
 	short unsigned int sg_prot_tablesize;
 	unsigned int max_sectors;
 	unsigned long dma_boundary;
+	/*
+	 * In scsi-mq mode, the number of hardware queues supported by the LLD.
+	 *
+	 * Note: it is assumed that each hardware queue has a queue depth of
+	 * can_queue. In other words, the total queue depth per host
+	 * is nr_hw_queues * can_queue.
+	 */
+	unsigned nr_hw_queues;
 	/* 
 	 * Used to assign serial numbers to the cmds.
 	 * Protected by the host lock.
@@ -647,7 +640,6 @@ struct Scsi_Host {
 	unsigned active_mode:2;
 	unsigned unchecked_isa_dma:1;
 	unsigned use_clustering:1;
-	unsigned use_blk_tcq:1;
 
 	/*
 	 * Host has requested that no further requests come through for the
@@ -662,11 +654,6 @@ struct Scsi_Host {
 	 */
 	unsigned reverse_ordering:1;
 
-	/*
-	 * Ordered write support
-	 */
-	unsigned ordered_tag:1;
-
 	/* Task mgmt function in progress */
 	unsigned tmf_in_progress:1;
 
@@ -679,8 +666,14 @@ struct Scsi_Host {
 	/* The controller does not support WRITE SAME */
 	unsigned no_write_same:1;
 
+	/* Inline encryption support */
+	unsigned use_inline_crypt:1;
+
 	unsigned use_blk_mq:1;
 	unsigned use_cmd_list:1;
+
+	/* Host responded with short (<36 bytes) INQUIRY result */
+	unsigned short_inquiry:1;
 
 	/*
 	 * Optional work queue to be utilized by the transport
@@ -704,12 +697,6 @@ struct Scsi_Host {
 	/* Protection Information */
 	unsigned int prot_capabilities;
 	unsigned char prot_guard_type;
-
-	/*
-	 * q used for scsi_tgt msgs, async events or any other requests that
-	 * need to be processed in userspace
-	 */
-	struct request_queue *uspace_req_q;
 
 	/* legacy crap */
 	unsigned long base;
@@ -785,8 +772,6 @@ static inline int scsi_host_in_recovery(struct Scsi_Host *shost)
 		shost->tmf_in_progress;
 }
 
-extern bool scsi_use_blk_mq;
-
 static inline bool shost_use_blk_mq(struct Scsi_Host *shost)
 {
 	return shost->use_blk_mq;
@@ -834,8 +819,6 @@ extern void scsi_block_requests(struct Scsi_Host *);
 
 struct class_container;
 
-extern struct request_queue *__scsi_alloc_queue(struct Scsi_Host *shost,
-						void (*) (struct request_queue *));
 /*
  * These two functions are used to allocate and free a pseudo device
  * which will connect to the host adapter itself rather than any

@@ -26,11 +26,11 @@ irqreturn_t mt_debug_signal_irq(int irq, void *dev_id);
 int mt_fiq_init(void *arg);
 /*---------------------------------------------------------------------------*/
 struct mtk_uart_setting *get_uart_default_settings(int idx);
-#ifdef CONFIG_OF
+
 void *get_apdma_uart0_base(void);
 unsigned int get_uart_vfifo_irq_id(int idx);
 void set_uart_default_settings(int idx);
-#endif
+
 unsigned long get_uart_evt_mask(int idx);
 void mtk_uart_switch_tx_to_gpio(struct mtk_uart *uart);
 void mtk_uart_switch_to_tx(struct mtk_uart *uart);
@@ -41,10 +41,6 @@ unsigned long get_uart_lsr_status(int idx);
 void set_uart_lsr_status(int idx, int value);
 unsigned char get_modem_status(int idx);
 void dump_uart_reg(void);
-void mtk_uart_dump_reg(char *s);
-#if defined(ENABLE_CONSOLE_DEBUG)
-void dump_console_reg(struct mtk_uart *uart, char *s);
-#endif
 void mtk_uart_console_setting_switch(struct mtk_uart *uart);
 int mtk_uart_vfifo_is_empty(struct mtk_uart_vfifo *vfifo);
 void mtk_uart_tx_vfifo_flush(struct mtk_uart *uart, int timeout);

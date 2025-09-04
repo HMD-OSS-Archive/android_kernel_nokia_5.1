@@ -555,7 +555,7 @@ static snd_pcm_uframes_t usb6fire_pcm_pointer(
 	return ret;
 }
 
-static struct snd_pcm_ops pcm_ops = {
+static const struct snd_pcm_ops pcm_ops = {
 	.open = usb6fire_pcm_open,
 	.close = usb6fire_pcm_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -679,25 +679,16 @@ int usb6fire_pcm_init(struct sfire_chip *chip)
 void usb6fire_pcm_abort(struct sfire_chip *chip)
 {
 	struct pcm_runtime *rt = chip->pcm;
-	unsigned long flags;
 	int i;
 
 	if (rt) {
 		rt->panic = true;
 
-		if (rt->playback.instance) {
-			snd_pcm_stream_lock_irqsave(rt->playback.instance, flags);
-			snd_pcm_stop(rt->playback.instance,
-					SNDRV_PCM_STATE_XRUN);
-			snd_pcm_stream_unlock_irqrestore(rt->playback.instance, flags);
-		}
+		if (rt->playback.instance)
+			snd_pcm_stop_xrun(rt->playback.instance);
 
-		if (rt->capture.instance) {
-			snd_pcm_stream_lock_irqsave(rt->capture.instance, flags);
-			snd_pcm_stop(rt->capture.instance,
-					SNDRV_PCM_STATE_XRUN);
-			snd_pcm_stream_unlock_irqrestore(rt->capture.instance, flags);
-		}
+		if (rt->capture.instance)
+			snd_pcm_stop_xrun(rt->capture.instance);
 
 		for (i = 0; i < PCM_N_URBS; i++) {
 			usb_poison_urb(&rt->in_urbs[i].instance);

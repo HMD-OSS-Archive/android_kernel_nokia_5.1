@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2015 MediaTek Inc.
+ * Copyright (c) 2016 MediaTek Inc.
  * Author: Ming Hsiu Tsai <minghsiu.tsai@mediatek.com>
+ *         Rick Chang <rick.chang@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,7 +12,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
 
 #include <linux/kernel.h>
 #include <linux/videodev2.h>
@@ -63,7 +63,7 @@ static void read_skip(struct mtk_jpeg_stream *stream, long len)
 }
 
 static bool mtk_jpeg_do_parse(struct mtk_jpeg_dec_param *param, u8 *src_addr_va,
-			     u32 src_size)
+			      u32 src_size)
 {
 	bool notfound = true;
 	struct mtk_jpeg_stream stream;
@@ -149,7 +149,7 @@ static bool mtk_jpeg_do_parse(struct mtk_jpeg_dec_param *param, u8 *src_addr_va,
 }
 
 bool mtk_jpeg_parse(struct mtk_jpeg_dec_param *param, u8 *src_addr_va,
-		   u32 src_size)
+		    u32 src_size)
 {
 	if (!mtk_jpeg_do_parse(param, src_addr_va, src_size))
 		return false;

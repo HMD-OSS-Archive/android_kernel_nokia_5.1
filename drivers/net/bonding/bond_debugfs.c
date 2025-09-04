@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/netdevice.h>
 
-#include "bonding.h"
-#include "bond_alb.h"
+#include <net/bonding.h>
+#include <net/bond_alb.h>
 
 #if defined(CONFIG_DEBUG_FS) && !defined(CONFIG_NET_NS)
 

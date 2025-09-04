@@ -18,11 +18,10 @@ ccflags-y += \
                                 -I$(srctree)/drivers/misc/mediatek/video/common/IPv1     \
                                 -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/dispsys \
                                 -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/videox \
-                                -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/ \
                                 -I$(srctree)/drivers/misc/mediatek/sync/      \
                                 -I$(srctree)/drivers/misc/mediatek/lcm/inc/ \
 
-ifeq (y, $(filter y, $(CONFIG_MACH_MT6799) $(CONFIG_MACH_MT6758) $(CONFIG_MACH_MT6763)))
+ifeq (y, $(filter y, $(CONFIG_MACH_MT6799) $(CONFIG_MACH_MT6758) $(CONFIG_MACH_MT6775) $(CONFIG_MACH_MT6771) $(CONFIG_MACH_MT6763) $(CONFIG_MACH_MT6739)))
 ccflags-y += \
                                 -I$(srctree)/drivers/misc/mediatek/cmdq/v3/ \
                                 -I$(srctree)/drivers/misc/mediatek/cmdq/v3/$(MTK_PLATFORM)/

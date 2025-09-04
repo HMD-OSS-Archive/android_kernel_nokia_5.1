@@ -98,8 +98,8 @@ static int of_i2c_gpio_get_pins(struct device_node *np,
 		return -EPROBE_DEFER;
 
 	if (!gpio_is_valid(*sda_pin) || !gpio_is_valid(*scl_pin)) {
-		pr_err("%s: invalid GPIO pins, sda=%d/scl=%d\n",
-		       np->full_name, *sda_pin, *scl_pin);
+		pr_err("%pOF: invalid GPIO pins, sda=%d/scl=%d\n",
+		       np, *sda_pin, *scl_pin);
 		return -ENODEV;
 	}
 
@@ -260,7 +260,6 @@ MODULE_DEVICE_TABLE(of, i2c_gpio_dt_ids);
 static struct platform_driver i2c_gpio_driver = {
 	.driver		= {
 		.name	= "i2c-gpio",
-		.owner	= THIS_MODULE,
 		.of_match_table	= of_match_ptr(i2c_gpio_dt_ids),
 	},
 	.probe		= i2c_gpio_probe,

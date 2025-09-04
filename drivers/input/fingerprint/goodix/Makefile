@@ -9,6 +9,7 @@ ccflags-y += -I$(srctree)/drivers/spi/mediatek/$(MTK_PLATFORM)
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/$(MTK_PLATFORM)/
 
 ifeq ($(CONFIG_TRUSTONIC_TEE_SUPPORT),y)
 subdir-ccflags-y += -I$(srctree)/drivers/spi/trustzone/spi/Tlspi/inc
@@ -16,4 +17,4 @@ subdir-ccflags-y += -I$(srctree)/drivers/spi/trustzone/spi/Tlspi/inc
 endif
 
 
-obj-$(CONFIG_GOODIX_FINGERPRINT)	+= gf_spi_tee.o
+obj-$(CONFIG_GOODIX_FINGERPRINT)	+= gf_spi_tee.o gf_spi_factory.o

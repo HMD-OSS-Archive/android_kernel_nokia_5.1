@@ -11,7 +11,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
 #include <linux/module.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -28,7 +27,6 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-
 #include <linux/mmc/card.h>
 #include <linux/mmc/core.h>
 #include <linux/mmc/host.h>
@@ -37,350 +35,8 @@
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/slot-gpio.h>
 
-#define MAX_BD_NUM          1024
+#include "mtk-sdio.h"
 
-/*--------------------------------------------------------------------------*/
-/* Common Definition                                                        */
-/*--------------------------------------------------------------------------*/
-#define MSDC_BUS_1BITS          0x0
-#define MSDC_BUS_4BITS          0x1
-#define MSDC_BUS_8BITS          0x2
-
-#define MSDC_BURST_64B          0x6
-
-/*--------------------------------------------------------------------------*/
-/* Register Offset                                                          */
-/*--------------------------------------------------------------------------*/
-#define MSDC_CFG         0x0
-#define MSDC_IOCON       0x04
-#define MSDC_PS          0x08
-#define MSDC_INT         0x0c
-#define MSDC_INTEN       0x10
-#define MSDC_FIFOCS      0x14
-#define MSDC_TXDATA      0x18
-#define MSDC_RXDATA      0x1c
-#define SDC_CFG          0x30
-#define SDC_CMD          0x34
-#define SDC_ARG          0x38
-#define SDC_STS          0x3c
-#define SDC_RESP0        0x40
-#define SDC_RESP1        0x44
-#define SDC_RESP2        0x48
-#define SDC_RESP3        0x4c
-#define SDC_BLK_NUM      0x50
-#define EMMC_IOCON       0x7c
-#define SDC_ACMD_RESP    0x80
-#define MSDC_DMA_SA      0x90
-#define MSDC_DMA_CTRL    0x98
-#define MSDC_DMA_CFG     0x9c
-#define MSDC_DBG_SEL     0xa0
-#define MSDC_DBG_OUT     0xa4
-#define MSDC_PATCH_BIT   0xb0
-#define MSDC_PATCH_BIT1  0xb4
-#define MSDC_PAD_TUNE    0xec
-#define PAD_DS_TUNE      0x188
-#define EMMC50_CFG0      0x208
-
-#define MSDC_TOP_DAT_TUNE_CTRL0   0
-#define MSDC_TOP_DAT_TUNE_CTRL1   0x4
-#define MSDC_TOP_DAT_TUNE_CTRL2   0x8
-#define MSDC_TOP_DAT_TUNE_CTRL3   0xc
-/*--------------------------------------------------------------------------*/
-/* Register Mask                                                            */
-/*--------------------------------------------------------------------------*/
-
-/* MSDC_CFG mask */
-#define MSDC_CFG_MODE           (0x1 << 0)	/* RW */
-#define MSDC_CFG_CKPDN          (0x1 << 1)	/* RW */
-#define MSDC_CFG_RST            (0x1 << 2)	/* RW */
-#define MSDC_CFG_PIO            (0x1 << 3)	/* RW */
-#define MSDC_CFG_CKDRVEN        (0x1 << 4)	/* RW */
-#define MSDC_CFG_BV18SDT        (0x1 << 5)	/* RW */
-#define MSDC_CFG_BV18PSS        (0x1 << 6)	/* R  */
-#define MSDC_CFG_CKSTB          (0x1 << 7)	/* R  */
-#define MSDC_CFG_CKDIV          (0xff << 8)	/* RW */
-#define MSDC_CFG_CKMOD          (0x3 << 16)	/* RW */
-#define MSDC_CFG_HS400_CK_MODE  (0x1 << 18)	/* RW */
-
-/* MSDC_IOCON mask */
-#define MSDC_IOCON_SDR104CKS    (0x1 << 0)	/* RW */
-#define MSDC_IOCON_RSPL         (0x1 << 1)	/* RW */
-#define MSDC_IOCON_DSPL         (0x1 << 2)	/* RW */
-#define MSDC_IOCON_DDLSEL       (0x1 << 3)	/* RW */
-#define MSDC_IOCON_DDR50CKD     (0x1 << 4)	/* RW */
-#define MSDC_IOCON_DSPLSEL      (0x1 << 5)	/* RW */
-#define MSDC_IOCON_W_DSPL       (0x1 << 8)	/* RW */
-#define MSDC_IOCON_W_DSPLSEL    (0x1 << 9)	/* RW */
-#define MSDC_IOCON_D0SPL        (0x1 << 16)	/* RW */
-#define MSDC_IOCON_D1SPL        (0x1 << 17)	/* RW */
-#define MSDC_IOCON_D2SPL        (0x1 << 18)	/* RW */
-#define MSDC_IOCON_D3SPL        (0x1 << 19)	/* RW */
-#define MSDC_IOCON_D4SPL        (0x1 << 20)	/* RW */
-#define MSDC_IOCON_D5SPL        (0x1 << 21)	/* RW */
-#define MSDC_IOCON_D6SPL        (0x1 << 22)	/* RW */
-#define MSDC_IOCON_D7SPL        (0x1 << 23)	/* RW */
-#define MSDC_IOCON_RISCSZ       (0x3 << 24)	/* RW */
-
-/* MSDC_PS mask */
-#define MSDC_PS_CDEN            (0x1 << 0)	/* RW */
-#define MSDC_PS_CDSTS           (0x1 << 1)	/* R  */
-#define MSDC_PS_CDDEBOUNCE      (0xf << 12)	/* RW */
-#define MSDC_PS_DAT             (0xff << 16)	/* R  */
-#define MSDC_PS_DATA1           (0x1 << 17)	/* R  */
-#define MSDC_PS_CMD             (0x1 << 24)	/* R  */
-#define MSDC_PS_WP              (0x1 << 31)	/* R  */
-
-/* MSDC_INT mask */
-#define MSDC_INT_MMCIRQ         (0x1 << 0)	/* W1C */
-#define MSDC_INT_CDSC           (0x1 << 1)	/* W1C */
-#define MSDC_INT_ACMDRDY        (0x1 << 3)	/* W1C */
-#define MSDC_INT_ACMDTMO        (0x1 << 4)	/* W1C */
-#define MSDC_INT_ACMDCRCERR     (0x1 << 5)	/* W1C */
-#define MSDC_INT_DMAQ_EMPTY     (0x1 << 6)	/* W1C */
-#define MSDC_INT_SDIOIRQ        (0x1 << 7)	/* W1C */
-#define MSDC_INT_CMDRDY         (0x1 << 8)	/* W1C */
-#define MSDC_INT_CMDTMO         (0x1 << 9)	/* W1C */
-#define MSDC_INT_RSPCRCERR      (0x1 << 10)	/* W1C */
-#define MSDC_INT_CSTA           (0x1 << 11)	/* R */
-#define MSDC_INT_XFER_COMPL     (0x1 << 12)	/* W1C */
-#define MSDC_INT_DXFER_DONE     (0x1 << 13)	/* W1C */
-#define MSDC_INT_DATTMO         (0x1 << 14)	/* W1C */
-#define MSDC_INT_DATCRCERR      (0x1 << 15)	/* W1C */
-#define MSDC_INT_ACMD19_DONE    (0x1 << 16)	/* W1C */
-#define MSDC_INT_DMA_BDCSERR    (0x1 << 17)	/* W1C */
-#define MSDC_INT_DMA_GPDCSERR   (0x1 << 18)	/* W1C */
-#define MSDC_INT_DMA_PROTECT    (0x1 << 19)	/* W1C */
-
-/* MSDC_INTEN mask */
-#define MSDC_INTEN_MMCIRQ       (0x1 << 0)	/* RW */
-#define MSDC_INTEN_CDSC         (0x1 << 1)	/* RW */
-#define MSDC_INTEN_ACMDRDY      (0x1 << 3)	/* RW */
-#define MSDC_INTEN_ACMDTMO      (0x1 << 4)	/* RW */
-#define MSDC_INTEN_ACMDCRCERR   (0x1 << 5)	/* RW */
-#define MSDC_INTEN_DMAQ_EMPTY   (0x1 << 6)	/* RW */
-#define MSDC_INTEN_SDIOIRQ      (0x1 << 7)	/* RW */
-#define MSDC_INTEN_CMDRDY       (0x1 << 8)	/* RW */
-#define MSDC_INTEN_CMDTMO       (0x1 << 9)	/* RW */
-#define MSDC_INTEN_RSPCRCERR    (0x1 << 10)	/* RW */
-#define MSDC_INTEN_CSTA         (0x1 << 11)	/* RW */
-#define MSDC_INTEN_XFER_COMPL   (0x1 << 12)	/* RW */
-#define MSDC_INTEN_DXFER_DONE   (0x1 << 13)	/* RW */
-#define MSDC_INTEN_DATTMO       (0x1 << 14)	/* RW */
-#define MSDC_INTEN_DATCRCERR    (0x1 << 15)	/* RW */
-#define MSDC_INTEN_ACMD19_DONE  (0x1 << 16)	/* RW */
-#define MSDC_INTEN_DMA_BDCSERR  (0x1 << 17)	/* RW */
-#define MSDC_INTEN_DMA_GPDCSERR (0x1 << 18)	/* RW */
-#define MSDC_INTEN_DMA_PROTECT  (0x1 << 19)	/* RW */
-
-/* MSDC_FIFOCS mask */
-#define MSDC_FIFOCS_RXCNT       (0xff << 0)	/* R */
-#define MSDC_FIFOCS_TXCNT       (0xff << 16)	/* R */
-#define MSDC_FIFOCS_CLR         (0x1 << 31)	/* RW */
-
-/* SDC_CFG mask */
-#define SDC_CFG_SDIOINTWKUP     (0x1 << 0)	/* RW */
-#define SDC_CFG_INSWKUP         (0x1 << 1)	/* RW */
-#define SDC_CFG_BUSWIDTH        (0x3 << 16)	/* RW */
-#define SDC_CFG_SDIO            (0x1 << 19)	/* RW */
-#define SDC_CFG_SDIOIDE         (0x1 << 20)	/* RW */
-#define SDC_CFG_INTATGAP        (0x1 << 21)	/* RW */
-#define SDC_CFG_DTOC            (0xff << 24)	/* RW */
-
-/* SDC_STS mask */
-#define SDC_STS_SDCBUSY         (0x1 << 0)	/* RW */
-#define SDC_STS_CMDBUSY         (0x1 << 1)	/* RW */
-#define SDC_STS_SWR_COMPL       (0x1 << 31)	/* RW */
-
-/* MSDC_DMA_CTRL mask */
-#define MSDC_DMA_CTRL_START     (0x1 << 0)	/* W */
-#define MSDC_DMA_CTRL_STOP      (0x1 << 1)	/* W */
-#define MSDC_DMA_CTRL_RESUME    (0x1 << 2)	/* W */
-#define MSDC_DMA_CTRL_MODE      (0x1 << 8)	/* RW */
-#define MSDC_DMA_CTRL_LASTBUF   (0x1 << 10)	/* RW */
-#define MSDC_DMA_CTRL_BRUSTSZ   (0x7 << 12)	/* RW */
-
-/* MSDC_DMA_CFG mask */
-#define MSDC_DMA_CFG_STS        (0x1 << 0)	/* R */
-#define MSDC_DMA_CFG_DECSEN     (0x1 << 1)	/* RW */
-#define MSDC_DMA_CFG_AHBHPROT2  (0x2 << 8)	/* RW */
-#define MSDC_DMA_CFG_ACTIVEEN   (0x2 << 12)	/* RW */
-#define MSDC_DMA_CFG_CS12B16B   (0x1 << 16)	/* RW */
-
-/* MSDC_PATCH_BIT mask */
-#define MSDC_PATCH_BIT_ODDSUPP    (0x1 <<  1)	/* RW */
-#define MSDC_INT_DAT_LATCH_CK_SEL (0x7 <<  7)
-#define MSDC_CKGEN_MSDC_DLY_SEL   (0x1f << 10)
-#define MSDC_PATCH_BIT_IODSSEL    (0x1 << 16)	/* RW */
-#define MSDC_PATCH_BIT_IOINTSEL   (0x1 << 17)	/* RW */
-#define MSDC_PATCH_BIT_BUSYDLY    (0xf << 18)	/* RW */
-#define MSDC_PATCH_BIT_WDOD       (0xf << 22)	/* RW */
-#define MSDC_PATCH_BIT_IDRTSEL    (0x1 << 26)	/* RW */
-#define MSDC_PATCH_BIT_CMDFSEL    (0x1 << 27)	/* RW */
-#define MSDC_PATCH_BIT_INTDLSEL   (0x1 << 28)	/* RW */
-#define MSDC_PATCH_BIT_SPCPUSH    (0x1 << 29)	/* RW */
-#define MSDC_PATCH_BIT_DECRCTMO   (0x1 << 30)	/* RW */
-
-/* MSDC_PATCH_BIT1 mask */
-#define MSDC_PATCH_BIT1_WRDAT_CRCS  (0x7 << 0)
-#define MSDC_PATCH_BIT1_CMD_RSP     (0x7 << 3)
-
-/* MSDC_PAD_TUNE mask */
-#define MSDC_PAD_TUNE_DATWRDLY  (0x1f << 0)	/* RW */
-#define MSDC_PAD_TUNE_DATRRDLY  (0x1f << 8)	/* RW */
-#define MSDC_PAD_TUNE_CMDRDLY   (0x1f << 16)	/* RW */
-#define MSDC_PAD_TUNE_CMDRRDLY  (0x1f << 22)	/* RW */
-#define MSDC_PAD_TUNE_CLKTXDLY  (0x1f << 27)	/* RW */
-
-#define PAD_DS_TUNE_DLY1          (0x1f << 2)   /* RW */
-#define PAD_DS_TUNE_DLY2          (0x1f << 7)   /* RW */
-#define PAD_DS_TUNE_DLY3          (0x1f << 12)  /* RW */
-
-#define EMMC50_CFG_PADCMD_LATCHCK (0x1 << 0)   /* RW */
-#define EMMC50_CFG_CRCSTS_EDGE    (0x1 << 3)   /* RW */
-#define EMMC50_CFG_CFCSTS_SEL     (0x1 << 4)   /* RW */
-
-/*sdio use port 3*/
-#define MSDC_TOP_SDIO_DATA_TUNE_D0      (0X1f << 0)
-#define MSDC_TOP_SDIO_DATA_TUNE_D1      (0X1f << 5)
-#define MSDC_TOP_SDIO_DATA_TUNE_D2      (0X1f << 10)
-#define MSDC_TOP_SDIO_DATA_TUNE_D3      (0X1f << 15)
-#define MSDC_TOP_SDIO_DATA_TUNE_CMD     (0X1f << 0)
-#define MSDC_TOP_SDIO_DATA_TUNE_SEL     (0X1 << 30)
-
-#define REQ_CMD_EIO  (0x1 << 0)
-#define REQ_CMD_TMO  (0x1 << 1)
-#define REQ_DAT_ERR  (0x1 << 2)
-#define REQ_STOP_EIO (0x1 << 3)
-#define REQ_STOP_TMO (0x1 << 4)
-#define REQ_CMD_BUSY (0x1 << 5)
-
-#define MSDC_PREPARE_FLAG (0x1 << 0)
-#define MSDC_ASYNC_FLAG (0x1 << 1)
-#define MSDC_MMAP_FLAG (0x1 << 2)
-
-#define MTK_MMC_AUTOSUSPEND_DELAY	50
-#define CMD_TIMEOUT         (HZ/10 * 5)	/* 100ms x5 */
-#define DAT_TIMEOUT         (HZ    * 5)	/* 1000ms x5 */
-
-#define PAD_DELAY_MAX	32 /* PAD delay cells */
-/*--------------------------------------------------------------------------*/
-/* Descriptor Structure                                                     */
-/*--------------------------------------------------------------------------*/
-struct mt_gpdma_desc {
-	u32 gpd_info;
-#define GPDMA_DESC_HWO		(0x1 << 0)
-#define GPDMA_DESC_BDP		(0x1 << 1)
-#define GPDMA_DESC_CHECKSUM	(0xff << 8) /* bit8 ~ bit15 */
-#define GPDMA_DESC_INT		(0x1 << 16)
-	u32 next;
-	u32 ptr;
-	u32 gpd_data_len;
-#define GPDMA_DESC_BUFLEN	(0xffff) /* bit0 ~ bit15 */
-#define GPDMA_DESC_EXTLEN	(0xff << 16) /* bit16 ~ bit23 */
-	u32 arg;
-	u32 blknum;
-	u32 cmd;
-};
-
-struct mt_bdma_desc {
-	u32 bd_info;
-#define BDMA_DESC_EOL		(0x1 << 0)
-#define BDMA_DESC_CHECKSUM	(0xff << 8) /* bit8 ~ bit15 */
-#define BDMA_DESC_BLKPAD	(0x1 << 17)
-#define BDMA_DESC_DWPAD		(0x1 << 18)
-	u32 next;
-	u32 ptr;
-	u32 bd_data_len;
-#define BDMA_DESC_BUFLEN	(0xffff) /* bit0 ~ bit15 */
-};
-
-struct msdc_dma {
-	struct scatterlist *sg;	/* I/O scatter list */
-	struct mt_gpdma_desc *gpd;		/* pointer to gpd array */
-	struct mt_bdma_desc *bd;		/* pointer to bd array */
-	dma_addr_t gpd_addr;	/* the physical address of gpd array */
-	dma_addr_t bd_addr;	/* the physical address of bd array */
-};
-
-struct msdc_save_para {
-	u32 msdc_cfg;
-	u32 iocon;
-	u32 sdc_cfg;
-	u32 pad_tune;
-	u32 patch_bit0;
-	u32 patch_bit1;
-	u32 pad_ds_tune;
-	u32 emmc50_cfg0;
-	u32 top_tune_ctrl1;
-	u32 top_tune_ctrl2;
-	u32 top_tune_ctrl3;
-};
-
-struct msdc_tune_para {
-	u32 iocon;
-	u32 pad_tune;
-};
-
-struct msdc_delay_phase {
-	u8 maxlen;
-	u8 start;
-	u8 final_phase;
-};
-
-struct msdc_host {
-	struct device *dev;
-	struct mmc_host *mmc;	/* mmc structure */
-	int cmd_rsp;
-
-	spinlock_t lock;
-	spinlock_t irqlock;
-	struct mmc_request *mrq;
-	struct mmc_command *cmd;
-	struct mmc_data *data;
-	int error;
-
-	void __iomem *base;		/* host base address */
-	void __iomem *top;	/* host toplvl address */
-
-	struct msdc_dma dma;	/* dma channel */
-	u64 dma_mask;
-
-	u32 timeout_ns;		/* data timeout ns */
-	u32 timeout_clks;	/* data timeout clks */
-	u32 tune_latch_ck_cnt;
-
-	struct pinctrl *pinctrl;
-	struct pinctrl_state *pins_default;
-	struct pinctrl_state *pins_uhs;
-	struct delayed_work req_timeout;
-	int irq;		/* host interrupt */
-	bool irq_thread_alive;
-
-	struct clk *src_clk;	/* msdc source clock */
-	struct clk *h_clk;      /* msdc h_clk */
-	u32 mclk;		/* mmc subsystem clock frequency */
-	u32 src_clk_freq;	/* source clock frequency */
-	u32 sclk;		/* SD/MS bus clock frequency */
-	bool clock_on;
-	unsigned char timing;
-	bool vqmmc_enabled;
-	u32 hs400_ds_delay;
-	bool hs400_mode;	/* current eMMC will run at hs400 mode */
-	struct msdc_save_para save_para; /* used when gate HCLK */
-	struct msdc_tune_para def_tune_para; /* default tune setting */
-	struct msdc_tune_para saved_tune_para; /* tune result of CMD21/CMD19 */
-};
-
-static bool sdio_online_tune_fail;
-
-/**
- * void apply_sdio_setting(struct msdc_host *host, u32 hz);
- * extern void mmc_set_clock(struct mmc_host *host, unsigned int hz);
- * extern u32 vcorefs_sdio_get_vcore_nml(void);
- * extern int vcorefs_sdio_set_vcore_nml(u32 vcore_uv);
- * extern int vcorefs_sdio_lock_dvfs(bool in_ot);
- * extern int vcorefs_sdio_unlock_dvfs(bool in_ot);
- */
 static void sdr_set_bits(void __iomem *reg, u32 bs)
 {
 	u32 val = readl(reg);
@@ -429,10 +85,13 @@ static void msdc_reset_hw(struct msdc_host *host)
 	writel(val, host->base + MSDC_INT);
 }
 
+static bool sdio_online_tune_fail;
+static void msdc_dump_all_register(struct msdc_host *host);
 static void msdc_cmd_next(struct msdc_host *host,
 		struct mmc_request *mrq, struct mmc_command *cmd);
+#ifndef SUPPORT_LEGACY_SDIO
 static void msdc_recheck_sdio_irq(struct msdc_host *host);
-
+#endif
 static const u32 cmd_ints_mask = MSDC_INTEN_CMDRDY | MSDC_INTEN_RSPCRCERR |
 			MSDC_INTEN_CMDTMO | MSDC_INTEN_ACMDRDY |
 			MSDC_INTEN_ACMDCRCERR | MSDC_INTEN_ACMDTMO;
@@ -510,7 +169,8 @@ static void msdc_prepare_data(struct msdc_host *host, struct mmc_request *mrq)
 
 		data->host_cookie |= MSDC_PREPARE_FLAG;
 		data->sg_count = dma_map_sg(host->dev, data->sg, data->sg_len,
-					   read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+					   read ? DMA_FROM_DEVICE :
+					   DMA_TO_DEVICE);
 	}
 }
 
@@ -558,16 +218,23 @@ static void msdc_gate_clock(struct msdc_host *host)
 {
 	clk_disable_unprepare(host->src_clk);
 	clk_disable_unprepare(host->h_clk);
-	host->clock_on = false;
+	clk_disable_unprepare(host->src_clk_cg);
+
+	host->sdio_clk_cnt--;
+	if (!host->sdio_clk_cnt)
+		host->clock_on = false;
 }
 
 static void msdc_ungate_clock(struct msdc_host *host)
 {
+	clk_prepare_enable(host->src_clk_cg);
 	clk_prepare_enable(host->h_clk);
 	clk_prepare_enable(host->src_clk);
 	while (!(readl(host->base + MSDC_CFG) & MSDC_CFG_CKSTB))
 		cpu_relax();
+
 	host->clock_on = true;
+	host->sdio_clk_cnt++;
 }
 
 static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
@@ -579,7 +246,7 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 	unsigned long irq_flags;
 
 	if (!hz) {
-		dev_dbg(host->dev, "set mclk to 0\n");
+		dev_info(host->dev, "set mclk to 0\n");
 		host->mclk = 0;
 		sdr_clr_bits(host->base + MSDC_CFG, MSDC_CFG_CKPDN);
 		return;
@@ -587,7 +254,6 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 
 	if (hz >= 100 * 1000 * 1000 && sdio_online_tune_fail)
 		hz = 50 * 1000 * 1000;
-	apply_sdio_setting(host, hz);
 
 	spin_lock_irqsave(&host->irqlock, irq_flags);
 	flags = readl(host->base + MSDC_INTEN);
@@ -607,7 +273,8 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 			div = 0; /* mean div = 1/4 */
 			sclk = host->src_clk_freq >> 2; /* sclk = clk / 4 */
 		} else {
-			div = (host->src_clk_freq + ((hz << 2) - 1)) / (hz << 2);
+			div = (host->src_clk_freq + ((hz << 2) - 1)) /
+			      (hz << 2);
 			sclk = (host->src_clk_freq >> 2) / div;
 			div = (div >> 1);
 		}
@@ -629,15 +296,29 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 			div = 0; /* mean div = 1/2 */
 			sclk = host->src_clk_freq >> 1; /* sclk = clk / 2 */
 		} else {
-			div = (host->src_clk_freq + ((hz << 2) - 1)) / (hz << 2);
+			div = (host->src_clk_freq + ((hz << 2) - 1)) /
+			      (hz << 2);
 			sclk = (host->src_clk_freq >> 2) / div;
 		}
 	}
+	/*
+	 * As src_clk/HCLK use the same bit to gate/ungate,
+	 * So if want to only gate src_clk, need gate its parent(mux).
+	 */
+	sdr_clr_bits(host->base + MSDC_CFG, MSDC_CFG_CKPDN);
+	if (host->src_clk_cg)
+		clk_disable_unprepare(host->src_clk_cg);
+	else
+		clk_disable_unprepare(clk_get_parent(host->src_clk_cg));
 	sdr_set_field(host->base + MSDC_CFG, MSDC_CFG_CKMOD | MSDC_CFG_CKDIV,
-			(mode << 8) | (div % 0xff));
-	sdr_set_bits(host->base + MSDC_CFG, MSDC_CFG_CKPDN);
+			(mode << 12) | div);
+	if (host->src_clk_cg)
+		clk_prepare_enable(host->src_clk_cg);
+	else
+		clk_prepare_enable(clk_get_parent(host->src_clk_cg));
 	while (!(readl(host->base + MSDC_CFG) & MSDC_CFG_CKSTB))
 		cpu_relax();
+	sdr_set_bits(host->base + MSDC_CFG, MSDC_CFG_CKPDN);
 	host->sclk = sclk;
 	host->mclk = hz;
 	host->timing = timing;
@@ -649,14 +330,19 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 	spin_unlock_irqrestore(&host->irqlock, irq_flags);
 
 	if (host->sclk <= 52000000) {
-		sdr_set_field(host->base + MSDC_PATCH_BIT1, MSDC_PATCH_BIT1_WRDAT_CRCS, 0x1);
-		sdr_set_field(host->base + MSDC_PATCH_BIT1, MSDC_PATCH_BIT1_CMD_RSP, 0x1);
+		sdr_set_field(host->base + MSDC_PATCH_BIT1,
+			      MSDC_PB1_WRDAT_CRCS_TA_CNTR, 0x1);
+		sdr_set_field(host->base + MSDC_PATCH_BIT1,
+			      MSDC_PB1_CMD_RSP_TA_CNTR, 0x1);
 	} else {
-		sdr_set_field(host->base + MSDC_PATCH_BIT1, MSDC_PATCH_BIT1_WRDAT_CRCS, 0x2);
-		sdr_set_field(host->base + MSDC_PATCH_BIT1, MSDC_PATCH_BIT1_CMD_RSP, 0x4);
+		sdr_set_field(host->base + MSDC_PATCH_BIT1,
+			      MSDC_PB1_WRDAT_CRCS_TA_CNTR, 0x2);
+		sdr_set_field(host->base + MSDC_PATCH_BIT1,
+			      MSDC_PB1_CMD_RSP_TA_CNTR, 0x4);
 	}
 
-	dev_err(host->dev, "sclk: %d, timing: %d hz:%d\n", host->sclk, timing, hz);
+	dev_info(host->dev, "sclk: %d, timing: %d hz:%d cfg:0x%x\n", host->sclk,
+			   timing, hz, readl(host->base + MSDC_CFG));
 }
 
 static inline u32 msdc_cmd_find_resp(struct msdc_host *host,
@@ -708,9 +394,12 @@ static inline u32 msdc_cmd_prepare_raw_cmd(struct msdc_host *host,
 		rawcmd |= (0x1 << 30);
 	else if (opcode == SD_APP_SEND_SCR ||
 		 opcode == SD_APP_SEND_NUM_WR_BLKS ||
-		 (opcode == SD_SWITCH && mmc_cmd_type(cmd) == MMC_CMD_ADTC) ||
-		 (opcode == SD_APP_SD_STATUS && mmc_cmd_type(cmd) == MMC_CMD_ADTC) ||
-		 (opcode == MMC_SEND_EXT_CSD && mmc_cmd_type(cmd) == MMC_CMD_ADTC))
+		 (opcode == SD_SWITCH &&
+		 mmc_cmd_type(cmd) == MMC_CMD_ADTC) ||
+		 (opcode == SD_APP_SD_STATUS &&
+		 mmc_cmd_type(cmd) == MMC_CMD_ADTC) ||
+		 (opcode == MMC_SEND_EXT_CSD &&
+		 mmc_cmd_type(cmd) == MMC_CMD_ADTC))
 		rawcmd |= (0x1 << 11);
 
 	if (cmd->data) {
@@ -783,7 +472,7 @@ static int msdc_auto_cmd_done(struct msdc_host *host, int events,
 			cmd->error = -ETIMEDOUT;
 			host->error |= REQ_STOP_TMO;
 		}
-		dev_err(host->dev,
+		dev_info(host->dev,
 			"%s: AUTO_CMD%d arg=%08X; rsp %08X; cmd_error=%d\n",
 			__func__, cmd->opcode, cmd->arg, rsp[0], cmd->error);
 	}
@@ -794,8 +483,8 @@ static void msdc_track_cmd_data(struct msdc_host *host,
 				struct mmc_command *cmd, struct mmc_data *data)
 {
 	if (host->error)
-		dev_dbg(host->dev, "%s: cmd=%d arg=%08X; host->error=0x%08X\n",
-			__func__, cmd->opcode, cmd->arg, host->error);
+		dev_info(host->dev, "cmd=%d arg=%08X; err=0x%08X\n",
+			 cmd->opcode, cmd->arg, host->error);
 }
 
 static void msdc_request_done(struct msdc_host *host, struct mmc_request *mrq)
@@ -816,10 +505,9 @@ static void msdc_request_done(struct msdc_host *host, struct mmc_request *mrq)
 	if (mrq->data)
 		msdc_unprepare_data(host, mrq);
 	mmc_request_done(host->mmc, mrq);
+#ifndef SUPPORT_LEGACY_SDIO
 	msdc_recheck_sdio_irq(host);
-
-	pm_runtime_mark_last_busy(host->dev);
-	pm_runtime_put_autosuspend(host->dev);
+#endif
 }
 
 /* returns true if command is fully handled; returns false otherwise */
@@ -882,11 +570,11 @@ static bool msdc_cmd_done(struct msdc_host *host, int events,
 			host->error |= REQ_CMD_TMO;
 		}
 	}
-	if (cmd->error)
+	if (cmd->error && cmd->opcode != MMC_SEND_TUNING_BLOCK)
 		dev_dbg(host->dev,
-				"%s: cmd=%d arg=%08X; rsp %08X; cmd_error=%d\n",
-				__func__, cmd->opcode, cmd->arg, rsp[0],
-				cmd->error);
+			"%s: cmd=%d arg=%08X; rsp %08X; cmd_error=%d\n",
+			__func__, cmd->opcode, cmd->arg, rsp[0],
+			cmd->error);
 
 	msdc_cmd_next(host, mrq, cmd);
 	return true;
@@ -925,7 +613,7 @@ static inline bool msdc_cmd_is_ready(struct msdc_host *host,
 	}
 
 	if (readl(host->base + SDC_STS) & SDC_STS_CMDBUSY) {
-		dev_err(host->dev, "CMD bus busy detected\n");
+		dev_info(host->dev, "CMD bus busy detected\n");
 		host->error |= REQ_CMD_BUSY;
 		msdc_cmd_done(host, MSDC_INT_CMDTMO, mrq, cmd);
 		return false;
@@ -954,8 +642,8 @@ static inline bool msdc_cmd_is_ready(struct msdc_host *host,
 			 * leaves the program state.
 			 */
 			if (count > 1000 || time_after(jiffies, tmo)) {
-				pr_err("%s: Card stuck in programming state! %s\n",
-				       mmc_hostname(host->mmc), __func__);
+				pr_info("%s: Card is in programming state!\n",
+				       mmc_hostname(host->mmc));
 				host->error |= REQ_CMD_BUSY;
 				msdc_cmd_done(host, MSDC_INT_CMDTMO, mrq, cmd);
 				return false;
@@ -980,7 +668,8 @@ static void msdc_start_command(struct msdc_host *host,
 
 	if ((readl(host->base + MSDC_FIFOCS) & MSDC_FIFOCS_TXCNT) >> 16 ||
 	    readl(host->base + MSDC_FIFOCS) & MSDC_FIFOCS_RXCNT) {
-		dev_err(host->dev, "TX/RX FIFO non-empty before start of IO. Reset\n");
+		dev_info(host->dev,
+			"TX/RX FIFO non-empty before start of IO. Reset\n");
 		msdc_reset_hw(host);
 	}
 
@@ -993,6 +682,7 @@ static void msdc_start_command(struct msdc_host *host,
 
 	writel(cmd->arg, host->base + SDC_ARG);
 	writel(rawcmd, host->base + SDC_CMD);
+
 }
 
 static void msdc_cmd_next(struct msdc_host *host,
@@ -1020,8 +710,6 @@ static void msdc_ops_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	WARN_ON(host->mrq);
 	host->mrq = mrq;
 
-	pm_runtime_get_sync(host->dev);
-
 	if (mrq->data)
 		msdc_prepare_data(host, mrq);
 
@@ -1036,8 +724,7 @@ static void msdc_ops_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		msdc_start_command(host, mrq, mrq->cmd);
 }
 
-static void msdc_pre_req(struct mmc_host *mmc, struct mmc_request *mrq,
-		bool is_first_req)
+static void msdc_pre_req(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct msdc_host *host = mmc_priv(mmc);
 	struct mmc_data *data = mrq->data;
@@ -1050,7 +737,7 @@ static void msdc_pre_req(struct mmc_host *mmc, struct mmc_request *mrq,
 }
 
 static void msdc_post_req(struct mmc_host *mmc, struct mmc_request *mrq,
-		int err)
+		 int err)
 {
 	struct msdc_host *host = mmc_priv(mmc);
 	struct mmc_data *data;
@@ -1097,7 +784,8 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
 	if (check_data || (stop && stop->error)) {
 		dev_dbg(host->dev, "DMA status: 0x%8X\n",
 				readl(host->base + MSDC_DMA_CFG));
-		sdr_set_field(host->base + MSDC_DMA_CTRL, MSDC_DMA_CTRL_STOP, 1);
+		sdr_set_field(host->base + MSDC_DMA_CTRL,
+			      MSDC_DMA_CTRL_STOP, 1);
 		while (readl(host->base + MSDC_DMA_CFG) & MSDC_DMA_CFG_STS)
 			cpu_relax();
 
@@ -1110,7 +798,7 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
 		if ((events & MSDC_INT_XFER_COMPL) && (!stop || !stop->error)) {
 			data->bytes_xfered = data->blocks * data->blksz;
 		} else {
-			dev_dbg(host->dev, "interrupt events: %x\n", events);
+			dev_info(host->dev, "interrupt events: %x\n", events);
 			msdc_reset_hw(host);
 			host->error |= REQ_DAT_ERR;
 			data->bytes_xfered = 0;
@@ -1120,10 +808,12 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
 			else if (events & MSDC_INT_DATCRCERR)
 				data->error = -EILSEQ;
 
-			dev_dbg(host->dev, "%s: cmd=%d; blocks=%d",
+			if (mrq->cmd->opcode != MMC_SEND_TUNING_BLOCK) {
+				dev_info(host->dev, "%s: cmd=%d; blocks=%d",
 				__func__, mrq->cmd->opcode, data->blocks);
-			dev_dbg(host->dev, "data_error=%d xfer_size=%d\n",
-				(int)data->error, data->bytes_xfered);
+				dev_info(host->dev, "data_error=%d xfer_size=%d\n",
+					(int)data->error, data->bytes_xfered);
+			}
 		}
 
 		msdc_data_xfer_next(host, mrq, data);
@@ -1158,7 +848,6 @@ static void msdc_set_buswidth(struct msdc_host *host, u32 width)
 static int msdc_ops_switch_volt(struct mmc_host *mmc, struct mmc_ios *ios)
 {
 
-#if 0
 	struct msdc_host *host = mmc_priv(mmc);
 	int min_uv, max_uv;
 	int ret = 0;
@@ -1171,7 +860,7 @@ static int msdc_ops_switch_volt(struct mmc_host *mmc, struct mmc_ios *ios)
 			min_uv = 1800000;
 			max_uv = 1800000;
 		} else {
-			dev_err(host->dev, "Unsupported signal voltage!\n");
+			dev_info(host->dev, "Unsupported signal voltage!\n");
 			return -EINVAL;
 		}
 
@@ -1180,16 +869,18 @@ static int msdc_ops_switch_volt(struct mmc_host *mmc, struct mmc_ios *ios)
 			dev_dbg(host->dev, "Regulator set error %d (%d)\n",
 				ret, ios->signal_voltage);
 		} else {
-			/* Apply different pinctrl settings for different signal voltage */
+			/* Apply different pinctrl settings
+			 * for different signal voltage
+			 */
 			if (ios->signal_voltage == MMC_SIGNAL_VOLTAGE_180)
-				pinctrl_select_state(host->pinctrl, host->pins_uhs);
+				pinctrl_select_state(host->pinctrl,
+						     host->pins_uhs);
 			else
-				pinctrl_select_state(host->pinctrl, host->pins_default);
+				pinctrl_select_state(host->pinctrl,
+						     host->pins_default);
 		}
 	}
 	return ret;
-#endif
-	return 0;
 }
 
 static void msdc_request_timeout(struct work_struct *work)
@@ -1198,18 +889,18 @@ static void msdc_request_timeout(struct work_struct *work)
 			req_timeout.work);
 
 	/* simulate HW timeout status */
-	dev_err(host->dev, "%s: aborting cmd/data/mrq\n", __func__);
+	dev_info(host->dev, "%s: aborting cmd/data/mrq\n", __func__);
 	if (host->mrq) {
-		dev_err(host->dev, "%s: aborting mrq=%p cmd=%d\n", __func__,
+		dev_info(host->dev, "%s: aborting mrq=%p cmd=%d\n", __func__,
 				host->mrq, host->mrq->cmd->opcode);
 		if (host->cmd) {
-			dev_err(host->dev,
+			dev_info(host->dev,
 				"%s: aborting cmd=%d, arg=0x%x\n", __func__,
 				host->cmd->opcode, host->cmd->arg);
 			msdc_cmd_done(host, MSDC_INT_CMDTMO, host->mrq,
-					host->cmd);
+				      host->cmd);
 		} else if (host->data) {
-			dev_err(host->dev,
+			dev_info(host->dev,
 				"%s: aborting data: cmd%d; %d blocks\n",
 				    __func__, host->mrq->cmd->opcode,
 				    host->data->blocks);
@@ -1249,9 +940,9 @@ static irqreturn_t msdc_irq(int irq, void *dev_id)
 		return IRQ_HANDLED;
 
 	if (!mrq) {
-		dev_err(host->dev,
-				"%s: MRQ=NULL; events=%08X; event_mask=%08X\n",
-				__func__, events, event_mask);
+		dev_info(host->dev,
+			"%s: MRQ=NULL; events=%08X; event_mask=%08X\n",
+			__func__, events, event_mask);
 		WARN_ON(1);
 		return IRQ_HANDLED;
 	}
@@ -1264,15 +955,13 @@ static irqreturn_t msdc_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static struct msdc_host *sdio_host;
 
-static struct msdc_host *wifi_hos;
-
-static void msdc_status_notify_cb(int card_present, void *dev_id)
+static void sdio_status_notify_cb(int card_present, void *dev_id)
 {
 	struct msdc_host *host = (struct msdc_host *)dev_id;
 
-	pr_info("%s: card_present %d\n", mmc_hostname(host->mmc),
-	       card_present);
+	pr_info("%s: card_present %d\n", mmc_hostname(host->mmc), card_present);
 
 	if (card_present == 1) {
 		host->mmc->rescan_disable = 0;
@@ -1283,13 +972,14 @@ static void msdc_status_notify_cb(int card_present, void *dev_id)
 	}
 }
 
-void msdc_mmc_card_detect(int card_present)
+void sdio_card_detect(int card_present)
 {
-	pr_info("%s: enter\n", __func__);
-	if (wifi_host)
-		msdc_status_notify_cb(card_present, wifi_host);
+	pr_info("%s: enter present:%d\n", __func__, card_present);
+	if (sdio_host)
+		sdio_status_notify_cb(card_present, sdio_host);
+
 }
-EXPORT_SYMBOL(smdc_mmc_card_detect);
+EXPORT_SYMBOL(sdio_card_detect);
 
 static void msdc_init_hw(struct msdc_host *host)
 {
@@ -1297,7 +987,7 @@ static void msdc_init_hw(struct msdc_host *host)
 	unsigned long flags;
 
 	/* Configure to MMC/SD mode, clock free running */
-	sdr_set_bits(host->base + MSDC_CFG, MSDC_CFG_MODE | MSDC_CFG_CKPDN);
+	sdr_set_bits(host->base + MSDC_CFG, MSDC_CFG_MODE);
 
 	/* Reset */
 	msdc_reset_hw(host);
@@ -1314,9 +1004,15 @@ static void msdc_init_hw(struct msdc_host *host)
 
 	writel(0, host->base + MSDC_IOCON);
 	sdr_set_field(host->base + MSDC_IOCON, MSDC_IOCON_DDLSEL, 0);
-	writel(0x403c0046, host->base + MSDC_PATCH_BIT);
-	sdr_set_field(host->base + MSDC_PATCH_BIT, MSDC_CKGEN_MSDC_DLY_SEL, 1);
+	writel(0x403c0046, host->base + MSDC_PATCH_BIT0);
+	sdr_set_field(host->base + MSDC_PATCH_BIT0, MSDC_CKGEN_MSDC_DLY_SEL, 1);
 	writel(0xffff0089, host->base + MSDC_PATCH_BIT1);
+
+	/* For SDIO3.0+ IP, this bit should be set to 0 */
+	if (host->dev_comp->v3_plus)
+		sdr_clr_bits(host->base + MSDC_PATCH_BIT1,
+			MSDC_PB1_SINGLE_BURST);
+
 	sdr_set_bits(host->base + EMMC50_CFG0, EMMC50_CFG_CFCSTS_SEL);
 
 	/* Configure to enable SDIO mode.
@@ -1333,7 +1029,8 @@ static void msdc_init_hw(struct msdc_host *host)
 	sdr_set_field(host->base + SDC_CFG, SDC_CFG_DTOC, 3);
 
 	host->def_tune_para.iocon = readl(host->base + MSDC_IOCON);
-	host->def_tune_para.pad_tune = readl(host->base + MSDC_PAD_TUNE);
+	host->def_tune_para.pad_tune0 = readl(host->base + MSDC_PAD_TUNE0);
+	host->def_tune_para.pad_tune1 = readl(host->base + MSDC_PAD_TUNE1);
 	dev_dbg(host->dev, "init hardware done!");
 }
 
@@ -1373,13 +1070,12 @@ static void msdc_init_gpd_bd(struct msdc_host *host, struct msdc_dma *dma)
 
 static void msdc_ops_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
+	int ret;
 	struct msdc_host *host = mmc_priv(mmc);
 
-	pm_runtime_get_sync(host->dev);
 	msdc_set_buswidth(host, ios->bus_width);
 
 	/* Suspend/Resume will do power off/on */
-#if 0
 	switch (ios->power_mode) {
 	case MMC_POWER_UP:
 		if (!IS_ERR(mmc->supply.vmmc)) {
@@ -1387,7 +1083,7 @@ static void msdc_ops_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 			ret = mmc_regulator_set_ocr(mmc, mmc->supply.vmmc,
 					ios->vdd);
 			if (ret) {
-				dev_err(host->dev, "Failed to set vmmc power!\n");
+				dev_info(host->dev, "Failed to set vmmc power!\n");
 				return;
 			}
 		}
@@ -1396,13 +1092,13 @@ static void msdc_ops_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		if (!IS_ERR(mmc->supply.vqmmc) && !host->vqmmc_enabled) {
 			ret = regulator_enable(mmc->supply.vqmmc);
 			if (ret)
-				dev_err(host->dev, "Failed to set vqmmc power!\n");
+				dev_info(host->dev, "Failed to set vqmmc power!\n");
 			else
 				host->vqmmc_enabled = true;
 		}
 		break;
 	case MMC_POWER_OFF:
-/* power always on */
+		/* power always on */
 		if (!IS_ERR(mmc->supply.vmmc))
 			mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, 0);
 
@@ -1414,133 +1110,322 @@ static void msdc_ops_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	default:
 		break;
 	}
-#endif
 
 	if (host->mclk != ios->clock || host->timing != ios->timing)
 		msdc_set_mclk(host, ios->timing, ios->clock);
-	pm_runtime_mark_last_busy(host->dev);
-	pm_runtime_put_autosuspend(host->dev);
 }
 
+/***************  SDIO AUTOK  ******************/
+#define MSDC_FIFO_THD_1K                (1024)
+#define TUNE_TX_CNT                     (100)
+#define MSDC_FIFO_SZ			(128)
+/*#define TUNE_DATA_TX_ADDR               (0x358000)*/
+/* Use negative value to represent address from end of device,
+ * 33 blocks used by SGPT at end of device,
+ * 32768 blocks used by flashinfo immediate before SGPT
+ */
+#define TUNE_DATA_TX_ADDR               (-33-32768)
+#define CMDQ
+#define AUTOK_LATCH_CK_EMMC_TUNE_TIMES  (10) /* 5.0IP eMMC 1KB fifo ZIZE */
+#define AUTOK_LATCH_CK_SDIO_TUNE_TIMES  (20)  /* 4.5IP SDIO 128fifo ZIZE */
+#define AUTOK_LATCH_CK_SD_TUNE_TIMES    (3)  /* 4.5IP SD 128fifo ZIZE */
+#define AUTOK_CMD_TIMES                 (20)
+#define AUTOK_TUNING_INACCURACY         (3)  /* scan result may find xxxooxxx */
+#define AUTOK_MARGIN_THOLD              (5)
+#define AUTOK_BD_WIDTH_REF              (3)
+
+#define AUTOK_READ                      0
+#define AUTOK_WRITE                     1
+
+#define AUTOK_FINAL_CKGEN_SEL           (0)
+#define SCALE_TA_CNTR                   (8)
+#define SCALE_CMD_RSP_TA_CNTR           (8)
+#define SCALE_WDAT_CRC_TA_CNTR          (8)
+#define SCALE_INT_DAT_LATCH_CK_SEL      (8)
+#define SCALE_INTERNAL_DLY_CNTR         (32)
+#define SCALE_PAD_DAT_DLY_CNTR          (32)
+
+#define TUNING_INACCURACY (2)
+
+/* autok platform specific setting */
+#define AUTOK_CKGEN_VALUE                       (0)
+#define AUTOK_CMD_LATCH_EN_HS400_VALUE          (3)
+#define AUTOK_CMD_LATCH_EN_NON_HS400_VALUE      (2)
+#define AUTOK_CRC_LATCH_EN_HS400_VALUE          (0)
+#define AUTOK_CRC_LATCH_EN_NON_HS400_VALUE      (2)
+#define AUTOK_LATCH_CK_VALUE                    (1)
+#define AUTOK_CMD_TA_VALUE                      (0)
+#define AUTOK_CRC_TA_VALUE                      (0)
+#define AUTOK_CRC_MA_VALUE                      (1)
+#define AUTOK_BUSY_MA_VALUE                     (1)
+
+#define AUTOK_FAIL		-1
+
 #define E_RESULT_PASS     (0)
-#define E_RESULT_CMD_TMO  (1 << 0)
-#define E_RESULT_RSP_CRC  (1 << 1)
-#define E_RESULT_DAT_CRC  (1 << 2)
-#define E_RESULT_DAT_TMO  (1 << 3)
-#define E_RESULT_W_CRC    (1 << 4)
-#define E_RESULT_ERR      (1 << 5)
-#define E_RESULT_START    (1 << 6)
-#define E_RESULT_PW_SMALL (1 << 7)
-#define E_RESULT_KEEP_OLD (1 << 8)
+#define E_RESULT_CMD_TMO  (1<<0)
+#define E_RESULT_RSP_CRC  (1<<1)
+#define E_RESULT_DAT_CRC  (1<<2)
+#define E_RESULT_DAT_TMO  (1<<3)
+#define E_RESULT_W_CRC    (1<<4)
+#define E_RESULT_ERR      (1<<5)
+#define E_RESULT_START    (1<<6)
+#define E_RESULT_PW_SMALL (1<<7)
+#define E_RESULT_KEEP_OLD (1<<8)
+#define E_RESULT_CMP_ERR  (1<<9)
+#define E_RESULT_FATAL_ERR  (1<<10)
 
-#define AUTOK_CMD_TIMES			10
-#define AUTOK_TUNING_INACCURACY		2
-#define AUTOK_MARGIN_THOLD		3
-#define AUTOK_READ			0
-#define AUTOK_WRITE			1
-#define AUTOK_DBG_OFF			0
-#define AUTOK_DBG_ERROR			1
-#define AUTOK_DBG_RES			2
-#define AUTOK_DBG_WARN			3
-#define AUTOK_DBG_TRACE			4
-#define AUTOK_DBG_LOUD			5
-unsigned int autok_debug_level = AUTOK_DBG_LOUD;
+#define E_RESULT_MAX
 
-#define AUTOK_DBGPRINT(_level, _fmt ...) \
-({\
-	if (autok_debug_level >= _level) {\
-		printk(_fmt);\
-	} \
+#ifndef NULL
+#define NULL                0
+#endif
+#ifndef TRUE
+#define TRUE                (0 == 0)
+#endif
+#ifndef FALSE
+#define FALSE               (0 != 0)
+#endif
+
+#define ATK_OFF                             0
+#define ATK_ERROR                           1
+#define ATK_RES                             2
+#define ATK_WARN                            3
+#define ATK_TRACE                           4
+#define ATK_LOUD                            5
+
+static unsigned int autok_debug_level = ATK_RES;
+
+#define ATK_DBG(_level, _fmt ...)	   \
+({                                         \
+	if (autok_debug_level >= _level) { \
+		pr_info(_fmt);              \
+	}                                  \
 })
 
-#define AUTOK_RAWPRINT(_fmt ...) ({\
-	printk(_fmt);\
+#define ATK_ERR(_fmt ...)           \
+({                                         \
+	pr_info(_fmt);                      \
 })
 
 enum AUTOK_PARAM {
-	/*
-	 * command response sample selection (MSDC_SMPL_RISING,
-	 * MSDC_SMPL_FALLING)
+	/* command response sample selection
+	 * (MSDC_SMPL_RISING, MSDC_SMPL_FALLING)
 	 */
 	CMD_EDGE,
-	/* read data sample selection (MSDC_SMPL_RISING, MSDC_SMPL_FALLING)*/
+
+	/* read data sample selection (MSDC_SMPL_RISING, MSDC_SMPL_FALLING) */
 	RDATA_EDGE,
-	/* write data sample selection (MSDC_SMPL_RISING, MSDC_SMPL_FALLING)*/
-	WDATA_EDGE,
-	/*
-	 * [Data Tune]CMD Pad RX Delay Line Control. This register is used
-	 * to fine-tune CMD pad macro respose latch timing. Total 32
-	 * stages[Data Tune]
+
+	/* read data async fifo out edge select */
+	RD_FIFO_EDGE,
+
+	/* write data crc status async fifo out edge select */
+	WD_FIFO_EDGE,
+
+	/* [Data Tune]CMD Pad RX Delay Line1 Control.
+	 * This register is used to fine-tune CMD pad macro respose
+	 * latch timing. Total 32 stages[Data Tune]
 	 */
-	CMD_RD_D_DLY,
-	/*
-	 * [Data Tune]DAT0~3 Pad RX Delay Line Control (for MSDC RD), Total 32
-	 * stages [Data Tune]
+	CMD_RD_D_DLY1,
+
+	/* [Data Tune]CMD Pad RX Delay Line1 Sel-> delay cell1 enable */
+	CMD_RD_D_DLY1_SEL,
+
+	/* [Data Tune]CMD Pad RX Delay Line2 Control. This register is used to
+	 * fine-tune CMD pad macro respose latch timing.
+	 * Total 32 stages[Data Tune]
 	 */
-	DAT0_RD_D_DLY,
-	DAT1_RD_D_DLY,
-	DAT2_RD_D_DLY,
-	DAT3_RD_D_DLY,
-	/* [Clk Tune]Rx Delay Line Control. Total 32 stages [CLK Tune]*/
-	DAT_RD_DLY,
-	/*
-	 * [INT Dly]Write Data Status && CMD Response Internal Delay Line Control.
-	 * This register is used to fine-tune write status phase latched by
-	 * MSDC internal clock. Total 32 stages
+	CMD_RD_D_DLY2,
+
+	/* [Data Tune]CMD Pad RX Delay Line1 Sel-> delay cell2 enable */
+	CMD_RD_D_DLY2_SEL,
+
+	/* [Data Tune]DAT Pad RX Delay Line1 Control (for MSDC RD),
+	 * Total 32 stages [Data Tune]
 	 */
-	DAT_WRD_DLY,
-	CMD_RESP_RD_DLY,
-	/* CKBUF in CKGEN Delay Selection. Total 32 stages*/
-	CKGEN_MSDC_DLY_SEL,
-	/*
-	 * Internal MSDC clock phase selection. Total 8 stages, each stage can
-	 * delay 1 clock period of msdc_src_ck
+	DAT_RD_D_DLY1,
+
+	/* [Data Tune]DAT Pad RX Delay Line1 Sel-> delay cell1 enable */
+	DAT_RD_D_DLY1_SEL,
+
+	/* [Data Tune]DAT Pad RX Delay Line2 Control (for MSDC RD),
+	 * Total 32 stages [Data Tune]
+	 */
+	DAT_RD_D_DLY2,
+
+	/* [Data Tune]DAT Pad RX Delay Line2 Sel-> delay cell2 enable */
+	DAT_RD_D_DLY2_SEL,
+
+	/* Internal MSDC clock phase selection. Total 8 stages,
+	 * each stage can delay 1 clock period of msdc_src_ck
 	 */
 	INT_DAT_LATCH_CK,
-	/*THE FOLLOWING PARAM WILL BE HARD-CODE FOR REAL CASE*/
+
+	/* DS Pad Z clk delay count, range: 0~63, Z dly1(0~31)+Z dly2(0~31) */
+	EMMC50_DS_Z_DLY1,
+
+	/* DS Pad Z clk del sel: [dly2_sel:dly1_sel]
+	 * -> [0,1]: dly1 enable [1,2]:dl2 & dly1 enable ,else :no dly enable
+	 */
+	EMMC50_DS_Z_DLY1_SEL,
+
+	/* DS Pad Z clk delay count, range: 0~63, Z dly1(0~31)+Z dly2(0~31) */
+	EMMC50_DS_Z_DLY2,
+
+	/* DS Pad Z clk del sel: [dly2_sel:dly1_sel]
+	 *  -> [0,1]: dly1 enable [1,2]:dl2 & dly1 enable ,else :no dly enable
+	 */
+	EMMC50_DS_Z_DLY2_SEL,
+
+	/* DS Pad Z_DLY clk delay count, range: 0~31 */
+	EMMC50_DS_ZDLY_DLY,
 	TUNING_PARAM_COUNT,
-	/*
-	 * CMD response turn around period. The turn around cycle =
-	 * CMD_RSP_TA_CNTR + 2, Only for USH104 mode, this register should be
+
+	/* Data line rising/falling latch fine tune selection
+	 * in read transaction.
+	 * 1'b0: All data line share one value
+	 *       indicated by MSDC_IOCON.R_D_SMPL.
+	 * 1'b1: Each data line has its own  selection value
+	 *       indicated by Data line (x): MSDC_IOCON.R_D(x)_SMPL
+	 */
+	READ_DATA_SMPL_SEL,
+
+	/* Data line rising/falling latch fine tune selection
+	 * in write transaction.
+	 * 1'b0: All data line share one value indicated
+	 *       by MSDC_IOCON.W_D_SMPL.
+	 * 1'b1: Each data line has its own selection value indicated
+	 *       by Data line (x): MSDC_IOCON.W_D(x)_SMPL
+	 */
+	WRITE_DATA_SMPL_SEL,
+
+	/* Data line delay line fine tune selection.
+	 * 1'b0: All data line share one delay
+	 *       selection value indicated by PAD_TUNE.PAD_DAT_RD_RXDLY.
+	 * 1'b1: Each data line has its own delay selection value indicated by
+	 *       Data line (x): DAT_RD_DLY(x).DAT0_RD_DLY
+	 */
+	DATA_DLYLINE_SEL,
+
+	/* [Data Tune]CMD & DATA Pin tune Data Selection[Data Tune Sel] */
+	MSDC_DAT_TUNE_SEL,
+
+	/* [Async_FIFO Mode Sel For Write Path] */
+	MSDC_WCRC_ASYNC_FIFO_SEL,
+
+	/* [Async_FIFO Mode Sel For CMD Path] */
+	MSDC_RESP_ASYNC_FIFO_SEL,
+
+	/* Write Path Mux for emmc50 function & emmc45 function ,
+	 * Only emmc50 design valid,[1-eMMC50, 0-eMMC45]
+	 */
+	EMMC50_WDATA_MUX_EN,
+
+	/* CMD Path Mux for emmc50 function & emmc45 function ,
+	 * Only emmc50 design valid,[1-eMMC50, 0-eMMC45]
+	 */
+	EMMC50_CMD_MUX_EN,
+
+	/* write data crc status async fifo output edge select */
+	EMMC50_WDATA_EDGE,
+
+	/* CKBUF in CKGEN Delay Selection. Total 32 stages */
+	CKGEN_MSDC_DLY_SEL,
+
+	/* CMD response turn around period.
+	 * The turn around cycle = CMD_RSP_TA_CNTR + 2,
+	 * Only for USH104 mode, this register should be
 	 * set to 0 in non-UHS104 mode
 	 */
 	CMD_RSP_TA_CNTR,
-	/* Write data and CRC status turn around period. The turn around cycle
-	 * = WRDAT_CRCS_TA_CNTR + 2, Only for USH104 mode, this register
-	 * should be set to 0 in non-UHS104 mode
+
+	/* Write data and CRC status turn around period.
+	 * The turn around cycle = WRDAT_CRCS_TA_CNTR + 2,
+	 * Only for USH104 mode,  this register should be
+	 * set to 0 in non-UHS104 mode
 	 */
 	WRDAT_CRCS_TA_CNTR,
-	/*
-	 * Data line rising/falling latch fine tune selection in read
-	 * transaction. 1'b0: All data line share one value indicated by
-	 * MSDC_IOCON.R_D_SMPL. 1'b1: Each data line has its own selection
-	 * value indicated by Data line (x): MSDC_IOCON.R_D(x)_SMPL
-	 */
-	READ_DATA_SMPL_SEL,
-	/*
-	 * Data line rising/falling latch  fine tune selection in write
-	 * transaction. 1'b0: All data line share one value indicated by
-	 * MSDC_IOCON.W_D_SMPL. 1'b1: Each data line has its own selection
-	 * value indicated by Data line (x): MSDC_IOCON.W_D(x)_SMPL
-	 */
-	WRITE_DATA_SMPL_SEL,
-	/*
-	 * Data line delay line fine tune selection. 1'b0: All data line
-	 * share one delay selection value indicated by PAD_TUNE.
-	 * PAD_DAT_RD_RXDLY. 1'b1: Each data line has its own delay
-	 * selection value indicated by Data line (x): DAT_RD_DLY(x).
-	 *  DAT0_RD_DLY
-	 */
-	DATA_DLYLINE_SEL,
-	/* [Data Tune]CMD & DATA Pin tune Data Selection[Data Tune Sel] */
-	MSDC_DAT_TUNE_SEL,
-	/*
-	 * CLK Pad TX Delay Control. This register is used to add delay to
-	 * CLK phase. Total 32 stages
+
+	/* CLK Pad TX Delay Control.
+	 * This register is used to add delay to CLK phase.
+	 * Total 32 stages
 	 */
 	PAD_CLK_TXDLY,
 	TOTAL_PARAM_COUNT
 };
+
+/*
+ *********************************************************
+ * Feature  Control Defination                           *
+ *********************************************************
+ */
+#define AUTOK_OFFLINE_TUNE_TX_ENABLE 1
+#define AUTOK_OFFLINE_TUNE_ENABLE 0
+#define HS400_OFFLINE_TUNE_ENABLE 0
+#define HS200_OFFLINE_TUNE_ENABLE 0
+#define HS400_DSCLK_NEED_TUNING   0
+#define AUTOK_PARAM_DUMP_ENABLE   0
+/* #define CHIP_DENALI_3_DAT_TUNE */
+/* #define SDIO_TUNE_WRITE_PATH */
+
+enum TUNE_TYPE {
+	TUNE_CMD = 0,
+	TUNE_DATA,
+	TUNE_LATCH_CK,
+};
+
+#define autok_msdc_retry(expr, retry, cnt) \
+	do { \
+		int backup = cnt; \
+		while (retry) { \
+			if (!(expr)) \
+				break; \
+			if (cnt-- == 0) { \
+				retry--; cnt = backup; \
+			} \
+		} \
+	WARN_ON(retry == 0); \
+} while (0)
+
+#define autok_msdc_reset() \
+	do { \
+		int retry = 3, cnt = 1000; \
+		sdr_set_bits(base + MSDC_CFG, MSDC_CFG_RST); \
+		/* ensure reset operation be sequential  */ \
+		mb(); \
+		autok_msdc_retry(readl(base + MSDC_CFG) & \
+				 MSDC_CFG_RST, retry, cnt); \
+	} while (0)
+
+#define msdc_rxfifocnt() \
+	((readl(base + MSDC_FIFOCS) & MSDC_FIFOCS_RXCNT) >> 0)
+#define msdc_txfifocnt() \
+	((readl(base + MSDC_FIFOCS) & MSDC_FIFOCS_TXCNT) >> 16)
+
+#define wait_cond(cond, tmo, left) \
+	do { \
+		u32 t = tmo; \
+		while (1) { \
+			if ((cond) || (t == 0)) \
+				break; \
+			if (t > 0) { \
+				ndelay(1); \
+				t--; \
+			} \
+		} \
+		left = t; \
+	} while (0)
+
+
+#define msdc_clear_fifo() \
+	do { \
+		int retry = 5, cnt = 1000; \
+		sdr_set_bits(base + MSDC_FIFOCS, MSDC_FIFOCS_CLR); \
+		/* ensure fifo clear operation be sequential  */ \
+		mb(); \
+		autok_msdc_retry(readl(base + MSDC_FIFOCS) & MSDC_FIFOCS_CLR, \
+				 retry, cnt); \
+	} while (0)
 
 struct AUTOK_PARAM_RANGE {
 	unsigned int start;
@@ -1552,223 +1437,377 @@ struct AUTOK_PARAM_INFO {
 	char *param_name;
 };
 
-struct AUTOK_SCAN_RES {
-	bool boud_info_valid;
-	unsigned int bound_ckg;
-	unsigned int bound_width;
+struct BOUND_INFO {
 	unsigned int Bound_Start;
 	unsigned int Bound_End;
-	unsigned int bound_edge;
+	unsigned int Bound_width;
+	bool is_fullbound;
+};
+
+#define BD_MAX_CNT 4	/* Max Allowed Boundary Number */
+struct AUTOK_SCAN_RES {
+	/* Bound info record, currently only allow max to 2 bounds exist,
+	 * but in extreme case, may have 4 bounds
+	 */
+	struct BOUND_INFO bd_info[BD_MAX_CNT];
+	/* Bound cnt record, must be in rang [0,3] */
+	unsigned int bd_cnt;
+	/* Full boundary cnt record */
+	unsigned int fbd_cnt;
 };
 
 struct AUTOK_REF_INFO {
-	struct AUTOK_SCAN_RES bound_int;
-	struct AUTOK_SCAN_RES bound_pad;
-	struct AUTOK_SCAN_RES bound_rd;
-	struct AUTOK_SCAN_RES bound_wr;
-	unsigned int bound_cycle;
+	/* inf[0] - rising edge res, inf[1] - falling edge res */
+	struct AUTOK_SCAN_RES scan_info[2];
+	/* optimised sample edge select */
+	unsigned int opt_edge_sel;
+	/* optimised dly cnt sel */
+	unsigned int opt_dly_cnt;
+	/* 1clk cycle equal how many delay cell cnt, if cycle_cnt is 0,
+	 * that is cannot calc cycle_cnt by current Boundary info
+	 */
+	unsigned int cycle_cnt;
 };
 
-enum AUTOK_RAWD_SCAN_STA_E {
-	RD_SCAN_NONE,
-	RD_SCAN_PAD_BOUND_S,
-	RD_SCAN_PAD_BOUND_E,
-	RD_SCAN_PAD_MARGIN,
-};
-#define AUTOK_FINAL_CKGEN_SEL		0
-#define SCALE_TA_CNTR			8
-#define SCALE_INT_DAT_LATCH_CK		8
+unsigned int do_autok_offline_tune_tx;
+u8 sdio_autok_res[TUNING_PARAM_COUNT];
 
-#define HIGH_VOLTAGE   1125000
-#define LOW_VOLTAGE    1000000
-#define CMD_TA_SDR104  4
-#define DATA_TA_SDR104 2
-#define CMD_TA_SDR50   1
-#define DATA_TA_SDR50  1
-static bool hv_autok_done;
-static bool lv_autok_done;
-static u8 sdio_hv_setting[TUNING_PARAM_COUNT];
-static u8 sdio_lv_setting[TUNING_PARAM_COUNT];
-
-const struct AUTOK_PARAM_INFO autok_param_info[] = {
+static const struct AUTOK_PARAM_INFO autok_param_info[] = {
 	{{0, 1}, "CMD_EDGE"},
+	/* async fifo mode Pad dat edge must fix to 0 */
 	{{0, 1}, "RDATA_EDGE"},
-	{{0, 1}, "WDATA_EDGE"},
-	{{0, 31}, "CMD_RD_D_DLY"},
-	{{0, 31}, "DAT0_RD_D_DLY"},
-	{{0, 31}, "DAT1_RD_D_DLY"},
-	{{0, 31}, "DAT2_RD_D_DLY"},
-	{{0, 31}, "DAT3_RD_D_DLY"},
+	{{0, 1}, "RD_FIFO_EDGE"},
+	{{0, 1}, "WD_FIFO_EDGE"},
 
-	{{0, 0}, "DAT_RD_DLY"},	/*fix to 0*/
-	{{0, 31}, "DAT_WRD_DLY"},	/*fix base on overlay*/
-	{{0, 31}, "CMD_RESP_RD_DLY"},
+	/* Cmd Pad Tune Data Phase */
+	{{0, 31}, "CMD_RD_D_DLY1"},
+	{{0, 1}, "CMD_RD_D_DLY1_SEL"},
+	{{0, 31}, "CMD_RD_D_DLY2"},
+	{{0, 1}, "CMD_RD_D_DLY2_SEL"},
+
+	/* Data Pad Tune Data Phase */
+	{{0, 31}, "DAT_RD_D_DLY1"},
+	{{0, 1}, "DAT_RD_D_DLY1_SEL"},
+	{{0, 31}, "DAT_RD_D_DLY2"},
+	{{0, 1}, "DAT_RD_D_DLY2_SEL"},
+
+	/* Latch CK Delay for data read when clock stop */
+	{{0, 7}, "INT_DAT_LATCH_CK"},
+
+	/* eMMC50 Related tuning param */
+	{{0, 31}, "EMMC50_DS_Z_DLY1"},
+	{{0, 1}, "EMMC50_DS_Z_DLY1_SEL"},
+	{{0, 31}, "EMMC50_DS_Z_DLY2"},
+	{{0, 1}, "EMMC50_DS_Z_DLY2_SEL"},
+	{{0, 31}, "EMMC50_DS_ZDLY_DLY"},
+
+	/* ================================================= */
+	/* Timming Related Mux & Common Setting Config */
+	/* all data line path share sample edge */
+	{{0, 1}, "READ_DATA_SMPL_SEL"},
+	{{0, 1}, "WRITE_DATA_SMPL_SEL"},
+	/* clK tune all data Line share dly */
+	{{0, 1}, "DATA_DLYLINE_SEL"},
+	/* data tune mode select */
+	{{0, 1}, "MSDC_WCRC_ASYNC_FIFO_SEL"},
+	/* data tune mode select */
+	{{0, 1}, "MSDC_RESP_ASYNC_FIFO_SEL"},
+
+	/* eMMC50 Function Mux */
+	/* write path switch to emmc45 */
+	{{0, 1}, "EMMC50_WDATA_MUX_EN"},
+	/* response path switch to emmc45 */
+	{{0, 1}, "EMMC50_CMD_MUX_EN"},
+	{{0, 1}, "EMMC50_WDATA_EDGE"},
+	/* Common Setting Config */
 	{{0, 31}, "CKGEN_MSDC_DLY_SEL"},
-	{{0, 7}, "INT_DAT_LATCH_CK"},	/*fix to 0*/
-	/*THE FOLLOWING PARAM WILL BE HARD-CODE FOR REAL CASE*/
-	{{1, 7}, "CMD_RSP_TA_CNTR"},     /*fix to 4*/
-	{{1, 7}, "WRDAT_CRCS_TA_CNTR"},  /*fix to 2*/
-
-	{{0, 1}, "READ_DATA_SMPL_SEL"},  /*fix to 0*/
-	{{0, 1}, "WRITE_DATA_SMPL_SEL"}, /*fix to 0*/
-	{{0, 1}, "DATA_DLYLINE_SEL"},    /*fix to 0*/
-	{{0, 1}, "MSDC_DAT_TUNE_SEL"},   /*fix to 1*/
-	{{0, 31}, "PAD_CLK_TXDLY"},/*tx clk dly fix to 0 for HQA res*/
+	{{1, 7}, "CMD_RSP_TA_CNTR"},
+	{{1, 7}, "WRDAT_CRCS_TA_CNTR"},
+	/* tx clk dly fix to 0 for HQA res */
+	{{0, 31}, "PAD_CLK_TXDLY"},
 };
 
-/**********************************************************
- * AutoK Basic Interface Implenment
- **********************************************************/
-static int autok_send_raw_cmd19(struct msdc_host *host, unsigned int fifo_clr)
+static int autok_send_tune_cmd(struct msdc_host *host, unsigned int opcode,
+			       enum TUNE_TYPE tune_type_value)
 {
-	unsigned int fifo_cnt;
-	unsigned int rawcmd;
-	unsigned int int_mask;
-	unsigned int int_sts;
-	unsigned int ret = 0;
+	void __iomem *base = host->base;
+	unsigned int value;
+	unsigned int rawcmd = 0;
+	unsigned int arg = 0;
+	unsigned int sts = 0;
+	unsigned int wints = 0;
+	unsigned int tmo = 0;
+	unsigned int left = 0;
+	unsigned int fifo_have = 0;
+	unsigned int fifo_1k_cnt = 0;
 	unsigned int i = 0;
-	/*msdc hw reset*/
-	if (fifo_clr)
-		msdc_reset_hw(host);
-	/*set timeout*/
-	sdr_set_field(host->base + SDC_CFG, SDC_CFG_DTOC, 0);
+	int ret = E_RESULT_PASS;
+
+	switch (opcode) {
+	case MMC_SEND_EXT_CSD:
+		rawcmd =  (512 << 16) | (0 << 13) | (1 << 11) | (1 << 7) | (8);
+		arg = 0;
+		if (tune_type_value == TUNE_LATCH_CK)
+			writel(host->tune_latch_ck_cnt, base + SDC_BLK_NUM);
+		else
+			writel(1, base + SDC_BLK_NUM);
+		break;
+	case MMC_STOP_TRANSMISSION:
+		rawcmd = (1 << 14)  | (7 << 7) | (12);
+		arg = 0;
+		break;
+	case MMC_SEND_STATUS:
+		rawcmd = (1 << 7) | (13);
+		arg = (1 << 16);
+		break;
+	case MMC_READ_SINGLE_BLOCK:
+		left = 512;
+		rawcmd =  (512 << 16) | (0 << 13) | (1 << 11) | (1 << 7) | (17);
+		arg = 0;
+		if (tune_type_value == TUNE_LATCH_CK)
+			writel(host->tune_latch_ck_cnt, base + SDC_BLK_NUM);
+		else
+			writel(1, base + SDC_BLK_NUM);
+		break;
+	case MMC_SEND_TUNING_BLOCK:
+		left = 64;
+		rawcmd =  (64 << 16) | (0 << 13) | (1 << 11) | (1 << 7) | (19);
+		arg = 0;
+		if (tune_type_value == TUNE_LATCH_CK)
+			writel(host->tune_latch_ck_cnt, base + SDC_BLK_NUM);
+		else
+			writel(1, base + SDC_BLK_NUM);
+		break;
+	case MMC_SEND_TUNING_BLOCK_HS200:
+		left = 128;
+		rawcmd =  (128 << 16) | (0 << 13) | (1 << 11) | (1 << 7) | (21);
+		arg = 0;
+		if (tune_type_value == TUNE_LATCH_CK)
+			writel(host->tune_latch_ck_cnt, base + SDC_BLK_NUM);
+		else
+			writel(1, base + SDC_BLK_NUM);
+		break;
+	case MMC_WRITE_BLOCK:
+		rawcmd =  (512 << 16) | (1 << 13) | (1 << 11) | (1 << 7) | (24);
+		if (TUNE_DATA_TX_ADDR >= 0)
+			arg = TUNE_DATA_TX_ADDR;
+		else
+			arg = host->mmc->card->ext_csd.sectors
+				+ TUNE_DATA_TX_ADDR;
+		break;
+	case SD_IO_RW_DIRECT:
+		break;
+	case SD_IO_RW_EXTENDED:
+		break;
+	}
+
+	while ((readl(base + SDC_STS) & SDC_STS_SDCBUSY))
+		;
+
+	/* clear fifo */
+	if ((tune_type_value == TUNE_CMD) || (tune_type_value == TUNE_DATA)) {
+		autok_msdc_reset();
+		msdc_clear_fifo();
+		writel(0xffffffff, base + MSDC_INT);
+	}
 
 	/* start command */
-	while (readl(host->base + SDC_STS) & SDC_STS_SDCBUSY)
-		cpu_relax();
+	writel(arg, base + SDC_ARG);
+	writel(rawcmd, base + SDC_CMD);
 
-	rawcmd =  (64 << 16)|(0 << 13)|(1 << 11)|(1 << 7)|(19);
-	if (fifo_clr)
-		writel(1, host->base + SDC_BLK_NUM);
-	else
-		writel(host->tune_latch_ck_cnt, host->base + SDC_BLK_NUM);
-	writel(0, host->base + SDC_ARG);
-	writel(rawcmd, host->base + SDC_CMD);
-
-	/*Wait cmd done*/
-	int_mask = MSDC_INT_CMDTMO | MSDC_INT_CMDRDY | MSDC_INT_RSPCRCERR;
-	while (!(readl(host->base + MSDC_INT) & int_mask))
-		cpu_relax();
-
-	int_sts = readl(host->base + MSDC_INT);
-	writel((int_mask & int_sts), host->base + MSDC_INT);
-	if (int_sts & MSDC_INT_CMDTMO) {
-		ret |= E_RESULT_CMD_TMO;
-		goto end;
-	} else if (int_sts & MSDC_INT_RSPCRCERR) {
-		ret |= E_RESULT_RSP_CRC;
+	/* wait interrupt status */
+	wints = MSDC_INT_CMDTMO | MSDC_INT_CMDRDY | MSDC_INT_RSPCRCERR;
+	tmo = 0x3FFFFF;
+	wait_cond(((sts = readl(base + MSDC_INT)) & wints), tmo, tmo);
+	if (tmo == 0) {
+		ret = E_RESULT_CMD_TMO;
 		goto end;
 	}
-	/*Wait Data done*/
-	while ((readl(host->base + SDC_STS) & SDC_STS_SDCBUSY)) {
-		fifo_cnt = readl(host->base + MSDC_FIFOCS) & MSDC_FIFOCS_RXCNT;
-		sdr_set_field(host->base + MSDC_DBG_SEL, 0xffff, 0x0b);
-		sdr_get_field(host->base + MSDC_DBG_OUT, 0x7ff, &fifo_cnt);
-		if (fifo_cnt >= 1024) {
-			for (i = 0; i < 5; i++)
-				readl(host->base + MSDC_RXDATA);
+
+	writel((sts & wints), base + MSDC_INT);
+	if (sts == 0) {
+		ret = E_RESULT_CMD_TMO;
+		goto end;
+	}
+
+	if (sts & MSDC_INT_CMDRDY) {
+		if (tune_type_value == TUNE_CMD) {
+			ret = E_RESULT_PASS;
+			goto end;
+		}
+	} else if (sts & MSDC_INT_RSPCRCERR) {
+		ret = E_RESULT_RSP_CRC;
+		goto end;
+	} else if (sts & MSDC_INT_CMDTMO) {
+		ret = E_RESULT_CMD_TMO;
+		goto end;
+	}
+	if ((tune_type_value != TUNE_LATCH_CK) &&
+	    (tune_type_value != TUNE_DATA))
+		goto skip_tune_latch_ck_and_tune_data;
+
+	while ((readl(base + SDC_STS) & SDC_STS_SDCBUSY)) {
+		if (tune_type_value == TUNE_LATCH_CK) {
+			fifo_have = msdc_rxfifocnt();
+			if ((opcode == MMC_SEND_TUNING_BLOCK_HS200) ||
+			    (opcode == MMC_READ_SINGLE_BLOCK) ||
+			    (opcode == MMC_SEND_EXT_CSD) ||
+			    (opcode == MMC_SEND_TUNING_BLOCK)) {
+				sdr_set_field(base + MSDC_DBG_SEL,
+					      0xffff << 0, 0x0b);
+				sdr_get_field(base + MSDC_DBG_OUT,
+					      0x7ff << 0, &fifo_1k_cnt);
+				if ((fifo_1k_cnt >= MSDC_FIFO_THD_1K) &&
+				    (fifo_have >= MSDC_FIFO_SZ)) {
+					value = readl(base + MSDC_RXDATA);
+					value = readl(base + MSDC_RXDATA);
+					value = readl(base + MSDC_RXDATA);
+					value = readl(base + MSDC_RXDATA);
+				}
+			}
+		} else if ((tune_type_value == TUNE_DATA) &&
+			   (opcode == MMC_WRITE_BLOCK)) {
+			for (i = 0; i < 64; i++) {
+				writel(0x5af00fa5, base + MSDC_TXDATA);
+				writel(0x33cc33cc, base + MSDC_TXDATA);
+			}
+
+			while ((readl(base + SDC_STS) & SDC_STS_SDCBUSY))
+				;
 		}
 	}
-	int_sts = readl(host->base + MSDC_INT);
-	int_mask = MSDC_INT_XFER_COMPL | MSDC_INT_DATCRCERR | MSDC_INT_DATTMO;
-	writel((int_mask & int_sts), host->base + MSDC_INT);
-	if (int_sts & MSDC_INT_DATTMO) {
-		ret |= E_RESULT_DAT_TMO;
-		goto end;
-	} else if (int_sts & MSDC_INT_DATCRCERR) {
-		ret |= E_RESULT_DAT_CRC;
-		goto end;
+
+	sts = readl(base + MSDC_INT);
+	wints = MSDC_INT_XFER_COMPL | MSDC_INT_DATCRCERR | MSDC_INT_DATTMO;
+	if (sts) {
+		/* clear status */
+		writel((sts & wints), base + MSDC_INT);
+		if (sts & MSDC_INT_XFER_COMPL)
+			ret = E_RESULT_PASS;
+		if (MSDC_INT_DATCRCERR & sts)
+			ret = E_RESULT_DAT_CRC;
+		if (MSDC_INT_DATTMO & sts)
+			ret = E_RESULT_DAT_TMO;
 	}
+
+skip_tune_latch_ck_and_tune_data:
+	while ((readl(base + SDC_STS) & SDC_STS_SDCBUSY))
+		;
+	if ((tune_type_value == TUNE_CMD) || (tune_type_value == TUNE_DATA))
+		msdc_clear_fifo();
+
 end:
-	if (fifo_clr)
-		msdc_reset_hw(host);
+	if (opcode == MMC_STOP_TRANSMISSION) {
+		while ((readl(base + MSDC_PS) & 0x10000) != 0x10000)
+			;
+	}
+
 	return ret;
 }
 
-static int autok_send_cmd19(struct msdc_host *host)
-{
-	return autok_send_raw_cmd19(host, 1);
-}
-
-static int autok_send_multi_cmd19(struct msdc_host *host)
-{
-	return autok_send_raw_cmd19(host, 0);
-}
-
-static int autok_simple_score(char *res_str, unsigned int result)
+static int autok_simple_score64(char *res_str64, u64 result64)
 {
 	unsigned int bit = 0;
 	unsigned int num = 0;
 	unsigned int old = 0;
 
-	if (result == 0) {
-		/* maybe result	is 0*/
-		strcpy(res_str, "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO");
-		return 32;
+	if (result64 == 0) {
+		/* maybe result is 0 */
+		strcpy(res_str64,
+	"OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO");
+		return 64;
 	}
-	if (result == 0xFFFFFFFF) {
-		strcpy(res_str, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+	if (result64 == 0xFFFFFFFFFFFFFFFF) {
+		strcpy(res_str64,
+	"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
 		return 0;
 	}
-	while (bit < 32) {	/* calc continue	zero number */
-		if (result & (1	<< bit)) { /* failed */
-			res_str[bit] = 'X';
+
+	/* calc continue zero number */
+	while (bit < 64) {
+		if (result64 & ((u64) (1LL << bit))) {
+			res_str64[bit] = 'X';
 			bit++;
 			if (old < num)
 				old = num;
 			num = 0;
 			continue;
 		}
-		res_str[bit] = 'O';
+		res_str64[bit] = 'O';
 		bit++;
 		num++;
 	}
 	if (num > old)
 		old = num;
+
 	return old;
 }
 
-static int autok_check_scan_res(unsigned int rawdat,
-				 struct AUTOK_SCAN_RES *scan_res)
+enum {
+	RD_SCAN_NONE,
+	RD_SCAN_PAD_BOUND_S,
+	RD_SCAN_PAD_BOUND_E,
+	RD_SCAN_PAD_MARGIN,
+};
+
+static int autok_check_scan_res64(u64 rawdat, struct AUTOK_SCAN_RES *scan_res)
 {
 	unsigned int bit;
-	unsigned int filter = 2;
-	enum AUTOK_RAWD_SCAN_STA_E RawScanSta = RD_SCAN_NONE;
+	unsigned int filter = 4;
+	struct BOUND_INFO *pBD = (struct BOUND_INFO *)scan_res->bd_info;
+	unsigned int RawScanSta = RD_SCAN_NONE;
 
-	for (bit = 0; bit < 32; bit++) {
-		if (rawdat & (1 << bit)) {
+	for (bit = 0; bit < 64; bit++) {
+		if (rawdat & (1LL << bit)) {
 			switch (RawScanSta) {
 			case RD_SCAN_NONE:
 				RawScanSta = RD_SCAN_PAD_BOUND_S;
-				scan_res->Bound_Start = 0;
-				scan_res->bound_width++;
+				pBD->Bound_Start = 0;
+				pBD->Bound_width = 1;
+				scan_res->bd_cnt += 1;
 				break;
 			case RD_SCAN_PAD_MARGIN:
 				RawScanSta = RD_SCAN_PAD_BOUND_S;
-				scan_res->Bound_Start = bit;
-				scan_res->bound_width++;
+				pBD->Bound_Start = bit;
+				pBD->Bound_width = 1;
+				scan_res->bd_cnt += 1;
 				break;
 			case RD_SCAN_PAD_BOUND_E:
-				if ((filter) &&
-				    ((bit - scan_res->Bound_End) <= AUTOK_TUNING_INACCURACY)) {
-					pr_err(
-						"[AUTOK]WARN: Try to filter the holes on raw data \r\n");
+				if ((filter) && ((bit - pBD->Bound_End) <=
+						 AUTOK_TUNING_INACCURACY)) {
+					ATK_DBG(ATK_TRACE,
+				"[AUTOK]WARN: Try to filter the holes\n");
 					RawScanSta = RD_SCAN_PAD_BOUND_S;
-					scan_res->bound_width += (bit - scan_res->Bound_End);
-					scan_res->Bound_End = 0;
+
+					pBD->Bound_width += (bit -
+							     pBD->Bound_End);
+					pBD->Bound_End = 0;
 					filter--;
+
+					/* update full bound info */
+					if (pBD->is_fullbound) {
+						pBD->is_fullbound = 0;
+						scan_res->fbd_cnt -= 1;
+					}
 				} else {
-					/*
-					 * Error Occours(the next bound Start),
-					 * Only one Boundary allowed
+					/* No filter Check and Get the next
+					 * boundary information
 					 */
-					pr_err(
-					"[AUTOK] Error : > 1 Boundary exist\r\n");
-					return -1;
+					RawScanSta = RD_SCAN_PAD_BOUND_S;
+					pBD++;
+					pBD->Bound_Start = bit;
+					pBD->Bound_width = 1;
+					scan_res->bd_cnt += 1;
+					if (scan_res->bd_cnt > BD_MAX_CNT) {
+						ATK_ERR(
+				"[AUTOK]Error: more than %d Boundary Exist\n",
+				BD_MAX_CNT);
+						return -1;
+					}
 				}
 				break;
 			case RD_SCAN_PAD_BOUND_S:
-				scan_res->bound_width++;
+				pBD->Bound_width++;
 				break;
 			default:
 				break;
@@ -1780,7 +1819,12 @@ static int autok_check_scan_res(unsigned int rawdat,
 				break;
 			case RD_SCAN_PAD_BOUND_S:
 				RawScanSta = RD_SCAN_PAD_BOUND_E;
-				scan_res->Bound_End = bit - 1;
+				pBD->Bound_End = bit - 1;
+				/* update full bound info */
+				if (pBD->Bound_Start > 0) {
+					pBD->is_fullbound = 1;
+					scan_res->fbd_cnt += 1;
+				}
 				break;
 			case RD_SCAN_PAD_MARGIN:
 			case RD_SCAN_PAD_BOUND_E:
@@ -1789,1376 +1833,1679 @@ static int autok_check_scan_res(unsigned int rawdat,
 			}
 		}
 	}
-	if ((scan_res->Bound_End == 0) && (scan_res->bound_width) != 0) {
-		scan_res->Bound_End = scan_res->Bound_Start +
-				scan_res->bound_width - 1;
+	if ((pBD->Bound_End == 0) && (pBD->Bound_width != 0))
+		pBD->Bound_End = pBD->Bound_Start + pBD->Bound_width - 1;
+
+	return 0;
+}
+
+static int autok_pad_dly_corner_check(struct AUTOK_REF_INFO *pInfo)
+{
+	/* scan result @ rising edge */
+	struct AUTOK_SCAN_RES *pBdInfo_R = NULL;
+	/* scan result @ falling edge */
+	struct AUTOK_SCAN_RES *pBdInfo_F = NULL;
+	struct AUTOK_SCAN_RES *p_Temp[2] = {NULL,};
+	unsigned int i, j, k, l;
+	unsigned int pass_bd_size[BD_MAX_CNT + 1];
+	unsigned int max_pass = 0;
+	unsigned int max_size = 0;
+	unsigned int bd_max_size = 0;
+	unsigned int bd_overlap = 0;
+	unsigned int corner_case_flag = 0;
+
+	pBdInfo_R = &(pInfo->scan_info[0]);
+	pBdInfo_F = &(pInfo->scan_info[1]);
+	/*
+	 * for corner case
+	 * oooooooooooooooooo rising has no fail bound
+	 * oooooooooooooooooo falling has no fail bound
+	 */
+	if ((pBdInfo_R->bd_cnt == 0) && (pBdInfo_F->bd_cnt == 0)) {
+		ATK_ERR("[ATUOK]Warn:can't find bd both edge\r\n");
+		pInfo->opt_dly_cnt = 31;
+		pInfo->opt_edge_sel = 0;
+		return AUTOK_RECOVERABLE_ERROR;
+	}
+	/*
+	 * for corner case
+	 * xxxxxxxxxxxxxxxxxxxx rising only has one boundary,but all fail
+	 * oooooooooxxooooooo falling has normal boundary
+	 * or
+	 * ooooooooooooxooooo rising has normal boundary
+	 * xxxxxxxxxxxxxxxxxxxx falling only has one boundary,but all fail
+	 */
+	if ((pBdInfo_R->bd_cnt == 1) && (pBdInfo_F->bd_cnt == 1)
+		&& (pBdInfo_R->bd_info[0].Bound_Start == 0)
+		&& (pBdInfo_R->bd_info[0].Bound_End == 63)
+		&& (pBdInfo_F->bd_info[0].Bound_Start == 0)
+		&& (pBdInfo_F->bd_info[0].Bound_End == 63)) {
+		ATK_ERR("[ATUOK]Err:can't find window both edge\r\n");
+		return AUTOK_NONE_RECOVERABLE_ERROR;
+	}
+	for (j = 0; j < sizeof(p_Temp); j++) {
+		if (j == 0) {
+			p_Temp[0] = pBdInfo_R;
+			p_Temp[1] = pBdInfo_F;
+		} else {
+			p_Temp[0] = pBdInfo_F;
+			p_Temp[1] = pBdInfo_R;
+		}
+		/* check boundary overlap */
+		for (k = 0; k < p_Temp[0]->bd_cnt; k++) {
+			for (l = 0; l < p_Temp[1]->bd_cnt; l++)
+				if (((p_Temp[0]->bd_info[k].Bound_Start
+				    >= p_Temp[1]->bd_info[l].Bound_Start)
+				    && (p_Temp[0]->bd_info[k].Bound_Start
+				    <= p_Temp[1]->bd_info[l].Bound_End))
+				    || ((p_Temp[0]->bd_info[k].Bound_End
+				    <= p_Temp[1]->bd_info[l].Bound_End)
+				    && (p_Temp[0]->bd_info[k].Bound_End
+				    >= p_Temp[1]->bd_info[l].Bound_Start))
+				    || ((p_Temp[1]->bd_info[l].Bound_Start
+				    >= p_Temp[0]->bd_info[k].Bound_Start)
+				    && (p_Temp[1]->bd_info[l].Bound_Start
+				    <= p_Temp[0]->bd_info[k].Bound_End)))
+					bd_overlap = 1;
+		}
+		/*check max boundary size */
+		for (k = 0; k < p_Temp[0]->bd_cnt; k++) {
+			if ((p_Temp[0]->bd_info[k].Bound_End
+				- p_Temp[0]->bd_info[k].Bound_Start)
+				>= 20)
+				bd_max_size = 1;
+		}
+		if (((bd_overlap == 1)
+			&& (bd_max_size == 1))
+			|| ((p_Temp[1]->bd_cnt == 0)
+			&& (bd_max_size == 1))) {
+			corner_case_flag = 1;
+		}
+		if (((p_Temp[0]->bd_cnt == 1)
+			&& (p_Temp[0]->bd_info[0].Bound_Start == 0)
+			&& (p_Temp[0]->bd_info[0].Bound_End == 63))
+			|| (corner_case_flag == 1)) {
+			if (j == 0)
+				pInfo->opt_edge_sel = 1;
+			else
+				pInfo->opt_edge_sel = 0;
+			/* 1T calc fail,need check max pass bd,select mid */
+			switch (p_Temp[1]->bd_cnt) {
+			case 4:
+				pass_bd_size[0] =
+				    p_Temp[1]->bd_info[0].Bound_Start - 0;
+				pass_bd_size[1] =
+				    p_Temp[1]->bd_info[1].Bound_Start
+					- p_Temp[1]->bd_info[0].Bound_End;
+				pass_bd_size[2] =
+				    p_Temp[1]->bd_info[2].Bound_Start
+					- p_Temp[1]->bd_info[1].Bound_End;
+				pass_bd_size[3] =
+				    p_Temp[1]->bd_info[3].Bound_Start
+					- p_Temp[1]->bd_info[2].Bound_End;
+				pass_bd_size[4] =
+				    63 - p_Temp[1]->bd_info[3].Bound_End;
+				max_size = pass_bd_size[0];
+				max_pass = 0;
+				for (i = 0; i < 5; i++) {
+					if (pass_bd_size[i] >= max_size) {
+						max_size = pass_bd_size[i];
+						max_pass = i;
+					}
+				}
+				if (max_pass == 0)
+					pInfo->opt_dly_cnt =
+					p_Temp[1]->bd_info[0].Bound_Start
+					/ 2;
+				else if (max_pass == 4)
+					pInfo->opt_dly_cnt =
+					(63 +
+					p_Temp[1]->bd_info[3].Bound_End)
+					/ 2;
+				else {
+					pInfo->opt_dly_cnt =
+				    (p_Temp[1]->bd_info[max_pass].Bound_Start
+				    +
+				    p_Temp[1]->bd_info[max_pass - 1].Bound_End)
+				    / 2;
+				}
+				break;
+			case 3:
+				pass_bd_size[0] =
+				    p_Temp[1]->bd_info[0].Bound_Start - 0;
+				pass_bd_size[1] =
+				    p_Temp[1]->bd_info[1].Bound_Start
+					- p_Temp[1]->bd_info[0].Bound_End;
+				pass_bd_size[2] =
+				    p_Temp[1]->bd_info[2].Bound_Start
+					- p_Temp[1]->bd_info[1].Bound_End;
+				pass_bd_size[3] =
+				    63 - p_Temp[1]->bd_info[2].Bound_End;
+				max_size = pass_bd_size[0];
+				max_pass = 0;
+				for (i = 0; i < 4; i++) {
+					if (pass_bd_size[i] >= max_size) {
+						max_size = pass_bd_size[i];
+						max_pass = i;
+					}
+				}
+				if (max_pass == 0)
+					pInfo->opt_dly_cnt =
+				    p_Temp[1]->bd_info[0].Bound_Start / 2;
+				else if (max_pass == 3)
+					pInfo->opt_dly_cnt =
+				    (63 + p_Temp[1]->bd_info[2].Bound_End) / 2;
+				else {
+					pInfo->opt_dly_cnt =
+				    (p_Temp[1]->bd_info[max_pass].Bound_Start
+				    +
+				    p_Temp[1]->bd_info[max_pass - 1].Bound_End)
+				    / 2;
+				}
+				break;
+			case 2:
+				pass_bd_size[0] =
+				    p_Temp[1]->bd_info[0].Bound_Start - 0;
+				pass_bd_size[1] =
+				    p_Temp[1]->bd_info[1].Bound_Start
+					- p_Temp[1]->bd_info[0].Bound_End;
+				pass_bd_size[2] =
+				    63 - p_Temp[1]->bd_info[1].Bound_End;
+				max_size = pass_bd_size[0];
+				max_pass = 0;
+				for (i = 0; i < 3; i++) {
+					if (pass_bd_size[i] >= max_size) {
+						max_size = pass_bd_size[i];
+						max_pass = i;
+					}
+				}
+				if (max_pass == 0)
+					pInfo->opt_dly_cnt =
+					p_Temp[1]->bd_info[0].Bound_Start / 2;
+				else if (max_pass == 2)
+					pInfo->opt_dly_cnt =
+				    (63 + p_Temp[1]->bd_info[1].Bound_End) / 2;
+				else {
+					pInfo->opt_dly_cnt =
+				    (p_Temp[1]->bd_info[max_pass].Bound_Start
+				    +
+				    p_Temp[1]->bd_info[max_pass - 1].Bound_End)
+				    / 2;
+				}
+				break;
+			case 1:
+				pass_bd_size[0] =
+				    p_Temp[1]->bd_info[0].Bound_Start - 0;
+				pass_bd_size[1] =
+					63 -
+					p_Temp[1]->bd_info[0].Bound_End;
+				max_size = pass_bd_size[0];
+				max_pass = 0;
+				for (i = 0; i < 2; i++) {
+					if (pass_bd_size[i] >= max_size) {
+						max_size = pass_bd_size[i];
+						max_pass = i;
+					}
+				}
+				if (max_pass == 0)
+					pInfo->opt_dly_cnt =
+					p_Temp[1]->bd_info[0].Bound_Start
+					/ 2;
+				else if (max_pass == 1)
+					pInfo->opt_dly_cnt =
+				    (63 +
+				    p_Temp[1]->bd_info[0].Bound_End)
+				    / 2;
+				break;
+			case 0:
+				pInfo->opt_dly_cnt = 31;
+				break;
+			default:
+				break;
+			}
+			return AUTOK_RECOVERABLE_ERROR;
+		}
 	}
 	return 0;
 }
 
-static int autok_calc_bit_cnt(unsigned int result)
+static int autok_pad_dly_sel(struct AUTOK_REF_INFO *pInfo)
 {
-	unsigned int cnt = 0;
+	/* scan result @ rising edge */
+	struct AUTOK_SCAN_RES *pBdInfo_R = NULL;
+	/* scan result @ falling edge */
+	struct AUTOK_SCAN_RES *pBdInfo_F = NULL;
+	/* Save the first boundary info for calc optimised dly count */
+	struct BOUND_INFO *pBdPrev = NULL;
+	/* Save the second boundary info for calc optimised dly count */
+	struct BOUND_INFO *pBdNext = NULL;
+	struct BOUND_INFO *pBdTmp = NULL;
+	/* Full Boundary count */
+	unsigned int FBound_Cnt_R = 0;
+	unsigned int Bound_Cnt_R = 0;
+	unsigned int Bound_Cnt_F = 0;
+	unsigned int cycle_cnt = 64;
+	int uBD_mid_prev = 0;
+	int uBD_mid_next = 0;
+	int uBD_width = 3;
+	int uDlySel_F = 0;
+	int uDlySel_R = 0;
+	/* for falling edge margin compress */
+	int uMgLost_F = 0;
+	/* for rising edge margin compress */
+	int uMgLost_R = 0;
+	unsigned int i;
+	unsigned int ret = 0;
+	int corner_res = 0;
 
-	if (result == 0)
+	pBdInfo_R = &(pInfo->scan_info[0]);
+	pBdInfo_F = &(pInfo->scan_info[1]);
+	FBound_Cnt_R = pBdInfo_R->fbd_cnt;
+	Bound_Cnt_R = pBdInfo_R->bd_cnt;
+	Bound_Cnt_F = pBdInfo_F->bd_cnt;
+
+	corner_res = autok_pad_dly_corner_check(pInfo);
+	if (corner_res == -1)
 		return 0;
-	else if (result == 0xFFFFFFFF)
-		return 32;
+	else if (corner_res == -2)
+		return -2;
 
-	do {
-		if (result & 0x1)
-			cnt++;
-		result = result	>> 1;
-	} while (result);
-	return cnt;
+	switch (FBound_Cnt_R) {
+	case 4:	/* SSSS Corner may cover 2~3T */
+	case 3:
+		ATK_ERR("[AUTOK]Warning: Too Many Full boundary count:%d\r\n",
+			FBound_Cnt_R);
+	case 2:	/* mode_1 : 2 full boudary */
+		for (i = 0; i < BD_MAX_CNT; i++) {
+			if (pBdInfo_R->bd_info[i].is_fullbound) {
+				if (pBdPrev == NULL) {
+					pBdPrev = &(pBdInfo_R->bd_info[i]);
+				} else {
+					pBdNext = &(pBdInfo_R->bd_info[i]);
+					break;
+				}
+			}
+		}
+
+		if (pBdPrev && pBdNext) {
+			uBD_mid_prev = (pBdPrev->Bound_Start +
+					pBdPrev->Bound_End) / 2;
+			uBD_mid_next = (pBdNext->Bound_Start +
+					pBdNext->Bound_End) / 2;
+			/* while in 2 full bound case, bd_width calc */
+			uBD_width = (pBdPrev->Bound_width +
+				     pBdNext->Bound_width) / 2;
+			cycle_cnt = uBD_mid_next - uBD_mid_prev;
+			/* delay count sel at rising edge */
+			if (uBD_mid_prev >= cycle_cnt / 2) {
+				uDlySel_R = uBD_mid_prev - cycle_cnt / 2;
+				uMgLost_R = 0;
+			} else if ((cycle_cnt / 2 - uBD_mid_prev) >
+				   AUTOK_MARGIN_THOLD) {
+				uDlySel_R = uBD_mid_prev + cycle_cnt / 2;
+				uMgLost_R = 0;
+			} else {
+				uDlySel_R = 0;
+				uMgLost_R = cycle_cnt / 2 - uBD_mid_prev;
+			}
+			/* delay count sel at falling edge */
+			pBdTmp = &(pBdInfo_R->bd_info[0]);
+			if (pBdTmp->is_fullbound) {
+				/* ooooxxxooooooxxxooo */
+				uDlySel_F = uBD_mid_prev;
+				uMgLost_F = 0;
+			} else {
+				/* xooooooxxxoooooooxxxoo */
+				if (pBdTmp->Bound_End > uBD_width / 2) {
+					uDlySel_F = (pBdTmp->Bound_End) -
+						    (uBD_width / 2);
+					uMgLost_F = 0;
+				} else {
+					uDlySel_F = 0;
+					uMgLost_F = (uBD_width / 2) -
+						    (pBdTmp->Bound_End);
+				}
+			}
+		} else {
+			/* error can not find 2 foull boary */
+			ATK_ERR("[AUTOK] can not find 2 full boudary @Mode1\n");
+			return -1;
+		}
+		break;
+
+	case 1:	/* rising edge find one full boundary */
+		if (Bound_Cnt_R > 1) {
+			/* mode_2: 1 full boundary and boundary count > 1 */
+			pBdPrev = &(pBdInfo_R->bd_info[0]);
+			pBdNext = &(pBdInfo_R->bd_info[1]);
+
+			if (pBdPrev->is_fullbound)
+				uBD_width = pBdPrev->Bound_width;
+			else
+				uBD_width = pBdNext->Bound_width;
+
+			if ((pBdPrev->is_fullbound) ||
+			    (pBdNext->is_fullbound)) {
+				if (pBdPrev->Bound_Start > 0)
+					cycle_cnt = pBdNext->Bound_Start -
+						    pBdPrev->Bound_Start;
+				else
+					cycle_cnt = pBdNext->Bound_End -
+						    pBdPrev->Bound_End;
+
+				/* delay count sel@rising & falling edge */
+				if (pBdPrev->is_fullbound) {
+					uBD_mid_prev = (pBdPrev->Bound_Start +
+							pBdPrev->Bound_End) / 2;
+					uDlySel_F = uBD_mid_prev;
+					uMgLost_F = 0;
+					if (uBD_mid_prev >= cycle_cnt / 2) {
+						uDlySel_R = uBD_mid_prev -
+							    cycle_cnt / 2;
+						uMgLost_R = 0;
+					} else if ((cycle_cnt / 2 -
+						    uBD_mid_prev) >
+						    AUTOK_MARGIN_THOLD) {
+						uDlySel_R = uBD_mid_prev +
+							    cycle_cnt / 2;
+						uMgLost_R = 0;
+					} else {
+						uDlySel_R = 0;
+						uMgLost_R = cycle_cnt / 2 -
+							    uBD_mid_prev;
+					}
+				} else {
+					/* first boundary not full boudary */
+					uBD_mid_next = (pBdNext->Bound_Start +
+							pBdNext->Bound_End) / 2;
+					uDlySel_R = uBD_mid_next -
+						    cycle_cnt / 2;
+					uMgLost_R = 0;
+					if (pBdPrev->Bound_End >
+					    uBD_width / 2) {
+						uDlySel_F = pBdPrev->Bound_End -
+							    (uBD_width / 2);
+						uMgLost_F = 0;
+					} else {
+						uDlySel_F = 0;
+						uMgLost_F = (uBD_width / 2) -
+							(pBdPrev->Bound_End);
+					}
+				}
+			} else {
+				/* full bound must in first 2 boundary */
+				return -1;
+			}
+		} else if (Bound_Cnt_F > 0) {
+			/* mode_3: 1 full boundary and only
+			 * one boundary exist @rising edge
+			 */
+			/* this boundary is full bound */
+			pBdPrev = &(pBdInfo_R->bd_info[0]);
+			pBdNext = &(pBdInfo_F->bd_info[0]);
+			uBD_mid_prev = (pBdPrev->Bound_Start +
+					pBdPrev->Bound_End) / 2;
+			uBD_width = pBdPrev->Bound_width;
+
+			if (pBdNext->Bound_Start == 0) {
+				cycle_cnt = (pBdPrev->Bound_End -
+					     pBdNext->Bound_End) * 2;
+			} else if (pBdNext->Bound_End == 63) {
+				cycle_cnt = (pBdNext->Bound_Start -
+					     pBdPrev->Bound_Start) * 2;
+			} else {
+				uBD_mid_next = (pBdNext->Bound_Start +
+						pBdNext->Bound_End) / 2;
+
+				if (uBD_mid_next > uBD_mid_prev)
+					cycle_cnt = (uBD_mid_next -
+						     uBD_mid_prev) * 2;
+				else
+					cycle_cnt = (uBD_mid_prev -
+						     uBD_mid_next) * 2;
+			}
+
+			uDlySel_F = uBD_mid_prev;
+			uMgLost_F = 0;
+
+			if (uBD_mid_prev >= cycle_cnt / 2) {
+				/* case 1 */
+				uDlySel_R = uBD_mid_prev - cycle_cnt / 2;
+				uMgLost_R = 0;
+			} else if (cycle_cnt / 2 - uBD_mid_prev <=
+				   AUTOK_MARGIN_THOLD) {
+				/* case 2 */
+				uDlySel_R = 0;
+				uMgLost_R = cycle_cnt / 2 - uBD_mid_prev;
+			} else if (cycle_cnt / 2 + uBD_mid_prev <= 63) {
+				/* case 3 */
+				uDlySel_R = cycle_cnt / 2 + uBD_mid_prev;
+				uMgLost_R = 0;
+			} else if (32 - uBD_mid_prev <= AUTOK_MARGIN_THOLD) {
+				/* case 4 */
+				uDlySel_R = 0;
+				uMgLost_R = cycle_cnt / 2 - uBD_mid_prev;
+			} else { /* case 5 */
+				uDlySel_R = 63;
+				uMgLost_R = uBD_mid_prev + cycle_cnt / 2 - 63;
+			}
+		} else {
+			/* mode_4: falling edge no boundary found & rising
+			 * edge only one full boundary exist
+			 */
+			/* this boundary is full bound */
+			pBdPrev = &(pBdInfo_R->bd_info[0]);
+			uBD_mid_prev = (pBdPrev->Bound_Start +
+					pBdPrev->Bound_End) / 2;
+			uBD_width = pBdPrev->Bound_width;
+
+			if (pBdPrev->Bound_End > (64 - pBdPrev->Bound_Start))
+				cycle_cnt = 2 * (pBdPrev->Bound_End + 1);
+			else
+				cycle_cnt = 2 * (64 - pBdPrev->Bound_Start);
+
+			uDlySel_R = (uBD_mid_prev >= 32) ? 0 : 63;
+			/* Margin enough donot care margin lost */
+			uMgLost_R = 0xFF;
+			uDlySel_F = uBD_mid_prev;
+			/* Margin enough donot care margin lost */
+			uMgLost_F = 0xFF;
+
+			ATK_ERR("[AUTOK]Warning: 1T > %d\n", cycle_cnt);
+		}
+		break;
+
+	case 0:	/* rising edge cannot find full boudary */
+		if (Bound_Cnt_R == 2) {
+			pBdPrev = &(pBdInfo_R->bd_info[0]);
+			/* this boundary is full bound */
+			pBdNext = &(pBdInfo_F->bd_info[0]);
+
+			if (pBdNext->is_fullbound) {
+				/* mode_5: rising_edge 2 boundary
+				 * (not full bound), falling edge
+				 * one full boundary
+				 */
+				uBD_width = pBdNext->Bound_width;
+				cycle_cnt = 2 * (pBdNext->Bound_End -
+						 pBdPrev->Bound_End);
+				uBD_mid_next = (pBdNext->Bound_Start +
+						pBdNext->Bound_End) / 2;
+				uDlySel_R = uBD_mid_next;
+				uMgLost_R = 0;
+				if (pBdPrev->Bound_End >= uBD_width / 2) {
+					uDlySel_F = pBdPrev->Bound_End -
+						    uBD_width / 2;
+					uMgLost_F = 0;
+				} else {
+					uDlySel_F = 0;
+					uMgLost_F = uBD_width / 2 -
+						    pBdPrev->Bound_End;
+				}
+			} else {
+				/* for falling edge there must be one full
+				 * boundary between two bounary_mid at rising
+				 */
+				return -1;
+			}
+		} else if (Bound_Cnt_R == 1) {
+			if (Bound_Cnt_F > 1) {
+				/* when rising_edge have only one boundary
+				 * (not full bound), falling edge should not
+				 * more than 1Bound exist
+				 */
+				return -1;
+			} else if (Bound_Cnt_F == 1) {
+				/* mode_6: rising edge only 1 boundary
+				 * (not full Bound)
+				 * & falling edge have only 1 bound too
+				 */
+				pBdPrev = &(pBdInfo_R->bd_info[0]);
+				pBdNext = &(pBdInfo_F->bd_info[0]);
+				if (pBdNext->is_fullbound) {
+					uBD_width = pBdNext->Bound_width;
+				} else {
+					if (pBdNext->Bound_width >
+					    pBdPrev->Bound_width)
+						uBD_width = pBdNext->Bound_width
+							+ 1;
+					else
+						uBD_width = pBdPrev->Bound_width
+							+ 1;
+
+					if (uBD_width < AUTOK_BD_WIDTH_REF)
+						uBD_width = AUTOK_BD_WIDTH_REF;
+				} /* Boundary width calc done */
+
+				if (pBdPrev->Bound_Start == 0) {
+					/* Current Desing Not Allowed */
+					if (pBdNext->Bound_Start == 0)
+						return -1;
+
+					cycle_cnt = (pBdNext->Bound_Start -
+						     pBdPrev->Bound_End +
+						     uBD_width) * 2;
+				} else if (pBdPrev->Bound_End == 63) {
+					/* Current Desing Not Allowed */
+					if (pBdNext->Bound_End == 63)
+						return -1;
+
+					cycle_cnt = (pBdPrev->Bound_Start -
+						     pBdNext->Bound_End +
+						     uBD_width) * 2;
+				} /* cycle count calc done */
+
+				/* calc optimise delay count */
+				if (pBdPrev->Bound_Start == 0) {
+					/* falling edge sel */
+					if (pBdPrev->Bound_End >=
+					    uBD_width / 2) {
+						uDlySel_F = pBdPrev->Bound_End -
+							    uBD_width / 2;
+						uMgLost_F = 0;
+					} else {
+						uDlySel_F = 0;
+						uMgLost_F = uBD_width / 2 -
+							    pBdPrev->Bound_End;
+					}
+
+					/* rising edge sel */
+					if (pBdPrev->Bound_End - uBD_width / 2 +
+					    cycle_cnt / 2 > 63) {
+						uDlySel_R = 63;
+						uMgLost_R =
+						    pBdPrev->Bound_End -
+						    uBD_width / 2 +
+						    cycle_cnt / 2 - 63;
+					} else {
+						uDlySel_R =
+						    pBdPrev->Bound_End -
+						    uBD_width / 2 +
+						    cycle_cnt / 2;
+						uMgLost_R = 0;
+					}
+				} else if (pBdPrev->Bound_End == 63) {
+					/* falling edge sel */
+					if (pBdPrev->Bound_Start +
+					    uBD_width / 2 < 63) {
+						uDlySel_F =
+							pBdPrev->Bound_Start +
+							uBD_width / 2;
+						uMgLost_F = 0;
+					} else {
+						uDlySel_F = 63;
+						uMgLost_F =
+							pBdPrev->Bound_Start +
+							uBD_width / 2 - 63;
+					}
+
+					/* rising edge sel */
+					if (pBdPrev->Bound_Start +
+					    uBD_width / 2 - cycle_cnt / 2 < 0) {
+						uDlySel_R = 0;
+						uMgLost_R =
+						    cycle_cnt / 2 -
+						    (pBdPrev->Bound_Start +
+						     uBD_width / 2);
+					} else {
+						uDlySel_R =
+						    pBdPrev->Bound_Start +
+						    uBD_width / 2 -
+						    cycle_cnt / 2;
+						uMgLost_R = 0;
+					}
+				} else {
+					return -1;
+				}
+			} else if (Bound_Cnt_F == 0) {
+				/* mode_7: rising edge only one bound
+				 * (not full), falling no boundary
+				 */
+				cycle_cnt = 128;
+				pBdPrev = &(pBdInfo_R->bd_info[0]);
+				if (pBdPrev->Bound_Start == 0) {
+					uDlySel_F = 0;
+					uDlySel_R = 63;
+				} else if (pBdPrev->Bound_End == 63) {
+					uDlySel_F = 63;
+					uDlySel_R = 0;
+				} else {
+					return -1;
+				}
+				uMgLost_F = 0xFF;
+				uMgLost_R = 0xFF;
+
+				ATK_ERR("[AUTOK]Warning: 1T > %d\n", cycle_cnt);
+			}
+		} else if (Bound_Cnt_R == 0) { /* Rising Edge No Boundary */
+			if (Bound_Cnt_F > 1) {
+				/* falling edge not allowed two boundary
+				 * Exist for this case
+				 */
+				return -1;
+			} else if (Bound_Cnt_F > 0) {
+				/* mode_8: falling edge has one Boundary */
+				pBdPrev = &(pBdInfo_F->bd_info[0]);
+
+				/* this boundary is full bound */
+				if (pBdPrev->is_fullbound) {
+					uBD_mid_prev =
+					    (pBdPrev->Bound_Start +
+					     pBdPrev->Bound_End) / 2;
+
+					if (pBdPrev->Bound_End >
+					    (64 - pBdPrev->Bound_Start))
+						cycle_cnt =
+						2 * (pBdPrev->Bound_End + 1);
+					else
+						cycle_cnt =
+						2 * (64 - pBdPrev->Bound_Start);
+
+					uDlySel_R = uBD_mid_prev;
+					uMgLost_R = 0xFF;
+					uDlySel_F =
+						(uBD_mid_prev >= 32) ? 0 : 63;
+					uMgLost_F = 0xFF;
+				} else {
+					cycle_cnt = 128;
+
+					uDlySel_R = (pBdPrev->Bound_Start ==
+						     0) ? 0 : 63;
+					uMgLost_R = 0xFF;
+					uDlySel_F = (pBdPrev->Bound_Start ==
+						     0) ? 63 : 0;
+					uMgLost_F = 0xFF;
+				}
+
+				ATK_ERR("[AUTOK]Warning: 1T > %d\n", cycle_cnt);
+			} else {
+				/* falling edge no boundary. no need tuning */
+				cycle_cnt = 128;
+				uDlySel_F = 0;
+				uMgLost_F = 0xFF;
+				uDlySel_R = 0;
+				uMgLost_R = 0xFF;
+				ATK_ERR("[AUTOK]Warning: 1T > %d\n", cycle_cnt);
+			}
+		} else {
+			/* Error if bound_cnt > 3 there must be
+			 * at least one full boundary exist
+			 */
+			return -1;
+		}
+		break;
+
+	default:
+		/* warning if boundary count > 4
+		 * (from current hw design, this case cannot happen)
+		 */
+		return -1;
+	}
+
+	/* Select Optimised Sample edge & delay count (the small one) */
+	pInfo->cycle_cnt = cycle_cnt;
+	if (uDlySel_R <= uDlySel_F) {
+		pInfo->opt_edge_sel = 0;
+		pInfo->opt_dly_cnt = uDlySel_R;
+	} else {
+		pInfo->opt_edge_sel = 1;
+		pInfo->opt_dly_cnt = uDlySel_F;
+
+	}
+	ATK_ERR("[AUTOK]Analysis Result: 1T = %d\n ", cycle_cnt);
+	return ret;
 }
 
 /*
- * function : autok_optimised_dly_sel
- *	used to sel optimised dly value for large pass window
- * params:
- *	bound -> boundary info for dly sel reference
- *	fix_edge -> dly sel value sel base on fix edge
- *	edge_sel -> dly sel form both edge and return edge res
- *	ckgen_base,cycle_cnt -> reference for opt dly sel
- *	dly_type-> 0: internal delay, 1: pad delay
-*/
-static int autok_optimised_dly_sel(struct AUTOK_SCAN_RES bound,
-				   unsigned int *dly_sel,
-				   unsigned int fix_edge,
-				   unsigned int *edge_sel,
-				   unsigned int ckgen_base,
-				   unsigned int cycle_cnt,
-				   unsigned int dly_type)
-{
-	int r_dly = 0;    /*for rising_edge dly sel*/
-	int f_dly = 0;    /*for falling_edge dly sel*/
-	int r_mglost = 0; /*for rising edge margin compress*/
-	int f_mglost = 0; /*for falling edge margin compress*/
-	int bd_mid_cur = 0; /*Boundary Mid Pos Current*/
-	int bd_mid_prev = 0; /*Boundary Mid Pos Previous*/
-	int bd_mid_next = 0; /*Boundary Mid Pos Previous*/
-	int mg_mid_prev = 0; /*Margin Mid Pos prev*/
-	int mg_mid_next = 31; /*Margin Mid Pos	next*/
-	int dly_res = 0;
-	unsigned int edge_scan = 0;
-	unsigned int ckgen_sel = bound.bound_ckg;
-	#define MG_THD 8
-
-	if (cycle_cnt < 32) {
-		AUTOK_RAWPRINT(
-	"[AUTOK] Warning, Clock Cycle dely count < 32, not match with current Design\r\n");
-		return -1;
-	}
-	if (edge_sel == NULL)
-		edge_scan = fix_edge;
-	do {
-		/* mid:pre-process */
-		bd_mid_cur = (bound.Bound_End + bound.Bound_Start + 1)/2;
-		if (dly_type)
-			bd_mid_cur -= ((int)ckgen_sel - ckgen_base) * 4;
-		else
-			bd_mid_cur += ((int)ckgen_sel - ckgen_base) * 4;
-		bd_mid_cur = (edge_scan ^ (bound.bound_edge)) ?
-			      (bd_mid_cur + cycle_cnt/2) :
-			      bd_mid_cur;
-		AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			       "[AUTOK] Boundary Mid Pos:%d, at edge: %d\r\n",
-			       bd_mid_cur, edge_scan);
-		while ((bd_mid_cur + (int)cycle_cnt) <= 0) {
-			/*mid:[~, -1T]*/
-			bd_mid_cur += (int)cycle_cnt;
-		}
-		/* mid:(-1T,0) -> no need pre-process */
-		while (bd_mid_cur > 0) { /*mid:[0, +oo] ->s */
-			bd_mid_cur -= (int)cycle_cnt;
-		}
-		if (bd_mid_cur > 0) {	/* currently bd_mid_cur must <= 0 */
-			AUTOK_RAWPRINT("[AUTOK]Error BD_mid_Cur Calc Failed!\r\n");
-			return -1;
-		}
-		/* currently bd_mid_cur must <= 0 */
-		if ((bd_mid_cur + cycle_cnt) > 31) {
-			bd_mid_next = bd_mid_cur + cycle_cnt;
-			dly_res = (bd_mid_cur + bd_mid_next + 1) / 2;
-			if ((dly_res < 0) && (edge_scan)) {
-				/* falling edge */
-				f_dly = 0;
-				f_mglost = 0 - dly_res;
-			} else if (dly_res < 0) { /* rising edge */
-				r_dly = 0;
-				r_mglost = 0 - dly_res;
-			} else if ((dly_res > 31) && (edge_scan)) {
-				/* falling edge */
-				f_dly = 31;
-				f_mglost = dly_res - 31;
-			} else if (dly_res > 31) { /* rising edge */
-				r_dly = 31;
-				r_mglost = dly_res - 31;
-			} else if (edge_scan) { /* falling edge */
-				f_dly = dly_res;
-			} else { /* rising edge */
-				r_dly = dly_res;
-			}
-		} else { /* mid + 1T in [0,31] */
-			bd_mid_prev = bd_mid_cur;
-			bd_mid_cur += cycle_cnt;
-			bd_mid_next = bd_mid_cur + cycle_cnt;
-			mg_mid_prev = (bd_mid_prev + bd_mid_cur + 1) / 2;
-			mg_mid_next = (bd_mid_next + bd_mid_cur + 1) / 2;
-			if (((mg_mid_prev < 0) && (mg_mid_next > 31)) &&
-			    ((mg_mid_next + MG_THD) < (31 - mg_mid_prev)) &&
-			    (edge_scan)) {
-				/**
-				 * when right margin > left margin + 5,
-				 * select right value
-				 * falling edge
-				 */
-				f_dly = 31;
-				f_mglost = mg_mid_next - 31;
-			} else if (((mg_mid_prev < 0) && (mg_mid_next > 31)) &&
-				  ((mg_mid_next + MG_THD) < (31 - mg_mid_prev))
-				  ) {
-				/* rising edge */
-				r_dly = 31;
-				r_mglost = mg_mid_next - 31;
-			} else if (((mg_mid_prev < 0) && (mg_mid_next > 31)) &&
-				    (edge_scan)) {
-				/* falling edge */
-				f_dly = 0;
-				f_mglost = 0 - mg_mid_prev;
-			} else if ((mg_mid_prev < 0) && (mg_mid_next > 31)) {
-				/* rising edge */
-				r_dly = 0;
-				r_mglost = 0 - mg_mid_prev;
-			} else if ((mg_mid_prev >= 0) && (edge_scan)) { /* falling edge*/
-				f_dly = mg_mid_prev;
-			} else if (mg_mid_prev >= 0) { /* rising edge */
-				r_dly = mg_mid_prev;
-			} else if (edge_scan) { /* falling edge */
-				f_dly = mg_mid_next;
-			} else { /* rising edge */
-				r_dly = mg_mid_next;
-			}
-		}
-		if (edge_sel == NULL)
-			break;
-		edge_scan ^= 0x1;
-	} while (edge_scan);
-	/*
-	 * first check Int Dly & select smaller ,then Check Margin Lost,if
-	 * margion lost so large then Sel the other edge
-	 */
-	if (edge_sel != NULL) {
-		dly_res = (r_dly <= f_dly) ? (r_dly) : (f_dly);
-		edge_scan = (r_dly <= f_dly) ? 0 : 1;
-		AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Dly Sel Res for Rising edge: %d, Margin Lost:%d\r\n",
-			r_dly, r_mglost);
-		AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-		       "[AUTOK] Dly Sel Res for Falling edge: %d, Margin Lost:%d\r\n",
-		       f_dly, f_mglost);
-		if (!edge_scan) {  /* rising edge */
-			if (r_mglost > (f_mglost + MG_THD))
-				edge_scan = 1;
-		} else { /* falling edge */
-			if (f_mglost > (r_mglost + MG_THD))
-				edge_scan = 0;
-		}
-		*edge_sel = edge_scan;
-		dly_res = edge_scan ? f_dly : r_dly;
-	} else {	/* fix sample edge for dly sel*/
-		if (fix_edge == 0) {
-			dly_res = r_dly;
-			pr_err(
-		"[AUTOK] Dly Sel Res for Rising edge: %d, Margin Lost:%d\r\n",
-				r_dly, r_mglost);
-		} else {
-			dly_res = f_dly;
-			pr_err(
-		"[AUTOK] Dly Sel Res for Falling edge: %d, Margin Lost:%d\r\n",
-				f_dly, f_mglost);
-		}
-	}
-	*dly_sel = dly_res;
-	return 0;
-}
-
-static int autok_cmd_rsp_dly_sel(struct AUTOK_REF_INFO *bdinf,
-				 unsigned int *int_dly, unsigned int *cmd_edge,
-				 unsigned int ckgen_base)
-{
-	return autok_optimised_dly_sel(bdinf->bound_int, int_dly, 0, cmd_edge,
-				       ckgen_base, bdinf->bound_cycle, 0);
-}
-
-static int autok_cmd_pad_dly_sel(struct AUTOK_REF_INFO *bdinf,
-				 unsigned int *pad_dly, unsigned int cmd_edge,
-				 unsigned int ckgen_base)
-{
-	return autok_optimised_dly_sel(bdinf->bound_pad, pad_dly, cmd_edge, NULL,
-				       ckgen_base, bdinf->bound_cycle, 1);
-}
-
-static int autok_data_pad_dly_sel(struct AUTOK_REF_INFO *bdinf,
-				  unsigned int *pad_dly,
-				  unsigned int ckgen_base)
-{
-	return autok_optimised_dly_sel(bdinf->bound_rd, pad_dly, 0, NULL,
-			ckgen_base, bdinf->bound_cycle, 1);
-}
-
-/**
+ ************************************************************************
  * FUNCTION
- *  msdc_autok_adjust_param
+ *  autok_adjust_param
  *
  * DESCRIPTION
- *  This	function for auto-K, adjust msdc parameter
+ *  This function for auto-K, adjust msdc parameter
  *
  * PARAMETERS
- *	host: msdc	host manipulator pointer
- *	param: enum of msdc parameter
- *	value: value of msdc parameter
- *	rw: AUTOK_READ/AUTOK_WRITE
+ *    host: msdc host manipulator pointer
+ *    param: enum of msdc parameter
+ *    value: value of msdc parameter
+ *    rw: AUTOK_READ/AUTOK_WRITE
  *
  * RETURN VALUES
- *	error code: 0 success,
- *		-1 parameter input error
- *		-2 read/write fail
- *		-3 else	error
- **/
-int msdc_autok_adjust_param(struct msdc_host *host, enum AUTOK_PARAM param,
-		u32 *value, int rw)
+ *    error code: 0 success,
+ *               -1 parameter input error
+ *               -2 read/write fail
+ *               -3 else error
+ *************************************************************************
+ */
+static int autok_adjust_param(struct msdc_host *host,
+				   enum AUTOK_PARAM param,
+				   u32 *value,
+				   int rw)
 {
+	void __iomem *base = host->base;
+	void __iomem *base_top = host->base_top;
 	u32 *reg;
-	u32 field;
+	u32 field = 0;
 
 	switch (param) {
 	case READ_DATA_SMPL_SEL:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for READ_DATA_SMPL_SEL is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("READ_DATA_SMPL_SEL(%d) is out of [0~1]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_DSPLSEL);
+
+		reg = (u32 *) (base + MSDC_IOCON);
+		field = (u32) (MSDC_IOCON_R_D_SMPL_SEL);
 		break;
 	case WRITE_DATA_SMPL_SEL:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for WRITE_DATA_SMPL_SEL is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("WRITE_DATA_SMPL_SEL(%d) is out of [0~1]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_W_DSPLSEL);
+
+		reg = (u32 *) (base + MSDC_IOCON);
+		field = (u32) (MSDC_IOCON_W_D_SMPL_SEL);
 		break;
 	case DATA_DLYLINE_SEL:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for DATA_DLYLINE_SEL is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("DATA_DLYLINE_SEL(%d) is out of [0~1]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_DDLSEL);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (DATA_K_VALUE_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_IOCON);
+			field = (u32) (MSDC_IOCON_DDLSEL);
+		}
 		break;
-	case MSDC_DAT_TUNE_SEL:
+	case MSDC_DAT_TUNE_SEL:	/* 0-Dat tune 1-CLk tune ; */
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for DATA_DLYLINE_SEL is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("DATA_TUNE_SEL(%d) is out of [0~1]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL1;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_SEL);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (PAD_RXDLY_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_RXDLYSEL);
+		}
+		break;
+	case MSDC_WCRC_ASYNC_FIFO_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("WCRC_ASYNC_FIFO_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		reg = (u32 *) (base + MSDC_PATCH_BIT2);
+		field = (u32) (MSDC_PB2_CFGCRCSTS);
+		break;
+	case MSDC_RESP_ASYNC_FIFO_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("RESP_ASYNC_FIFO_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		reg = (u32 *) (base + MSDC_PATCH_BIT2);
+		field = (u32) (MSDC_PB2_CFGRESP);
 		break;
 	case CMD_EDGE:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for CMD_EDGE is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("CMD_EDGE(%d) is out of [0~1]\n", *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_RSPL);
+		reg = (u32 *) (base + MSDC_IOCON);
+		field = (u32) (MSDC_IOCON_RSPL);
 		break;
 	case RDATA_EDGE:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for RDATA_EDGE is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("RDATA_EDGE(%d) is out of [0~1]\n", *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_DSPL);
+		reg = (u32 *) (base + MSDC_IOCON);
+		field = (u32) (MSDC_IOCON_R_D_SMPL);
 		break;
-	case WDATA_EDGE:
+	case RD_FIFO_EDGE:
 		if ((rw == AUTOK_WRITE) && (*value > 1)) {
-			pr_debug(
-					"[%s] Input value(%d) for WDATA_EDGE is out of range, it should be [0~1]\n",
-					__func__, *value);
+			pr_debug("RD_FIFO_EDGE(%d) is out of [0~1]\n", *value);
 			return -1;
 		}
-		reg = host->base + MSDC_IOCON;
-		field = (u32)(MSDC_IOCON_W_DSPL);
+		reg = (u32 *) (base + MSDC_PATCH_BIT0);
+		field = (u32) (MSDC_PB0_RD_DAT_SEL);
 		break;
-	case CMD_RD_D_DLY:
+	case WD_FIFO_EDGE:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("WD_FIFO_EDGE(%d) is out of [0~1]\n", *value);
+			return -1;
+		}
+		reg = (u32 *) (base + MSDC_PATCH_BIT2);
+		field = (u32) (MSDC_PB2_CFGCRCSTSEDGE);
+		break;
+	case CMD_RD_D_DLY1:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for CMD_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
+			pr_debug("CMD_RD_D_DLY1(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL3;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_CMD);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CMD);
+			field = (u32) (PAD_CMD_RXDLY);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_CMDRDLY);
+		}
 		break;
-	case DAT0_RD_D_DLY:
+	case CMD_RD_D_DLY1_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("CMD_RD_D_DLY1_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CMD);
+			field = (u32) (PAD_CMD_RD_RXDLY_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_CMDRRDLYSEL);
+		}
+		break;
+	case CMD_RD_D_DLY2:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for DAT0_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
+			pr_debug("CMD_RD_D_DLY2(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL2;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_D0);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CMD);
+			field = (u32) (PAD_CMD_RXDLY2);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE1);
+			field = (u32) (MSDC_PAD_TUNE1_CMDRDLY2);
+		}
 		break;
-	case DAT1_RD_D_DLY:
+	case CMD_RD_D_DLY2_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("CMD_RD_D_DLY2_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CMD);
+			field = (u32) (PAD_CMD_RD_RXDLY2_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE1);
+			field = (u32) (MSDC_PAD_TUNE1_CMDRRDLY2SEL);
+		}
+		break;
+	case DAT_RD_D_DLY1:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for DAT1_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
+			pr_debug("DAT_RD_D_DLY1(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL2;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_D1);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (PAD_DAT_RD_RXDLY);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_DATRRDLY);
+		}
 		break;
-	case DAT2_RD_D_DLY:
+	case DAT_RD_D_DLY1_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("DAT_RD_D_DLY1_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (PAD_DAT_RD_RXDLY_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_DATRRDLYSEL);
+		}
+		break;
+	case DAT_RD_D_DLY2:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for DAT2_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
+			pr_debug("DAT_RD_D_DLY2(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL2;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_D2);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (PAD_DAT_RD_RXDLY2);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE1);
+			field = (u32) (MSDC_PAD_TUNE1_DATRRDLY2);
+		}
 		break;
-	case DAT3_RD_D_DLY:
-		reg = host->top + MSDC_TOP_DAT_TUNE_CTRL2;
-		field = (u32)(MSDC_TOP_SDIO_DATA_TUNE_D3);
-		break;
-	case DAT_RD_DLY:
-		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for DAT_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
+	case DAT_RD_D_DLY2_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("DAT_RD_D_DLY2_SEL(%d) is out of [0~1]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PAD_TUNE;
-		field = (u32)(MSDC_PAD_TUNE_DATRRDLY);
-		break;
-	case DAT_WRD_DLY:
-		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for DAT_WRD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
-			return -1;
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_CONTROL);
+			field = (u32) (PAD_DAT_RD_RXDLY2_SEL);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE1);
+			field = (u32) (MSDC_PAD_TUNE1_DATRRDLY2SEL);
 		}
-		reg = host->base + MSDC_PAD_TUNE;
-		field = (u32)(MSDC_PAD_TUNE_DATWRDLY);
-		break;
-	case CMD_RESP_RD_DLY:
-		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-					"[%s] Input value(%d) for CMD_RESP_RD_DLY is out of range, it should be [0~31]\n",
-					__func__, *value);
-			return -1;
-		}
-		reg = host->base + MSDC_PAD_TUNE;
-		field = (u32)(MSDC_PAD_TUNE_CMDRRDLY);
 		break;
 	case INT_DAT_LATCH_CK:
 		if ((rw == AUTOK_WRITE) && (*value > 7)) {
-			pr_debug(
-		"[%s] Input value(%d) for INT_DAT_LATCH_CK is out of range, it should be [0~7]\n",
-				 __func__, *value);
+			pr_debug("INT_DAT_LATCH_CK(%d) is out of [0~7]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PATCH_BIT;
-		field = (u32)(MSDC_INT_DAT_LATCH_CK_SEL);
+		reg = (u32 *) (base + MSDC_PATCH_BIT0);
+		field = (u32) (MSDC_PB0_INT_DAT_LATCH_CK_SEL);
 		break;
 	case CKGEN_MSDC_DLY_SEL:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-		"[%s] Input value(%d) for CKGEN_MSDC_DLY_SEL is out of range, it should be [0~31]\n",
-				 __func__, *value);
+			pr_debug("CKGEN_MSDC_DLY_SEL(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PATCH_BIT;
-		field = (u32)(MSDC_CKGEN_MSDC_DLY_SEL);
+		reg = (u32 *) (base + MSDC_PATCH_BIT0);
+		field = (u32) (MSDC_PB0_CKGEN_MSDC_DLY_SEL);
 		break;
 	case CMD_RSP_TA_CNTR:
 		if ((rw == AUTOK_WRITE) && (*value > 7)) {
-			pr_debug(
-		"[%s] Input value(%d) for CMD_RSP_TA_CNTR is out of range, it should be [0~7]\n",
-				 __func__, *value);
+			pr_debug("CMD_RSP_TA_CNTR(%d) is out of [0~7]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PATCH_BIT1;
-		field = (u32)(MSDC_PATCH_BIT1_CMD_RSP);
+		reg = (u32 *) (base + MSDC_PATCH_BIT1);
+		field = (u32) (MSDC_PB1_CMD_RSP_TA_CNTR);
 		break;
 	case WRDAT_CRCS_TA_CNTR:
 		if ((rw == AUTOK_WRITE) && (*value > 7)) {
-			pr_debug(
-		"[%s] Input value(%d) for WRDAT_CRCS_TA_CNTR is out of range, it should be [0~7]\n",
-				 __func__, *value);
+			pr_debug("WRDAT_CRCS_TA_CNTR(%d) is out of [0~7]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PATCH_BIT1;
-		field = (u32)(MSDC_PATCH_BIT1_WRDAT_CRCS);
+		reg = (u32 *) (base + MSDC_PATCH_BIT1);
+		field = (u32) (MSDC_PB1_WRDAT_CRCS_TA_CNTR);
 		break;
 	case PAD_CLK_TXDLY:
 		if ((rw == AUTOK_WRITE) && (*value > 31)) {
-			pr_debug(
-		"[%s] Input value(%d) for PAD_CLK_TXDLY is out of range, it should be [0~31]\n",
-				__func__, *value);
+			pr_debug("PAD_CLK_TXDLY(%d) is out of [0~31]\n",
+				 *value);
 			return -1;
 		}
-		reg = host->base + MSDC_PAD_TUNE;
-		field = (u32)(MSDC_PAD_TUNE_CLKTXDLY);
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_CTRL0);
+			field = (u32) (MSDC_PAD_CLK_TXDLY);
+		} else {
+			reg = (u32 *) (base + MSDC_PAD_TUNE0);
+			field = (u32) (MSDC_PAD_TUNE0_CLKTXDLY);
+		}
+		break;
+	case EMMC50_WDATA_MUX_EN:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("EMMC50_WDATA_MUX_EN(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		reg = (u32 *) (base + EMMC50_CFG0);
+		field = (u32) (MSDC_EMMC50_CFG_CRC_STS_SEL);
+		break;
+	case EMMC50_CMD_MUX_EN:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("EMMC50_CMD_MUX_EN(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		reg = (u32 *) (base + EMMC50_CFG0);
+		field = (u32) (MSDC_EMMC50_CFG_CMD_RESP_SEL);
+		break;
+	case EMMC50_WDATA_EDGE:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("EMMC50_WDATA_EDGE(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		reg = (u32 *) (base + EMMC50_CFG0);
+		field = (u32) (MSDC_EMMC50_CFG_CRC_STS_EDGE);
+		break;
+	case EMMC50_DS_Z_DLY1:
+		if ((rw == AUTOK_WRITE) && (*value > 31)) {
+			pr_debug("EMMC50_DS_Z_DLY1(%d) is out of [0~31]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_DS_TUNE);
+			field = (u32) (PAD_DS_DLY1);
+		} else {
+			reg = (u32 *) (base + EMMC50_PAD_DS_TUNE);
+			field = (u32) (MSDC_EMMC50_PAD_DS_TUNE_DLY1);
+		}
+		break;
+	case EMMC50_DS_Z_DLY1_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("EMMC50_DS_Z_DLY1_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_DS_TUNE);
+			field = (u32) (PAD_DS_DLY_SEL);
+		} else {
+			reg = (u32 *) (base + EMMC50_PAD_DS_TUNE);
+			field = (u32) (MSDC_EMMC50_PAD_DS_TUNE_DLYSEL);
+		}
+		break;
+	case EMMC50_DS_Z_DLY2:
+		if ((rw == AUTOK_WRITE) && (*value > 31)) {
+			pr_debug("EMMC50_DS_Z_DLY2(%d) is out of [0~31]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_DS_TUNE);
+			field = (u32) (PAD_DS_DLY2);
+		} else {
+			reg = (u32 *) (base + EMMC50_PAD_DS_TUNE);
+			field = (u32) (MSDC_EMMC50_PAD_DS_TUNE_DLY2);
+		}
+		break;
+	case EMMC50_DS_Z_DLY2_SEL:
+		if ((rw == AUTOK_WRITE) && (*value > 1)) {
+			pr_debug("EMMC50_DS_Z_DLY2_SEL(%d) is out of [0~1]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_DS_TUNE);
+			field = (u32) (PAD_DS_DLY2_SEL);
+		} else {
+			reg = (u32 *) (base + EMMC50_PAD_DS_TUNE);
+			field = (u32) (MSDC_EMMC50_PAD_DS_TUNE_DLY2SEL);
+		}
+		break;
+	case EMMC50_DS_ZDLY_DLY:
+		if ((rw == AUTOK_WRITE) && (*value > 31)) {
+			pr_debug("EMMC50_DS_Z_DLY(%d) is out of [0~31]\n",
+				 *value);
+			return -1;
+		}
+		if (host->base_top) {
+			reg = (u32 *) (base_top + MSDC_TOP_PAD_DS_TUNE);
+			field = (u32) (PAD_DS_DLY3);
+		} else {
+			reg = (u32 *) (base + EMMC50_PAD_DS_TUNE);
+			field = (u32) (MSDC_EMMC50_PAD_DS_TUNE_DLY3);
+		}
 		break;
 	default:
-		pr_debug("[%s] Value of [enum AUTOK_PARAM param] is wrong\n",
-			 __func__);
+		pr_debug("Value of [enum AUTOK_PARAM param] is wrong\n");
 		return -1;
 	}
 
-	if (rw == AUTOK_READ) {
+	if (rw == AUTOK_READ)
 		sdr_get_field(reg, field, value);
-	} else if (rw == AUTOK_WRITE)	{
+	else if (rw == AUTOK_WRITE) {
 		sdr_set_field(reg, field, *value);
+
 		if (param == CKGEN_MSDC_DLY_SEL)
 			mdelay(1);
-
 	} else {
-		pr_debug("[%s] Value of	[int rw] is wrong\n", __func__);
+		pr_debug("Value of [int rw] is wrong\n");
 		return -1;
 	}
+
 	return 0;
 }
 
-static int autok_param_update(enum AUTOK_PARAM param_id, unsigned int result,
-			      u8 *autok_tune_res)
+static int autok_param_update(enum AUTOK_PARAM param_id,
+			      unsigned int result, u8 *autok_tune_res)
 {
 	if (param_id < TUNING_PARAM_COUNT) {
 		if ((result > autok_param_info[param_id].range.end) ||
-		   (result < autok_param_info[param_id].range.start)) {
-			AUTOK_RAWPRINT("[AUTOK]param:%d out range[%d,%d]\r\n",
-			result, autok_param_info[param_id].range.start,
-			autok_param_info[param_id].range.end);
+		    (result < autok_param_info[param_id].range.start)) {
+			ATK_ERR("[AUTOK]param:%d out of range[%d,%d]\n",
+				result,
+				autok_param_info[param_id].range.start,
+				autok_param_info[param_id].range.end);
 			return -1;
 		}
-		autok_tune_res[param_id] = (u8)result;
+		autok_tune_res[param_id] = (u8) result;
 		return 0;
 	}
-	AUTOK_RAWPRINT("[AUTOK]param not found\r\n");
+	ATK_ERR("[AUTOK]param not found\r\n");
+
 	return -1;
 }
 
 static int autok_param_apply(struct msdc_host *host, u8 *autok_tune_res)
 {
-	unsigned int i;
-	unsigned int value;
+	unsigned int i = 0;
+	unsigned int value = 0;
 
 	for (i = 0; i < TUNING_PARAM_COUNT; i++) {
-		value = (u8)autok_tune_res[i];
-		msdc_autok_adjust_param(host, i, &value, AUTOK_WRITE);
+		value = (u8) autok_tune_res[i];
+		autok_adjust_param(host, i, &value, AUTOK_WRITE);
 	}
-	return 0;
-}
 
-static int autok_result_dump(struct msdc_host *host, u8 *autok_tune_res)
-{
-	unsigned int i;
-
-	for (i = 0; i < TUNING_PARAM_COUNT; i++) {
-		AUTOK_RAWPRINT("[AUTOK]param %s:%d\r\n",
-			       autok_param_info[i].param_name,
-			       autok_tune_res[i]);
-	}
 	return 0;
 }
 
 static void autok_tuning_parameter_init(struct msdc_host *host, u8 *res)
 {
 	unsigned int ret = 0;
+	/* void __iomem *base = host->base; */
+
+	/* MSDC_SET_FIELD(MSDC_PATCH_BIT2, 7<<29, 2); */
+	/* MSDC_SET_FIELD(MSDC_PATCH_BIT2, 7<<16, 4); */
 
 	ret = autok_param_apply(host, res);
 }
 
-static int autok_write_param(struct msdc_host *host,
-			     enum AUTOK_PARAM param, u32 value)
+static int autok_result_dump(struct msdc_host *host, u8 *autok_tune_res)
 {
-	msdc_autok_adjust_param(host, param, &value, AUTOK_WRITE);
+	ATK_ERR("[AUTOK]CMD [EDGE:%d DLY1:%d DLY2:%d ]\n",
+		autok_tune_res[0], autok_tune_res[4], autok_tune_res[6]);
+	ATK_ERR("[AUTOK]DAT [RDAT_EDGE:%d RD_FIFO_EDGE:%d WD_FIFO_EDGE:%d]\n",
+		autok_tune_res[1], autok_tune_res[2], autok_tune_res[3]);
+	ATK_ERR("[AUTOK]DAT [LATCH_CK:%d DLY1:%d DLY2:%d ]\n",
+		autok_tune_res[12], autok_tune_res[8], autok_tune_res[10]);
+	ATK_ERR("[AUTOK]DS  [DLY1:%d DLY2:%d DLY3:%d]\n",
+		autok_tune_res[13], autok_tune_res[15], autok_tune_res[17]);
+
 	return 0;
 }
 
-static int autok_path_sel(struct msdc_host *host, bool need_autok)
+/* online tuning for latch ck */
+int autok_execute_tuning_latch_ck(struct msdc_host *host, unsigned int opcode,
+	unsigned int latch_ck_initail_value)
 {
+	unsigned int ret = 0;
+	unsigned int j, k;
 	void __iomem *base = host->base;
+	unsigned int tune_time;
 
-	if (need_autok) {
-		autok_write_param(host, CMD_RSP_TA_CNTR, CMD_TA_SDR104);
-		autok_write_param(host, WRDAT_CRCS_TA_CNTR, DATA_TA_SDR104);
-		autok_write_param(host, INT_DAT_LATCH_CK, 0);
-		/*data tune mode select*/
-		autok_write_param(host, MSDC_DAT_TUNE_SEL, 1);
-		writel(0x00000000, base + MSDC_PAD_TUNE);
-	} else {
-		writel(0x00000000, base + MSDC_IOCON);
-		sdr_set_field(base + MSDC_IOCON, MSDC_IOCON_DDLSEL, 1);
-		writel(0xFFFE00C9, base + MSDC_PATCH_BIT1);
-		writel(0x00000000, base + MSDC_PAD_TUNE);
-
-		/*data tune mode select*/
-		writel(0, host->top + MSDC_TOP_DAT_TUNE_CTRL1);
-		writel(0, host->top + MSDC_TOP_DAT_TUNE_CTRL2);
-		writel(0, host->top + MSDC_TOP_DAT_TUNE_CTRL3);
-
-		autok_write_param(host, CMD_RSP_TA_CNTR, CMD_TA_SDR50);
-		autok_write_param(host, WRDAT_CRCS_TA_CNTR, DATA_TA_SDR50);
-		autok_write_param(host, INT_DAT_LATCH_CK, 0);
+	writel(0xffffffff, base + MSDC_INT);
+	tune_time = AUTOK_LATCH_CK_SDIO_TUNE_TIMES;
+	for (j = latch_ck_initail_value; j < 8;
+	     j += (host->src_clk_freq / host->sclk)) {
+		host->tune_latch_ck_cnt = 0;
+		msdc_clear_fifo();
+		sdr_set_field(base + MSDC_PATCH_BIT0,
+			      MSDC_PB0_INT_DAT_LATCH_CK_SEL, j);
+		for (k = 0; k < tune_time; k++) {
+			if (opcode == MMC_SEND_TUNING_BLOCK_HS200) {
+				switch (k) {
+				case 0:
+					host->tune_latch_ck_cnt = 1;
+					break;
+				default:
+					host->tune_latch_ck_cnt = k;
+					break;
+				}
+			} else if (opcode == MMC_SEND_TUNING_BLOCK) {
+				switch (k) {
+				case 0:
+				case 1:
+				case 2:
+					host->tune_latch_ck_cnt = 1;
+					break;
+				default:
+					host->tune_latch_ck_cnt = k - 1;
+					break;
+				}
+			} else if (opcode == MMC_SEND_EXT_CSD) {
+				host->tune_latch_ck_cnt = k + 1;
+			} else
+				host->tune_latch_ck_cnt++;
+			ret = autok_send_tune_cmd(host, opcode, TUNE_LATCH_CK);
+			if ((ret &
+			     (E_RESULT_CMD_TMO | E_RESULT_RSP_CRC)) != 0) {
+				ATK_ERR("[AUTOK]CMD Fail when tune LATCH CK\n");
+				break;
+			} else if ((ret &
+				    (E_RESULT_DAT_CRC |
+				     E_RESULT_DAT_TMO)) != 0) {
+				ATK_ERR("[AUTOK]Tune LATCH_CK error %d\r\n", j);
+				break;
+			}
+		}
+		if (ret == 0) {
+			sdr_set_field(base + MSDC_PATCH_BIT0,
+				      MSDC_PB0_INT_DAT_LATCH_CK_SEL, j);
+			break;
+		}
 	}
-
-	/*clk tune all data Line share dly */
-	autok_write_param(host, READ_DATA_SMPL_SEL, 0);
-	autok_write_param(host, WRITE_DATA_SMPL_SEL, 0);
-	autok_write_param(host, DATA_DLYLINE_SEL, 0);
-
-	/*tx clk dly fix to 0 for HQA res*/
-	autok_write_param(host, PAD_CLK_TXDLY, 0);
-	return 0;
+	host->tune_latch_ck_cnt = 0;
+	return (j >= 8) ? 0 : j;
 }
 
 /*
-* autok_param_scan used to scan cmd or data path for different with range 0~31
-* param : param used to scan
-* res: return the scan result pass status for param 0~31
-*/
-static int autok_scan_latch_ck_param(struct msdc_host *host,
-				enum AUTOK_PARAM param,
-				u32 *res){
-	unsigned int i, j;
-	unsigned int RawData = 0;
-	unsigned int ret;
+ ******************************************************
+ * Function: msdc_autok_adjust_paddly                 *
+ * Param : value - delay cnt from 0 to 63             *
+ *         pad_sel - 0 for cmd pad and 1 for data pad *
+ ******************************************************
+ */
+#define CMD_PAD_RDLY 0
+#define DAT_PAD_RDLY 1
+#define DS_PAD_RDLY 2
+static void msdc_autok_adjust_paddly(struct msdc_host *host,
+				     unsigned int *value,
+				     unsigned int pad_sel)
+{
+	unsigned int uCfgL = 0;
+	unsigned int uCfgLSel = 0;
+	unsigned int uCfgH = 0;
+	unsigned int uCfgHSel = 0;
+	unsigned int dly_cnt = *value;
 
-	if (param != INT_DAT_LATCH_CK) {
-		pr_err("[AUTOK]Error Parm out of range, please check\n\r");
-		return -1;
-	}
-	for (i = 0; i < 8; i++) {
-		autok_write_param(host, INT_DAT_LATCH_CK, i);
-		for (j = 0; j < AUTOK_CMD_TIMES * 2; j++) {
-			switch (j) {
-			case 0:
-			case 1:
-			case 2:
-				host->tune_latch_ck_cnt = 1;
-				break;
-			default:
-				host->tune_latch_ck_cnt = j - 1;
-				break;
-			}
-			ret = autok_send_multi_cmd19(host);
-			if (ret & 0x3)  {
-				AUTOK_RAWPRINT(
-			"[AUTOK]Error CMD Failed, exit@(%d)!!!\r\n", i);
-				return -1;
-			} else if (ret != 0) {
-				RawData |= (1 << i);
-				break;
-			}
-		}
-	}
-	*res = RawData;
-	return 0;
-};
+	uCfgL = (dly_cnt > 31) ? (31) : dly_cnt;
+	uCfgH = (dly_cnt > 31) ? (dly_cnt - 32) : 0;
 
-static int autok_scan_cmd_param(struct msdc_host *host,
-				enum AUTOK_PARAM param,
-				u32 *res){
-	unsigned int i, j;
-	unsigned int RawData = 0;
-	unsigned int ret;
+	uCfgLSel = (uCfgL > 0) ? 1 : 0;
+	uCfgHSel = (uCfgH > 0) ? 1 : 0;
+	switch (pad_sel) {
+	case CMD_PAD_RDLY:
+		autok_adjust_param(host, CMD_RD_D_DLY1, &uCfgL, AUTOK_WRITE);
+		autok_adjust_param(host, CMD_RD_D_DLY2, &uCfgH, AUTOK_WRITE);
 
-	for (i = 0; i < 32 ; i++) {
-		autok_write_param(host, param, i);
-		for (j = 0 ; j < AUTOK_CMD_TIMES * 2 ; j++) {
-			ret = autok_send_cmd19(host);
-			if ((ret&0x3) != 0) {
-				RawData |= (1 << i);
-				break;
-			}
-		}
-	}
-	*res = RawData;
-	return 0;
-};
+		autok_adjust_param(host, CMD_RD_D_DLY1_SEL,
+				   &uCfgLSel, AUTOK_WRITE);
+		autok_adjust_param(host, CMD_RD_D_DLY2_SEL,
+				   &uCfgHSel, AUTOK_WRITE);
+		break;
+	case DAT_PAD_RDLY:
+		autok_adjust_param(host, DAT_RD_D_DLY1, &uCfgL, AUTOK_WRITE);
+		autok_adjust_param(host, DAT_RD_D_DLY2, &uCfgH, AUTOK_WRITE);
 
-static int autok_scan_read_param(struct msdc_host *host,
-				 enum AUTOK_PARAM param,
-				 u32 *res){
-	unsigned int i, j;
-	unsigned int RawData = 0;
-	unsigned int ret;
+		autok_adjust_param(host, DAT_RD_D_DLY1_SEL,
+				   &uCfgLSel, AUTOK_WRITE);
+		autok_adjust_param(host, DAT_RD_D_DLY2_SEL,
+				   &uCfgHSel, AUTOK_WRITE);
+		break;
+	case DS_PAD_RDLY:
+		autok_adjust_param(host, EMMC50_DS_Z_DLY1, &uCfgL, AUTOK_WRITE);
+		autok_adjust_param(host, EMMC50_DS_Z_DLY2, &uCfgH, AUTOK_WRITE);
 
-	if ((param < DAT0_RD_D_DLY) || (param > DAT3_RD_D_DLY)) {
-		pr_err("[AUTOK]Error Parm out of range, please check\n\r");
-		return -1;
+		autok_adjust_param(host, EMMC50_DS_Z_DLY1_SEL,
+				   &uCfgLSel, AUTOK_WRITE);
+		autok_adjust_param(host, EMMC50_DS_Z_DLY2_SEL,
+				   &uCfgHSel, AUTOK_WRITE);
+		break;
 	}
-	for (i = 0; i < 32; i++) {
-		autok_write_param(host, DAT0_RD_D_DLY, i);
-		autok_write_param(host, DAT1_RD_D_DLY, i);
-		autok_write_param(host, DAT2_RD_D_DLY, i);
-		autok_write_param(host, DAT3_RD_D_DLY, i);
-		for (j = 0; j < AUTOK_CMD_TIMES; j++) {
-			ret = autok_send_cmd19(host);
-			if (ret & 0x3) {
-				AUTOK_RAWPRINT(
-			"[AUTOK]Error CMD Failed Need retune, exit!!!\r\n");
-				return -1;
-			} else if (ret != 0) {
-				RawData |= (1 << i);
-				break;
-			}
-		}
+}
+
+static void autok_paddly_update(unsigned int pad_sel,
+				unsigned int dly_cnt,
+				u8 *autok_tune_res)
+{
+	unsigned int uCfgL = 0;
+	unsigned int uCfgLSel = 0;
+	unsigned int uCfgH = 0;
+	unsigned int uCfgHSel = 0;
+
+	uCfgL = (dly_cnt > 31) ? (31) : dly_cnt;
+	uCfgH = (dly_cnt > 31) ? (dly_cnt - 32) : 0;
+
+	uCfgLSel = (uCfgL > 0) ? 1 : 0;
+	uCfgHSel = (uCfgH > 0) ? 1 : 0;
+	switch (pad_sel) {
+	case CMD_PAD_RDLY:
+		autok_param_update(CMD_RD_D_DLY1, uCfgL, autok_tune_res);
+		autok_param_update(CMD_RD_D_DLY2, uCfgH, autok_tune_res);
+
+		autok_param_update(CMD_RD_D_DLY1_SEL, uCfgLSel, autok_tune_res);
+		autok_param_update(CMD_RD_D_DLY2_SEL, uCfgHSel, autok_tune_res);
+		break;
+	case DAT_PAD_RDLY:
+		autok_param_update(DAT_RD_D_DLY1, uCfgL, autok_tune_res);
+		autok_param_update(DAT_RD_D_DLY2, uCfgH, autok_tune_res);
+
+		autok_param_update(DAT_RD_D_DLY1_SEL, uCfgLSel, autok_tune_res);
+		autok_param_update(DAT_RD_D_DLY2_SEL, uCfgHSel, autok_tune_res);
+		break;
+	case DS_PAD_RDLY:
+		autok_param_update(EMMC50_DS_Z_DLY1, uCfgL, autok_tune_res);
+		autok_param_update(EMMC50_DS_Z_DLY2, uCfgH, autok_tune_res);
+
+		autok_param_update(EMMC50_DS_Z_DLY1_SEL,
+				   uCfgLSel, autok_tune_res);
+		autok_param_update(EMMC50_DS_Z_DLY2_SEL,
+				   uCfgHSel, autok_tune_res);
+		break;
 	}
-	*res = RawData;
+}
+
+/*
+ ******************************************************
+ * Exectue tuning IF Implenment                       *
+ ******************************************************
+ */
+static int autok_write_param(struct msdc_host *host,
+			     enum AUTOK_PARAM param, u32 value)
+{
+	autok_adjust_param(host, param, &value, AUTOK_WRITE);
+
 	return 0;
 }
 
-static void store_current_voltage_setting(u8 *setting)
+static int autok_path_sel(struct msdc_host *host)
 {
-	u32 vol = vcorefs_sdio_get_vcore_nml();
+	void __iomem *base = host->base;
 
-	if (vol == HIGH_VOLTAGE) {
-		memcpy(sdio_hv_setting, setting, TUNING_PARAM_COUNT);
-		hv_autok_done = true;
-	} else if (vol == LOW_VOLTAGE) {
-		memcpy(sdio_lv_setting, setting, TUNING_PARAM_COUNT);
-		lv_autok_done = true;
-	}
-	pr_err("[AUTOK] cur_vol:%d, hv_done:%d, lv_done:%d\n",
-	       vol, hv_autok_done, lv_autok_done);
+	autok_write_param(host, READ_DATA_SMPL_SEL, 0);
+	autok_write_param(host, WRITE_DATA_SMPL_SEL, 0);
+
+	/* clK tune all data Line share dly */
+	autok_write_param(host, DATA_DLYLINE_SEL, 0);
+
+	/* data tune mode select */
+#if defined(CHIP_DENALI_3_DAT_TUNE)
+	autok_write_param(host, MSDC_DAT_TUNE_SEL, 1);
+#else
+	autok_write_param(host, MSDC_DAT_TUNE_SEL, 0);
+#endif
+	autok_write_param(host, MSDC_WCRC_ASYNC_FIFO_SEL, 1);
+	autok_write_param(host, MSDC_RESP_ASYNC_FIFO_SEL, 0);
+
+	/* eMMC50 Function Mux */
+	/* write path switch to emmc45 */
+	autok_write_param(host, EMMC50_WDATA_MUX_EN, 0);
+
+	/* response path switch to emmc45 */
+	autok_write_param(host, EMMC50_CMD_MUX_EN, 0);
+	autok_write_param(host, EMMC50_WDATA_EDGE, 0);
+
+	/* Common Setting Config */
+	autok_write_param(host, CKGEN_MSDC_DLY_SEL, AUTOK_CKGEN_VALUE);
+	autok_write_param(host, CMD_RSP_TA_CNTR, AUTOK_CMD_TA_VALUE);
+	autok_write_param(host, WRDAT_CRCS_TA_CNTR, AUTOK_CRC_TA_VALUE);
+
+	sdr_set_field(base + MSDC_PATCH_BIT1, MSDC_PB1_GET_BUSY_MA,
+		      AUTOK_BUSY_MA_VALUE);
+	sdr_set_field(base + MSDC_PATCH_BIT1, MSDC_PB1_GET_CRC_MA,
+		      AUTOK_CRC_MA_VALUE);
+
+	return 0;
 }
 
-static bool apply_tuned_vol_setting(struct msdc_host *host)
+static int autok_init_sdr104(struct msdc_host *host)
 {
-	u32 vol = vcorefs_sdio_get_vcore_nml();
-	bool ret;
+	void __iomem *base = host->base;
 
-	if (vol == HIGH_VOLTAGE) {
-		if (!hv_autok_done)
-			return false;
-		pr_err("[AUTOK] apply high vol:%d setting\n", HIGH_VOLTAGE);
-		autok_result_dump(host, sdio_hv_setting);
-		autok_tuning_parameter_init(host, sdio_hv_setting);
-		ret = true;
-	} else if (vol == LOW_VOLTAGE) {
-		if (!lv_autok_done)
-			return false;
-		pr_err("[AUTOK] apply low vol:%d setting\n", LOW_VOLTAGE);
-		autok_result_dump(host, sdio_lv_setting);
-		autok_tuning_parameter_init(host, sdio_lv_setting);
-		ret = true;
+	/* driver may miss data tune path setting in the interim */
+	autok_path_sel(host);
+
+	/* if any specific config need modify add here */
+	/* LATCH_TA_EN Config for WCRC Path non_HS400 */
+	sdr_set_field(base + MSDC_PATCH_BIT2, MSDC_PB2_CRCSTSENSEL,
+		      AUTOK_CRC_LATCH_EN_NON_HS400_VALUE);
+
+	/* LATCH_TA_EN Config for CMD Path non_HS400 */
+	sdr_set_field(base + MSDC_PATCH_BIT2, MSDC_PB2_RESPSTENSEL,
+		      AUTOK_CMD_LATCH_EN_NON_HS400_VALUE);
+
+	return 0;
+}
+
+/* online tuning for SDIO/SD */
+static int execute_online_tuning(struct msdc_host *host, u8 *res)
+{
+	unsigned int ret = 0;
+	unsigned int uCmdEdge = 0;
+	unsigned int uDatEdge = 0;
+	u64 RawData64 = 0LL;
+	unsigned int score = 0;
+	unsigned int j, k;
+	unsigned int opcode = MMC_SEND_TUNING_BLOCK;
+	struct AUTOK_REF_INFO uCmdDatInfo;
+	struct AUTOK_SCAN_RES *pBdInfo;
+	char tune_result_str64[65];
+	u8 p_autok_tune_res[TUNING_PARAM_COUNT];
+
+	autok_init_sdr104(host);
+	memset((void *)p_autok_tune_res, 0,
+	       sizeof(p_autok_tune_res) / sizeof(u8));
+
+	/* Step1 : Tuning Cmd Path */
+	autok_tuning_parameter_init(host, p_autok_tune_res);
+	memset(&uCmdDatInfo, 0, sizeof(struct AUTOK_REF_INFO));
+
+	uCmdEdge = 0;
+	do {
+		pBdInfo = (struct AUTOK_SCAN_RES *)&
+			  (uCmdDatInfo.scan_info[uCmdEdge]);
+		autok_adjust_param(host, CMD_EDGE, &uCmdEdge, AUTOK_WRITE);
+		RawData64 = 0LL;
+		for (j = 0; j < 64; j++) {
+			msdc_autok_adjust_paddly(host, &j, CMD_PAD_RDLY);
+			for (k = 0; k < AUTOK_CMD_TIMES / 2; k++) {
+				ret = autok_send_tune_cmd(host,
+							  opcode, TUNE_CMD);
+				if ((ret & (E_RESULT_CMD_TMO |
+					    E_RESULT_RSP_CRC)) != 0) {
+					RawData64 |= (u64) (1LL << j);
+					break;
+				}
+			}
+		}
+		score = autok_simple_score64(tune_result_str64, RawData64);
+		//ATK_DBG(ATK_RES, "[AUTOK]CMD %d \t %d \t %s\r\n",
+		//	       uCmdEdge, score, tune_result_str64);
+		if (autok_check_scan_res64(RawData64, pBdInfo) != 0) {
+			host->autok_error = AUTOK_FAIL;
+			msdc_dump_all_register(host);
+			return AUTOK_FAIL;
+		}
+		#if 0
+		ATK_DBG(ATK_RES,
+		"[AUTOK]Edge:%d \t BoundaryCnt:%d \t FullBoundaryCnt:%d \t\n",
+		uCmdEdge, pBdInfo->bd_cnt, pBdInfo->fbd_cnt);
+
+		for (i = 0; i < BD_MAX_CNT; i++) {
+			ATK_DBG(ATK_RES,
+		"[AUTOK]BoundInf[%d]: S:%d \t E:%d \t W:%d \t FullBound:%d\n",
+		i, pBdInfo->bd_info[i].Bound_Start,
+		pBdInfo->bd_info[i].Bound_End, pBdInfo->bd_info[i].Bound_width,
+		pBdInfo->bd_info[i].is_fullbound);
+		}
+		#endif
+
+		uCmdEdge ^= 0x1;
+	} while (uCmdEdge);
+
+	if (autok_pad_dly_sel(&uCmdDatInfo) == 0) {
+		autok_param_update(CMD_EDGE, uCmdDatInfo.opt_edge_sel,
+				   p_autok_tune_res);
+		autok_paddly_update(CMD_PAD_RDLY, uCmdDatInfo.opt_dly_cnt,
+				    p_autok_tune_res);
 	} else {
-		ret = false;
+		ATK_DBG(ATK_RES, "[AUTOK]======Analysis Fail!!=======\n");
+		host->autok_error = AUTOK_FAIL;
+		msdc_dump_all_register(host);
+		return AUTOK_FAIL;
 	}
-	pr_err("[AUTOK] cur_vol:%d tuned:%d\n", vol, ret);
+
+	/* Step2 : Tuning Data Path */
+	autok_tuning_parameter_init(host, p_autok_tune_res);
+	memset(&uCmdDatInfo, 0, sizeof(struct AUTOK_REF_INFO));
+
+	uDatEdge = 0;
+	do {
+		pBdInfo = (struct AUTOK_SCAN_RES *)&
+			  (uCmdDatInfo.scan_info[uDatEdge]);
+		autok_adjust_param(host, RD_FIFO_EDGE, &uDatEdge, AUTOK_WRITE);
+		RawData64 = 0LL;
+		for (j = 0; j < 64; j++) {
+			msdc_autok_adjust_paddly(host, &j, DAT_PAD_RDLY);
+			for (k = 0; k < AUTOK_CMD_TIMES / 2; k++) {
+				ret = autok_send_tune_cmd(host, opcode,
+							  TUNE_DATA);
+				if ((ret & (E_RESULT_CMD_TMO |
+					    E_RESULT_RSP_CRC)) != 0) {
+					ATK_ERR("[AUTOK]Tune read CMD Fail\n");
+					host->autok_error = -1;
+					return -1;
+				} else if ((ret & (E_RESULT_DAT_CRC |
+						   E_RESULT_DAT_TMO)) != 0) {
+					RawData64 |= (u64) (1LL << j);
+					break;
+				}
+			}
+		}
+		score = autok_simple_score64(tune_result_str64, RawData64);
+		//ATK_DBG(ATK_RES, "[AUTOK]DAT %d \t %d \t %s\r\n",
+		//	uDatEdge, score, tune_result_str64);
+		if (autok_check_scan_res64(RawData64, pBdInfo) != 0) {
+			host->autok_error = AUTOK_FAIL;
+			msdc_dump_all_register(host);
+			return AUTOK_FAIL;
+		}
+		#if 0
+		ATK_DBG(ATK_RES,
+		"[AUTOK]Edge:%d \t BoundaryCnt:%d \t FullBoundaryCnt:%d \t\n",
+		uDatEdge, pBdInfo->bd_cnt, pBdInfo->fbd_cnt);
+
+		for (i = 0; i < BD_MAX_CNT; i++) {
+			ATK_DBG(ATK_RES,
+		"[AUTOK]BoundInf[%d]: S:%d \t E:%d \t W:%d \t FullBound:%d\r\n",
+		i, pBdInfo->bd_info[i].Bound_Start,
+		pBdInfo->bd_info[i].Bound_End, pBdInfo->bd_info[i].Bound_width,
+		pBdInfo->bd_info[i].is_fullbound);
+		}
+		#endif
+
+		uDatEdge ^= 0x1;
+	} while (uDatEdge);
+
+	if (autok_pad_dly_sel(&uCmdDatInfo) == 0) {
+		autok_param_update(RD_FIFO_EDGE, uCmdDatInfo.opt_edge_sel,
+				   p_autok_tune_res);
+		autok_paddly_update(DAT_PAD_RDLY, uCmdDatInfo.opt_dly_cnt,
+				    p_autok_tune_res);
+		autok_param_update(WD_FIFO_EDGE, uCmdDatInfo.opt_edge_sel,
+				   p_autok_tune_res);
+	} else {
+		ATK_DBG(ATK_RES, "[AUTOK][Error]=====Analysis Fail!!=======\n");
+		msdc_dump_all_register(host);
+		host->autok_error = AUTOK_FAIL;
+		return AUTOK_FAIL;
+	}
+
+	autok_tuning_parameter_init(host, p_autok_tune_res);
+
+	/* Step3 : Tuning LATCH CK */
+	p_autok_tune_res[INT_DAT_LATCH_CK] = autok_execute_tuning_latch_ck(host,
+				opcode, p_autok_tune_res[INT_DAT_LATCH_CK]);
+
+	autok_result_dump(host, p_autok_tune_res);
+#if AUTOK_PARAM_DUMP_ENABLE
+	autok_register_dump(host);
+#endif
+	if (res != NULL) {
+		memcpy((void *)res, (void *)p_autok_tune_res,
+		       sizeof(p_autok_tune_res) / sizeof(u8));
+	}
+	host->autok_error = 0;
+
+	return 0;
+}
+
+static int autok_execute_tuning(struct msdc_host *host, u8 *res)
+{
+	int ret = 0;
+	struct timeval tm_s, tm_e;
+	unsigned int tm_val = 0;
+	unsigned int clk_pwdn = 0;
+	unsigned int int_en = 0;
+	unsigned int retry_cnt = 3;
+	void __iomem *base = host->base;
+
+	do_gettimeofday(&tm_s);
+
+	do {
+		autok_msdc_reset();
+		msdc_clear_fifo();
+		int_en = readl(base + MSDC_INTEN);
+		writel(0, base + MSDC_INTEN);
+		sdr_get_field(base + MSDC_CFG, MSDC_CFG_CKPDN, &clk_pwdn);
+		sdr_set_field(base + MSDC_CFG, MSDC_CFG_CKPDN, 1);
+		ret = execute_online_tuning(host, res);
+		if (!ret)
+			break;
+		retry_cnt--;
+	} while (retry_cnt);
+
+	autok_msdc_reset();
+	msdc_clear_fifo();
+	writel(0xffffffff, base + MSDC_INT);
+	writel(int_en, base + MSDC_INTEN);
+	sdr_set_field(base + MSDC_CFG, MSDC_CFG_CKPDN, clk_pwdn);
+
+	do_gettimeofday(&tm_e);
+	tm_val = (tm_e.tv_sec - tm_s.tv_sec) * 1000 +
+		 (tm_e.tv_usec - tm_s.tv_usec) / 1000;
+	ATK_ERR("[AUTOK]=========Time Cost:%d ms========\n", tm_val);
+
 	return ret;
+}
+
+static void msdc_dump_all_register(struct msdc_host *host)
+{
+	void __iomem *base = host->base;
+	int i;
+	unsigned int left_cnt;
+	unsigned int byte16_align_cnt;
+
+	byte16_align_cnt = MAX_REGISTER_ADDR / 16;
+	for (i = 0; i < byte16_align_cnt; i++)
+		pr_info("SDIO reg[%.2x]=0x%.8x reg[%.2x]=0x%.8x reg[%.2x]=0x%.8x reg[%.2x]=0x%.8x\n",
+			i * 16, readl(base + i * 16),
+			i * 16 + 4, readl(base + i * 16 + 4),
+			i * 16 + 8, readl(base + i * 16 + 8),
+			i * 16 + 12, readl(base + i * 16 + 12));
+
+	left_cnt = (MAX_REGISTER_ADDR - byte16_align_cnt * 16) / 4 + 1;
+	for (i = 0; i < left_cnt; i++)
+		pr_info("SDIO reg[%.2x]=0x%.8x\n",
+		       byte16_align_cnt * 16 + i * 4,
+		       readl(base + byte16_align_cnt * 16 + i * 4));
 }
 
 static void msdc_dump_register(struct msdc_host *host)
 {
 	void __iomem *base = host->base;
 
-	pr_err("SDIO MSDC_CFG=0x%.8x\n", readl(base + MSDC_CFG));
-	pr_err("SDIO MSDC_IOCON=0x%.8x\n", readl(base + MSDC_IOCON));
-	pr_err("SDIO MSDC_PATCH_BIT=0x%.8x\n", readl(base + MSDC_PATCH_BIT));
-	pr_err("SDIO MSDC_PATCH_BIT1=0x%.8x\n", readl(base + MSDC_PATCH_BIT1));
-	pr_err("SDIO MSDC_PAD_TUNE=0x%.8x\n", readl(base + MSDC_PAD_TUNE));
-	pr_err("SDIO TOP_DAT_TUNE_CTRL1=0x%.8x\n",
-			readl(host->top + MSDC_TOP_DAT_TUNE_CTRL1));
-	pr_err("SDIO TOP_DAT_TUNE_CTRL2=0x%.8x\n",
-			readl(host->top + MSDC_TOP_DAT_TUNE_CTRL2));
-	pr_err("SDIO TOP_DAT_TUNE_CTRL3=0x%.8x\n",
-			readl(host->top + MSDC_TOP_DAT_TUNE_CTRL3));
-}
-
-static int execute_online_tuning(struct	msdc_host *host)
-{
-	unsigned int ret = 0;
-	unsigned int uCkgenSel = 0;
-	unsigned int uCmdPadDDly = 0;
-	unsigned int uCmdIntDly = 0;
-	unsigned int uCmdEdge = 0;
-	unsigned int uDatPadDDly = 0;
-	unsigned int uWCrcIntDly = 0;
-	unsigned int uLatchCK = 0;
-	unsigned int uEdgeSwitchCnt = 0;
-	unsigned int RawData = 0;
-	unsigned int score = 0;
-	unsigned int i = 0;
-	/* use to got the first boundary for Int bound*/
-	struct AUTOK_SCAN_RES RawScanRes;
-	/* use to got the first boundary for Pad bound*/
-	struct AUTOK_SCAN_RES RawScanPadRes;
-	/*use to calc 1T cycle count*/
-	struct AUTOK_SCAN_RES ScanRef;
-	unsigned int raw_mid = 0;
-	unsigned int ref_mid = 0;
-	unsigned int lg_lvl = autok_debug_level;
-	u8 p_autok_tune_res[TUNING_PARAM_COUNT];
-	char tune_result_str[33];
-	struct AUTOK_REF_INFO g_autok_bound_info;
-
-	autok_path_sel(host, true);
-	if (apply_tuned_vol_setting(host))
-		return ret;
-	msdc_dump_register(host);
-	memset((void *)p_autok_tune_res, 0, sizeof(p_autok_tune_res)/sizeof(u8));
-	p_autok_tune_res[DAT_WRD_DLY] = 4;
-	memset((void *)&g_autok_bound_info, 0, sizeof(g_autok_bound_info)/sizeof(u8));
-
-	/* 1 Step1.1 Find IntDly_Line Full Boundary Pos first for Referenct */
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	/* AUTOK_RAWPRINT(
-	 *	"[AUTOK]Step1.1Find Full Boundary Pos by CMD Resp Internal Delay\r\n");
-	 */
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK]CMD_EDGE \t CKGEN \t CMD_RESP_RD_DLY \r\n");
-	uCmdEdge = 1;
-	uCkgenSel = AUTOK_FINAL_CKGEN_SEL;
-	uCmdPadDDly = 0;
-	uEdgeSwitchCnt = 0;
-	do {
-		RawData = 0;
-		/*Error can not found Full Boundary by swith cmd Edge twice*/
-		if (uEdgeSwitchCnt > 1) {
-			AUTOK_RAWPRINT(
-		"[AUTOK]Error: Cannot found Full Boundary by swith cmd Edge twice");
-			break;
-		}
-		memset(&RawScanRes, 0, sizeof(struct AUTOK_SCAN_RES));
-		msdc_autok_adjust_param(host, CMD_RD_D_DLY, &uCmdPadDDly,
-					AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_EDGE, &uCmdEdge, AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CKGEN_MSDC_DLY_SEL, &uCkgenSel,
-					AUTOK_WRITE);
-		autok_scan_cmd_param(host, CMD_RESP_RD_DLY, &RawData);
-		score = autok_simple_score(tune_result_str, RawData);
-		AUTOK_DBGPRINT(AUTOK_DBG_RES, "[AUTOK]%d\t %d\t %d\t %s\r\n",
-			       uCmdEdge, uCkgenSel, score, tune_result_str);
-		/*Pad Boundary occours*/
-		if (autok_calc_bit_cnt(RawData) > 24) {
-			uCmdPadDDly += 8; /*Shift Pad for Retry*/
-			if (uCmdPadDDly > 31) {
-				AUTOK_RAWPRINT(
-				"[AUTOK] Fatal Error Invalid Scan by shift pad dly to max 31\r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Pad Boundary exist shift pad dly\r\n");
-			continue;
-		} else if (RawData == 0) { /* Boundary not fount */
-			uCkgenSel += 2;    /*Shift CKG for Retry*/
-			if (uCkgenSel > 31) {
-				AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-				"[AUTOK] Fatal Error Invalid Scan by shift ckg to max 31\r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Boundary not found shift ckg\r\n");
-			continue;
-		} else {
-			autok_check_scan_res(RawData, &RawScanRes);
-			if ((RawScanRes.Bound_Start == 0) && (uCkgenSel)) {
-				/*FB not found & retry*/
-				/*shift CKG for FB check*/
-				uCkgenSel -= 1;
-				continue;
-			} else if (RawScanRes.Bound_Start == 0) {
-				/*can not find FB in this edge and ckg is 0*/
-				uCmdEdge ^= 0x1;
-				uCkgenSel = 0;
-				uEdgeSwitchCnt++;
-				continue;
-			} else if ((RawScanRes.Bound_End == 31) &&
-				  (uCkgenSel < 31)) {
-				/*FB not found & retry*/
-				uCkgenSel += 1;
-				continue;
-			} else if (RawScanRes.Bound_End == 31) {
-				/*can not find FB in this edge and ckg is 31*/
-				uCmdEdge ^= 0x1;
-				uCkgenSel = 0;
-				uEdgeSwitchCnt++;
-				continue;
-			} else {
-				/* Full Bound found */
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-			"[AUTOK] ------Record Boundary info-------------\r\n");
-				RawScanRes.boud_info_valid = true;
-				RawScanRes.bound_ckg = uCkgenSel;
-				RawScanRes.bound_edge = uCmdEdge;
-				memcpy(&(g_autok_bound_info.bound_int),
-				       &RawScanRes,
-				       sizeof(struct AUTOK_SCAN_RES));
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK] FB Found CKG:%d, S:%d, E:%d, W:%d, Edge:%d, PadDdly:%d\r\n",
-					       uCkgenSel, RawScanRes.Bound_Start,
-					       RawScanRes.Bound_End,
-					       RawScanRes.bound_width, uCmdEdge,
-					       uCmdPadDDly);
-				break;
-			}
-		}
-	} while (1);
-	if (g_autok_bound_info.bound_int.boud_info_valid != true) {
-		AUTOK_RAWPRINT(
-		"[AUTOK] Fatal Error couldn't find bound by scan ckgen and edge \r\n");
-		return -1;
-	}
-	if (RawScanRes.bound_ckg > 16) {
-		AUTOK_RAWPRINT(
-		"[AUTOK] Warn Current CKG too large for reference\r\n");
-	}
-	/*
-	 * 1 Step1.2 Caculate 1T Cycle Count -> base step1.1
-	 * using CKGen && CMD_RSP_INT_DLY
-	 */
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	/* AUTOK_RAWPRINT(
-	 *	"[AUTOK]Step1.2 Find 1T Cycle Count by switch CMD Edge\r\n");
-	 */
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK]CMD_EDGE \t CKGEN \t CMD_RESP_RD_DLY \r\n");
-	uCmdEdge = RawScanRes.bound_edge ^ 0X1;
-	uCkgenSel = RawScanRes.bound_ckg + (RawScanRes.Bound_End+3)/4;
-	uCmdPadDDly = 0;
-	do {
-		RawData = 0;
-		memset(&ScanRef, 0, sizeof(struct AUTOK_SCAN_RES));
-		msdc_autok_adjust_param(host, CMD_RD_D_DLY, &uCmdPadDDly,
-					AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_EDGE, &uCmdEdge, AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CKGEN_MSDC_DLY_SEL, &uCkgenSel,
-					AUTOK_WRITE);
-		autok_scan_cmd_param(host, CMD_RESP_RD_DLY, &RawData);
-		score = autok_simple_score(tune_result_str, RawData);
-		AUTOK_DBGPRINT(AUTOK_DBG_RES,
-				"[AUTOK]%d \t %d \t %d \t %s\r\n",
-			       uCmdEdge, uCkgenSel, score, tune_result_str);
-		if (autok_calc_bit_cnt(RawData) > 24) {
-			/*Pad Boundary occours*/
-			uCmdPadDDly += 8; /*Shift Pad for Retry*/
-			if (uCmdPadDDly > 31) {
-				AUTOK_RAWPRINT(
-			"[AUTOK] Fatal Error Invalid Scan by shift pad dly to max 31 \r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Pad Boundary exist shift pad dly\r\n");
-			continue;
-		} else if (RawData == 0) { /*1T	> 64*/
-			/**
-			 * After switch edge still not find boundary shift
-			 * small ckg may find nearest bound
-			 */
-			uCkgenSel += 2;
-			if (uCkgenSel > 31) {
-				AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Fatal Error Invalid Scan by shift ckg to max 31\r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Boundary not found shift ckg\r\n");
-			continue;
-		} else {
-			autok_check_scan_res(RawData, &ScanRef);
-			if (ScanRef.Bound_Start == 0) {
-				/* calc 1T by start*/
-				g_autok_bound_info.bound_cycle =
-				    ScanRef.Bound_End - RawScanRes.Bound_End
-				    + (uCkgenSel - RawScanRes.bound_ckg) * 4;
-				g_autok_bound_info.bound_cycle <<= 1;
-			} else if (ScanRef.Bound_End == 31) {
-				/*calc 1T	by end */
-				g_autok_bound_info.bound_cycle =
-				    ScanRef.Bound_Start - RawScanRes.Bound_Start
-				    + (uCkgenSel-RawScanRes.bound_ckg) * 4;
-				g_autok_bound_info.bound_cycle <<= 1;
-			} else {
-				/* calc 1T by mid*/
-				raw_mid = RawScanRes.Bound_Start
-					  + RawScanRes.bound_width / 2;
-				ref_mid = ScanRef.Bound_Start
-					  + ScanRef.bound_width / 2;
-				g_autok_bound_info.bound_cycle = ref_mid - raw_mid
-								 + (uCkgenSel-RawScanRes.bound_ckg) * 4;
-				g_autok_bound_info.bound_cycle <<= 1;
-			}
-			break;
-		}
-	} while (1);
-	/* AUTOK_DBGPRINT(AUTOK_DBG_RES,
-	 *	"[AUTOK] ------Record 1T Cycle info-------------\r\n");
-	 */
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK] 1T Cycle Count calc: %d\r\n",
-		g_autok_bound_info.bound_cycle);
-	/*
-	 * 1 Step1.3 Find Pad_Dat_Dly_Line Full Boundary Pos for Referenct
-	 */
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	/* AUTOK_RAWPRINT(
-	 * "[AUTOK]Step1.3Find Full Boundary Pos by CMD Pad Data Delay\r\n");
-	 */
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK]CMD_EDGE \t CKGEN \t CMD_RD_D_DLY \r\n");
-	uCmdEdge = 0;
-	uCkgenSel = AUTOK_FINAL_CKGEN_SEL;
-	uCmdIntDly = 0;
-	uEdgeSwitchCnt = 0;
-	do {
-		RawData = 0;
-		if (uEdgeSwitchCnt > 1) {
-			/**
-			 * Error can not found Full Boundary by
-			 * swith cmd Edge twice
-			 */
-			AUTOK_RAWPRINT(
-		"[AUTOK]Error: Can not found Full Boundary by swith cmd Edge twice");
-			break;
-		}
-		memset(&RawScanPadRes, 0, sizeof(struct AUTOK_SCAN_RES));
-		msdc_autok_adjust_param(host, CMD_RESP_RD_DLY, &uCmdIntDly,
-					AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_EDGE, &uCmdEdge, AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CKGEN_MSDC_DLY_SEL, &uCkgenSel,
-					AUTOK_WRITE);
-		autok_scan_cmd_param(host, CMD_RD_D_DLY, &RawData);
-		score = autok_simple_score(tune_result_str, RawData);
-		AUTOK_DBGPRINT(AUTOK_DBG_RES,
-				"[AUTOK]%d \t %d \t %d \t %s\r\n",
-			       uCmdEdge, uCkgenSel, score, tune_result_str);
-		if (score < 8) { /*Pad Boundary occours*/
-			uCmdIntDly += 8; /* Shift Pad for Retry*/
-			if (uCmdIntDly > 31) {
-				AUTOK_RAWPRINT(
-			"[AUTOK] Fatal Error Invalid Scan by shift Int dly to max 31 \r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Int Boundary exist shift Int dly\r\n");
-			continue;
-		} else if (RawData == 0) { /*Boundary not fount*/
-			uCkgenSel += 2; /*(32/4 - 1);*/  /*Shift CKG for Retry*/
-			if (uCkgenSel > 31) {
-				AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Fatal Error Invalid Scan by shift ckg to max 31\r\n");
-				return -1;
-			}
-			AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-			"[AUTOK] Trace Boundary not found shift ckg\r\n");
-			continue;
-		} else {
-			autok_check_scan_res(RawData, &RawScanPadRes);
-			if ((RawScanPadRes.Bound_Start == 0) &&
-			    (uCkgenSel < 31)) {
-				/*FB not found & retry*/
-				uCkgenSel += 1;
-				continue;
-			} else if (RawScanPadRes.Bound_Start == 0) {
-				uCmdEdge ^= 0x1;
-				uCkgenSel = 0;
-				uEdgeSwitchCnt++;
-				continue;
-			} else if ((RawScanPadRes.Bound_End == 31) &&
-				   (uCkgenSel > 0)) {
-				/*FB not found & retry*/
-				uCkgenSel -= 1;
-				continue;
-			} else if (RawScanPadRes.Bound_End == 31) {
-				uCmdEdge ^= 0x1;
-				uCkgenSel = 0;
-				uEdgeSwitchCnt++;
-				continue;
-			} else { /* Full Bound found*/
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-				"[AUTOK] ------Record Pad Boundary info-------------\r\n");
-				RawScanPadRes.boud_info_valid = true;
-				RawScanPadRes.bound_ckg = uCkgenSel;
-				RawScanPadRes.bound_edge = uCmdEdge;
-				memcpy(&(g_autok_bound_info.bound_pad),
-				       &RawScanPadRes,
-				       sizeof(struct AUTOK_SCAN_RES));
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-			"[AUTOK] FB Found CKG:%d, Start:%d, End:%d, Width:%d, Edge:%d, IndDly:%d\r\n",
-						uCkgenSel,
-					       RawScanPadRes.Bound_Start,
-					       RawScanPadRes.Bound_End,
-					       RawScanPadRes.bound_width,
-					       uCmdEdge, uCmdIntDly);
-				break;
-			}
-		}
-	} while (1);
-	if (g_autok_bound_info.bound_pad.boud_info_valid != true) {
-		AUTOK_RAWPRINT(
-		"[AUTOK] Fatal Error couldn't find bound by scan ckgen and edge \r\n");
-		return -1;
-	}
-	if (RawScanPadRes.bound_ckg > 16)
-		AUTOK_RAWPRINT(
-		"[AUTOK] Warn Current CKG too large for reference\r\n");
-	/**
-	 * Step 2: Calc optimised CMD Internal Delay base on BoundInt_info
-	*/
-	/* AUTOK_RAWPRINT(
-	 * "[AUTOK]Step2. Calc Best Result for CMD Internal Delay and Pad Data Delay\r\n");
-	 */
-	if (autok_cmd_rsp_dly_sel(&g_autok_bound_info, &uCmdIntDly, &uCmdEdge,
-				  AUTOK_FINAL_CKGEN_SEL) != 0)
-		return -1;
-
-	autok_param_update(CMD_RESP_RD_DLY, uCmdIntDly, p_autok_tune_res);
-	autok_param_update(CMD_EDGE, uCmdEdge, p_autok_tune_res);
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-	"[AUTOK] CMD Edge Sel: %d, CMD Int Delay Sel: %d\r\n",
-			uCmdEdge, uCmdIntDly);
-	if (autok_cmd_pad_dly_sel(&g_autok_bound_info, &uCmdPadDDly, uCmdEdge,
-				  AUTOK_FINAL_CKGEN_SEL) != 0)
-		return -1;
-
-	autok_param_update(CMD_RD_D_DLY, uCmdPadDDly, p_autok_tune_res);
-	AUTOK_DBGPRINT(AUTOK_DBG_RES, "[AUTOK]CMD Pad Delay Sel: %d\r\n",
-		       uCmdPadDDly);
-
-	/* Step3.1 Scan & found Data Pad Bound info */
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	/* AUTOK_RAWPRINT(
-	 * "[AUTOK]Step3. Find Full Boundary Pos by Data Pad Data Delay\r\n");
-	 */
-	AUTOK_DBGPRINT(AUTOK_DBG_RES,
-	"[AUTOK]CKGEN \t [CMD_EDGE \t CMD_RESP_RD_DLY\t CMD_RD_D_DLY] \t DAT_RD_D_DLY\r\n");
-	uCmdEdge = 0;
-	uCmdIntDly = 0;
-	uCmdPadDDly = 0;
-	uCkgenSel = AUTOK_FINAL_CKGEN_SEL;
-	do {
-		memset(&RawScanPadRes, 0, sizeof(struct AUTOK_SCAN_RES));
-		if (uCkgenSel > 31)
-			uCkgenSel = 31;
-		autok_debug_level = AUTOK_DBG_RES;
-		if (autok_cmd_rsp_dly_sel(&g_autok_bound_info, &uCmdIntDly,
-					  &uCmdEdge, uCkgenSel) != 0) {
-			AUTOK_RAWPRINT(
-			"[AUTOK]Error Cmd_Int_Dly Calc Failed\r\n");
-			return -1;
-		}
-		if (autok_cmd_pad_dly_sel(&g_autok_bound_info, &uCmdPadDDly,
-					  uCmdEdge, uCkgenSel) != 0) {
-			AUTOK_RAWPRINT(
-			"[AUTOK]Error Cmd_Pad_Dly Calc Failed\r\n");
-			return -1;
-		}
-		autok_debug_level = lg_lvl;
-		msdc_autok_adjust_param(host, CKGEN_MSDC_DLY_SEL, &uCkgenSel,
-					AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_EDGE, &uCmdEdge, AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_RESP_RD_DLY, &uCmdIntDly,
-					AUTOK_WRITE);
-		msdc_autok_adjust_param(host, CMD_RD_D_DLY, &uCmdPadDDly,
-					AUTOK_WRITE);
-		RawData = 0;
-		ret = autok_scan_read_param(host, DAT0_RD_D_DLY, &RawData);
-		if (ret != 0)
-			pr_err("[AUTOK]Error Scan Data Path Failed\n\r");
-		score = autok_simple_score(tune_result_str, RawData);
-
-		AUTOK_DBGPRINT(AUTOK_DBG_RES,
-		"[AUTOK]%d  \t  [%d  \t  %d  \t  %d]  \t %d  \t  %s\r\n",
-				uCkgenSel, uCmdEdge, uCmdIntDly, uCmdPadDDly,
-				score, tune_result_str);
-
-		if (score < 3) {  /* Shummo hole issue occoured */
-			if (uCkgenSel < 31) {
-				AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-				"[AUTOK] Trace Current CKG May occurred shummo hole, need shift ckg\r\n");
-				uCkgenSel += 1; /* Shift Pad for Retry */
-				continue;
-			} else {
-				AUTOK_RAWPRINT(
-				"[AUTOK] Error Can not find Full Boundary by Shift CKG from 0~31\r\n");
-				return -1;
-			}
-		} else if (RawData == 0) {
-			/* Boundary not fount */
-			if (uCkgenSel < 31) {
-				/*Shift CKG for Retry*/
-				uCkgenSel += 2; /* (32/4 -1); */
-				AUTOK_DBGPRINT(AUTOK_DBG_TRACE,
-				"[AUTOK] Trace Boundary not found shift ckg\r\n");
-				continue;
-			} else {
-				AUTOK_RAWPRINT(
-			"[AUTOK] Error Can not find Full Boundary by Shift CKG from 0~31\r\n");
-				return -1;
-			}
-		} else {
-			autok_check_scan_res(RawData, &RawScanPadRes);
-			if ((RawScanPadRes.Bound_Start == 0) &&
-			    (uCkgenSel < 31)) {	/*FB not found & retry*/
-				uCkgenSel += 1;
-				continue;
-			} else if (RawScanPadRes.Bound_Start == 0) {
-				AUTOK_RAWPRINT(
-			"[AUTOK] Error Can not find Full Boundary by Shift CKG from 0~31\r\n");
-				return -1;
-			} else if ((RawScanPadRes.Bound_End == 31) &&
-				   (uCkgenSel > 0)) { /*FB not found & retry*/
-				uCkgenSel -= 1;
-				continue;
-			} else if (RawScanPadRes.Bound_End == 31) {
-				/**
-				 * shift more ckg to find next
-				 * full Boundary
-				 */
-				uCkgenSel += 8;
-				continue;
-			} else if ((RawScanPadRes.Bound_End + RawScanPadRes.Bound_Start) / 2 < 16) {
-				/*
-				 * Full Bound found , but fail boundary position is not expected.
-				 */
-				uCkgenSel += 1;
-				continue;
-			} else { /* Full Bound found*/
-				/* record Boundary info */
-				autok_param_update(CKGEN_MSDC_DLY_SEL, uCkgenSel, p_autok_tune_res);
-				autok_param_update(CMD_EDGE, uCmdEdge, p_autok_tune_res);
-				autok_param_update(CMD_RESP_RD_DLY, uCmdIntDly, p_autok_tune_res);
-				autok_param_update(CMD_RD_D_DLY, uCmdPadDDly, p_autok_tune_res);
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-				"[AUTOK] -------------Record Read Pad Boundary info-------------\r\n");
-				RawScanPadRes.boud_info_valid = true;
-				RawScanPadRes.bound_ckg = uCkgenSel;
-				/*Read Path Sample Edge fix to rising edge*/
-				RawScanPadRes.bound_edge = 0;
-				memcpy(&(g_autok_bound_info.bound_rd),
-				       &RawScanPadRes,
-				       sizeof(struct AUTOK_SCAN_RES));
-				AUTOK_DBGPRINT(AUTOK_DBG_RES,
-				"[AUTOK] FB Found CKG:%d, Start:%d, End:%d, Width:%d\r\n",
-					       uCkgenSel, RawScanPadRes.Bound_Start,
-					       RawScanPadRes.Bound_End,
-					       RawScanPadRes.bound_width);
-				break;
-			}
-		}
-	} while (1);
-	if (g_autok_bound_info.bound_rd.boud_info_valid != true) {
-		AUTOK_RAWPRINT(
-		"[AUTOK] Fatal Error couldn't find bound by scan ckgen and edge \r\n");
-		return -1;
-	}
-	if (RawScanPadRes.bound_ckg > 16) {
-		AUTOK_RAWPRINT(
-		"[AUTOK] Warn Current CKG too large for reference\r\n");
-		/* return -1; */
-	}
-	/**
-	 * 1 Step3.2 Calc optimised data pad delay base on bound info
-	 * & update Select result
-	 */
-	if (autok_data_pad_dly_sel(&g_autok_bound_info, &uDatPadDDly, uCkgenSel) != 0) {
-		AUTOK_RAWPRINT("[AUTOK]Error Data_Pad_Dly Calc Failed\r\n");
-		return -1;
-	}
-	autok_param_update(DAT0_RD_D_DLY, uDatPadDDly, p_autok_tune_res);
-	autok_param_update(DAT1_RD_D_DLY, uDatPadDDly, p_autok_tune_res);
-	autok_param_update(DAT2_RD_D_DLY, uDatPadDDly, p_autok_tune_res);
-	autok_param_update(DAT3_RD_D_DLY, uDatPadDDly, p_autok_tune_res);
-	AUTOK_DBGPRINT(AUTOK_DBG_RES, "[AUTOK]Data Pad Delay Sel: %d\r\n",
-		       uDatPadDDly);
-
-	/*Step 4. optimised WCRC Internal Dely Same to CMD Resp Internal Delay*/
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	uWCrcIntDly = uCmdIntDly;
-	autok_param_update(DAT_WRD_DLY, uWCrcIntDly, p_autok_tune_res);
-	AUTOK_DBGPRINT(AUTOK_DBG_RES, "[AUTOK]WCRC Int Delay Sel: %d\r\n",
-		       uWCrcIntDly);
-
-	/*Step 5. Scan LatchCK Parameter for optimised*/
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	pr_err("[AUTOK]Step 5.optimised LATCH_CK Dely Select\r\n");
-	RawData = 0;
-	if (autok_scan_latch_ck_param(host, INT_DAT_LATCH_CK, &RawData))
-		pr_err("[AUTOK]Error Scan LatchCK Failed\n\r");
-	score = autok_simple_score(tune_result_str, RawData);
-	pr_err("[AUTOK]INT_LATCH_CK: %d \t %8.8s\r\n", score, tune_result_str);
-	if ((RawData & 0xff) == 0xff) {
-		pr_err("[AUTOK] Error No LatchCK Can be Test OK\r\n");
-		return -1;
-	}
-	for (i = 0; i < 8; i++) {
-		if (RawData & (1<<i)) {
-			continue;
-		} else {
-			uLatchCK = i;
-			break;
-		}
-	}
-	autok_param_update(INT_DAT_LATCH_CK, uLatchCK, p_autok_tune_res);
-	AUTOK_DBGPRINT(AUTOK_DBG_RES, "[AUTOK]LatchCK Delay Sel: %d\r\n",
-		       uLatchCK);
-	pr_err(
-	"[AUTOK]=================ONLINE TUNE RESULT================= \r\n");
-	autok_result_dump(host, p_autok_tune_res);
-	autok_tuning_parameter_init(host, p_autok_tune_res);
-	store_current_voltage_setting(p_autok_tune_res);
-	return 0;
-}
-
-void apply_sdio_setting(struct msdc_host *host, u32 hz)
-{
-	if (hz >= 200000000) {
-		autok_path_sel(host, true);
-		apply_tuned_vol_setting(host);
-	} else {
-		autok_path_sel(host, false);
-	}
+	pr_info("SDIO MSDC_CFG=0x%.8x\n", readl(base + MSDC_CFG));
+	pr_info("SDIO MSDC_IOCON=0x%.8x\n", readl(base + MSDC_IOCON));
+	pr_info("SDIO MSDC_PATCH_BIT0=0x%.8x\n", readl(base + MSDC_PATCH_BIT0));
+	pr_info("SDIO MSDC_PATCH_BIT1=0x%.8x\n", readl(base + MSDC_PATCH_BIT1));
+	pr_info("SDIO MSDC_PATCH_BIT2=0x%.8x\n", readl(base + MSDC_PATCH_BIT2));
+	pr_info("SDIO MSDC_PAD_TUNE0=0x%.8x\n", readl(base + MSDC_PAD_TUNE0));
+	pr_info("SDIO MSDC_PAD_TUNE1=0x%.8x\n", readl(base + MSDC_PAD_TUNE1));
 }
 
 static int msdc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 {
 	struct msdc_host *host = mmc_priv(mmc);
-	unsigned int int_en, clk_pwd, pio_mode;
-	int result = 0;
-	int retry_times = 5;
-	u32 cur_vol;
 
-	pm_runtime_get_sync(host->dev);
-	int_en = readl(host->base + MSDC_INTEN);
-	sdr_get_field(host->base + MSDC_CFG, MSDC_CFG_PIO, &pio_mode);
-	sdr_get_field(host->base + MSDC_CFG, MSDC_CFG_CKPDN, &clk_pwd);
-
-	writel(0, host->base + MSDC_INTEN);
-	sdr_set_field(host->base + MSDC_CFG, MSDC_CFG_PIO, 1);
-	sdr_set_field(host->base + MSDC_CFG, MSDC_CFG_CKPDN, 1);
-
-	pr_err("[AUTOK] Execute Tuning: hz:%d, flag:%d\n",
-	       mmc->ios.clock, sdio_online_tune_fail);
-	if (mmc->ios.clock <= 100 * 1000 * 1000 || sdio_online_tune_fail)
-		return 0;
-
-	cur_vol = vcorefs_sdio_get_vcore_nml();
-	pr_err("[AUTOK] status [vol:%d] [hv:%d] [lv:%d]\n",
-	       cur_vol, hv_autok_done, lv_autok_done);
-
-	if (!hv_autok_done) {
-		do {
-			vcorefs_sdio_lock_dvfs(false);
-			vcorefs_sdio_set_vcore_nml(HIGH_VOLTAGE);
-			if (vcorefs_sdio_get_vcore_nml() != HIGH_VOLTAGE) {
-				vcorefs_sdio_unlock_dvfs(false);
-				goto end;
-			}
-
-			result = execute_online_tuning(host);
-			vcorefs_sdio_unlock_dvfs(false);
-			pr_err("[AUTOK] tune vol:%d rst:%d\n",
-				vcorefs_sdio_get_vcore_nml(), result);
-			if (result)
-				retry_times--;
-			else
-				break;
-		} while (retry_times);
+	if (host->autok_done) {
+		autok_init_sdr104(host);
+		autok_param_apply(host, sdio_autok_res);
+	} else {
+		autok_execute_tuning(host, sdio_autok_res);
+		host->autok_done = true;
 	}
 
-	if (!lv_autok_done) {
-		do {
-			vcorefs_sdio_lock_dvfs(false);
-			vcorefs_sdio_set_vcore_nml(LOW_VOLTAGE);
-			if (vcorefs_sdio_get_vcore_nml() != LOW_VOLTAGE) {
-				vcorefs_sdio_unlock_dvfs(false);
-				goto end;
-			}
-
-			result = execute_online_tuning(host);
-			vcorefs_sdio_unlock_dvfs(false);
-			pr_err("[AUTOK] tune vol:%d rst:%d\n",
-				vcorefs_sdio_get_vcore_nml(), result);
-			if (result)
-				retry_times--;
-			else
-				break;
-		} while (retry_times);
-	}
-
-	if (result) {
-		pr_err("[AUTOK] online tune fail! downgrade freq!\n");
-		mmc->ios.clock = 50 * 1000 * 1000;
-		mmc_set_clock(mmc, mmc->ios.clock);
-		apply_sdio_setting(host, mmc->ios.clock);
-		sdio_online_tune_fail = -1;
-	}
-
- end:
-	if (cur_vol != vcorefs_sdio_get_vcore_nml()) {
-		vcorefs_sdio_lock_dvfs(false);
-		vcorefs_sdio_set_vcore_nml(cur_vol);
-		vcorefs_sdio_unlock_dvfs(false);
-	}
-
-	sdr_set_field(host->base + MSDC_CFG, MSDC_CFG_PIO, pio_mode);
-	sdr_set_field(host->base + MSDC_CFG, MSDC_CFG_CKPDN, clk_pwd);
-	writel(int_en, host->base + MSDC_INTEN);
-
-	pm_runtime_mark_last_busy(host->dev);
-	pm_runtime_put_autosuspend(host->dev);
-	return 0;
-}
-
-int sdio_stop_transfer(void)
-{
-	if (!wifi_host)
-		return 0;
-
-	pr_err("[AUTOK] stop transfer. cur_vol:%d\n",
-	       vcorefs_sdio_get_vcore_nml());
-	mmc_claim_host(wifi_host->mmc);
-	return 0;
-}
-
-int sdio_start_ot_transfer(void)
-{
-	bool vol_autok_done = false;
-
-	if (!wifi_host)
-		return 0;
-
-	vol_autok_done = (vcorefs_sdio_get_vcore_nml() == HIGH_VOLTAGE) ?
-			 hv_autok_done : lv_autok_done;
-	pr_err("[AUTOK] start transfer. cur_vol:%d, done:%d\n",
-	       vcorefs_sdio_get_vcore_nml(), vol_autok_done);
-
-	if (vol_autok_done &&
-	    wifi_host->mmc->ios.clock >= 200 * 1000 * 1000)
-		apply_sdio_setting(wifi_host,
-				   wifi_host->mmc->ios.clock);
-	mmc_release_host(wifi_host->mmc);
+	msdc_dump_register(host);
 	return 0;
 }
 
@@ -3171,7 +3518,7 @@ static void msdc_hw_reset(struct mmc_host *mmc)
 	sdr_clr_bits(host->base + EMMC_IOCON, 1);
 }
 
-/**
+/*
  * msdc_recheck_sdio_irq - recheck whether the SDIO IRQ is lost
  * @host: The host to check.
  *
@@ -3179,19 +3526,23 @@ static void msdc_hw_reset(struct mmc_host *mmc)
  * Add sdio IRQ recheck mechanism to make sure all interrupts
  * can be processed immediately
  *
-*/
+ */
+#ifndef SUPPORT_LEGACY_SDIO
 static void msdc_recheck_sdio_irq(struct msdc_host *host)
 {
-	u32 reg_int, reg_ps;
+	u32 reg_int, reg_ps, reg_inten;
 
-	if (host->clock_on && (host->mmc->caps & MMC_CAP_SDIO_IRQ)
-		&& host->irq_thread_alive) {
+	reg_inten = readl(host->base + MSDC_INTEN);
+	if (host->clock_on && (host->mmc->caps & MMC_CAP_SDIO_IRQ) &&
+			(reg_inten & MSDC_INTEN_SDIOIRQ) &&
+			host->irq_thread_alive) {
 		reg_int = readl(host->base + MSDC_INT);
 		reg_ps  = readl(host->base + MSDC_PS);
 		if (!((reg_int & MSDC_INT_SDIOIRQ) || (reg_ps & MSDC_PS_DATA1)))
 			mmc_signal_sdio_irq(host->mmc);
 	}
 }
+#endif
 
 static void msdc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 {
@@ -3199,17 +3550,40 @@ static void msdc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	struct msdc_host *host = mmc_priv(mmc);
 
 	host->irq_thread_alive = true;
+
+#ifdef SUPPORT_LEGACY_SDIO
+	if (host->cap_eirq) {
+		if (enable)
+			host->enable_sdio_eirq(); /* combo_sdio_enable_eirq */
+		else
+			host->disable_sdio_eirq(); /* combo_sdio_disable_eirq */
+	}
+	return;
+#endif
+
 	if (enable) {
 		pm_runtime_get_sync(host->dev);
-		msdc_recheck_sdio_irq(host);
 
 		spin_lock_irqsave(&host->irqlock, flags);
 		sdr_set_bits(host->base + SDC_CFG, SDC_CFG_SDIOIDE);
 		sdr_set_bits(host->base + MSDC_INTEN, MSDC_INTEN_SDIOIRQ);
 		spin_unlock_irqrestore(&host->irqlock, flags);
+		pm_runtime_mark_last_busy(host->dev);
+		pm_runtime_put_autosuspend(host->dev);
 	} else {
 		spin_lock_irqsave(&host->irqlock, flags);
 		sdr_clr_bits(host->base + MSDC_INTEN, MSDC_INTEN_SDIOIRQ);
+		/*
+		 * if no msdc_recheck_sdio_irq(), then
+		 * no race condition of disable_irq
+		 * twice and only enable_irq once time.
+		 */
+		if (likely(host->sdio_irq_cnt > 0)) {
+			disable_irq_nosync(host->eint_irq);
+			host->sdio_irq_cnt--;
+			if (mmc->card && (mmc->card->cccr.eai == 0))
+				pm_runtime_put_noidle(host->dev);
+		}
 		spin_unlock_irqrestore(&host->irqlock, flags);
 	}
 }
@@ -3227,18 +3601,153 @@ static struct mmc_host_ops mt_msdc_ops = {
 	.enable_sdio_irq = msdc_enable_sdio_irq,
 };
 
+#ifndef SUPPORT_LEGACY_SDIO
+static irqreturn_t sdio_eint_irq(int irq, void *dev_id)
+{
+	struct msdc_host *host = (struct msdc_host *)dev_id;
+
+	mmc_signal_sdio_irq(host->mmc);
+
+	return IRQ_HANDLED;
+}
+
+static int request_dat1_eint_irq(struct msdc_host *host)
+{
+	struct gpio_desc *desc;
+	int ret = 0;
+	int irq;
+
+	desc = devm_gpiod_get_index(host->dev, "eint", 0, GPIOD_IN);
+	if (IS_ERR(desc))
+		return PTR_ERR(desc);
+
+	irq = gpiod_to_irq(desc);
+	if (irq >= 0) {
+		irq_set_status_flags(irq, IRQ_NOAUTOEN);
+		ret = devm_request_threaded_irq(host->dev, irq,
+				NULL, sdio_eint_irq,
+				IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+				"sdio-eint", host);
+	} else {
+		ret = irq;
+	}
+
+	host->eint_irq = irq;
+	return ret;
+}
+
+#else
+/* For backward compatible, remove later */
+int wait_sdio_autok_ready(void *data)
+{
+	return 0;
+}
+EXPORT_SYMBOL(wait_sdio_autok_ready);
+
+static void register_legacy_sdio_apis(struct msdc_host *host)
+{
+	host->request_sdio_eirq = mt_sdio_ops[SDIO_USE_PORT].sdio_request_eirq;
+	host->enable_sdio_eirq = mt_sdio_ops[SDIO_USE_PORT].sdio_enable_eirq;
+	host->disable_sdio_eirq = mt_sdio_ops[SDIO_USE_PORT].sdio_disable_eirq;
+	host->register_pm = mt_sdio_ops[SDIO_USE_PORT].sdio_register_pm;
+}
+
+static void msdc_eirq_sdio(void *data)
+{
+	struct msdc_host *host = (struct msdc_host *)data;
+
+	mmc_signal_sdio_irq(host->mmc);
+}
+
+static void msdc_pm(pm_message_t state, void *data)
+{
+	struct msdc_host *host = (struct msdc_host *)data;
+
+	int evt = state.event;
+
+	if ((evt == PM_EVENT_SUSPEND) || (evt == PM_EVENT_USER_SUSPEND)) {
+		if (host->suspend != 0)
+			return;
+
+		pr_info("msdc%d -> %s Suspend\n", SDIO_USE_PORT,
+			evt == PM_EVENT_SUSPEND ? "PM" : "USR");
+		host->suspend = 1;
+		host->mmc->pm_flags |= MMC_PM_IGNORE_PM_NOTIFY;
+		mmc_remove_host(host->mmc);
+	}
+
+	if ((evt == PM_EVENT_RESUME) || (evt == PM_EVENT_USER_RESUME)) {
+		if (host->suspend == 0)
+			return;
+
+		pr_info("msdc%d -> %s Resume\n", SDIO_USE_PORT,
+			evt == PM_EVENT_RESUME ? "PM" : "USR");
+		host->suspend = 0;
+		host->mmc->pm_flags |= MMC_PM_IGNORE_PM_NOTIFY;
+		host->mmc->pm_flags |= MMC_PM_KEEP_POWER;
+		host->mmc->rescan_entered = 0;
+		mmc_add_host(host->mmc);
+	}
+}
+#endif
+
+void sdio_set_card_clkpd(int on)
+{
+	if (!on)
+		sdr_clr_bits(sdio_host->base + MSDC_CFG,
+			 MSDC_CFG_CKPDN);
+	else
+		sdr_set_bits(sdio_host->base + MSDC_CFG,
+			 MSDC_CFG_CKPDN);
+}
+EXPORT_SYMBOL(sdio_set_card_clkpd);
+
+static const struct mt81xx_sdio_compatible mt8183_compat = {
+	.v3_plus = true,
+	.top_reg = true,
+};
+
+static const struct mt81xx_sdio_compatible mt8167_compat = {
+	.v3_plus = false,
+	.top_reg = false,
+};
+
+static const struct mt81xx_sdio_compatible mt2712_compat = {
+	.v3_plus = false,
+	.top_reg = false,
+};
+
+static const struct mt81xx_sdio_compatible mt8695_compat = {
+	.v3_plus = true,
+	.top_reg = false,
+};
+
+static const struct of_device_id msdc_of_ids[] = {
+	{ .compatible = "mediatek,mt8183-sdio", .data = &mt8183_compat},
+	{ .compatible = "mediatek,mt8167-sdio", .data = &mt8167_compat},
+	{ .compatible = "mediatek,mt2712-sdio", .data = &mt2712_compat},
+	{ .compatible = "mediatek,mt8695-sdio", .data = &mt8695_compat},
+	{}
+};
+
 static int msdc_drv_probe(struct platform_device *pdev)
 {
 	struct mmc_host *mmc;
 	struct msdc_host *host;
 	struct resource *res;
 	struct resource *res_top;
+	const struct of_device_id *of_id;
 	int ret;
+	u32 val;
 
 	if (!pdev->dev.of_node) {
-		dev_err(&pdev->dev, "No DT found\n");
+		dev_info(&pdev->dev, "No DT found\n");
 		return -EINVAL;
 	}
+
+	of_id = of_match_node(msdc_of_ids, pdev->dev.of_node);
+	if (!of_id)
+		return -EINVAL;
 	/* Allocate MMC host for this device */
 	mmc = mmc_alloc_host(sizeof(struct msdc_host), &pdev->dev);
 	if (!mmc)
@@ -3256,11 +3765,26 @@ static int msdc_drv_probe(struct platform_device *pdev)
 		goto host_free;
 	}
 
-	res_top = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	host->top = devm_ioremap_resource(&pdev->dev, res_top);
-	if (IS_ERR(host->top)) {
-		ret = PTR_ERR(host->top);
-		goto host_free;
+	host->dev_comp = of_id->data;
+	if (host->dev_comp->top_reg) {
+		res_top = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		host->base_top = devm_ioremap_resource(&pdev->dev, res_top);
+		if (IS_ERR(host->base_top)) {
+			ret = PTR_ERR(host->base_top);
+			goto host_free;
+		}
+	} else {
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		host->infra_reset = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR(host->infra_reset)) {
+			ret = PTR_ERR(host->infra_reset);
+			goto host_free;
+		}
+
+		if (!of_property_read_u32(pdev->dev.of_node,
+			"module_reset_bit", &host->module_reset_bit))
+			dev_dbg(&pdev->dev, "module_reset_bit: %x\n",
+				 host->module_reset_bit);
 	}
 
 	ret = mmc_regulator_get_supply(mmc);
@@ -3279,6 +3803,10 @@ static int msdc_drv_probe(struct platform_device *pdev)
 		goto host_free;
 	}
 
+	host->src_clk_cg = devm_clk_get(&pdev->dev, "source_cg");
+	if (IS_ERR(host->src_clk_cg))
+		host->src_clk_cg = NULL;
+
 	host->irq = platform_get_irq(pdev, 0);
 	if (host->irq < 0) {
 		ret = -EINVAL;
@@ -3288,41 +3816,68 @@ static int msdc_drv_probe(struct platform_device *pdev)
 	host->pinctrl = devm_pinctrl_get(&pdev->dev);
 	if (IS_ERR(host->pinctrl)) {
 		ret = PTR_ERR(host->pinctrl);
-		dev_err(&pdev->dev, "Cannot find pinctrl!\n");
+		dev_info(&pdev->dev, "Cannot find pinctrl!\n");
 		goto host_free;
 	}
 
 	host->pins_default = pinctrl_lookup_state(host->pinctrl, "default");
 	if (IS_ERR(host->pins_default)) {
 		ret = PTR_ERR(host->pins_default);
-		dev_err(&pdev->dev, "Cannot find pinctrl default!\n");
+		dev_info(&pdev->dev, "Cannot find pinctrl default!\n");
 		goto host_free;
 	}
 
 	host->pins_uhs = pinctrl_lookup_state(host->pinctrl, "state_uhs");
 	if (IS_ERR(host->pins_uhs)) {
 		ret = PTR_ERR(host->pins_uhs);
-		dev_err(&pdev->dev, "Cannot find pinctrl uhs!\n");
+		dev_info(&pdev->dev, "Cannot ... find pinctrl uhs!\n");
 		goto host_free;
 	}
 	pinctrl_select_state(host->pinctrl, host->pins_uhs);
+
+	host->pins_dat1 = pinctrl_lookup_state(host->pinctrl, "state_dat1");
+	if (IS_ERR(host->pins_dat1)) {
+		ret = PTR_ERR(host->pins_dat1);
+		dev_info(&pdev->dev, "Cannot find pinctrl dat1!\n");
+		goto host_free;
+	}
+
+	host->pins_dat1_eint = pinctrl_lookup_state(host->pinctrl,
+		"state_eint");
+	if (IS_ERR(host->pins_dat1_eint)) {
+		ret = PTR_ERR(host->pins_dat1_eint);
+		dev_info(&pdev->dev, "Cannot find pinctrl dat1 eint!\n");
+		goto host_free;
+	}
 
 	if (!of_property_read_u32(pdev->dev.of_node,
 				"hs400-ds-delay", &host->hs400_ds_delay))
 		dev_dbg(&pdev->dev, "hs400-ds-delay: %x\n",
 			host->hs400_ds_delay);
 
+#ifdef SUPPORT_LEGACY_SDIO
+	if (of_property_read_bool(pdev->dev.of_node, "cap-sdio-irq"))
+		host->cap_eirq = false;
+	else
+		host->cap_eirq = true;
+#endif
+
 	host->dev = &pdev->dev;
 	host->mmc = mmc;
 	host->src_clk_freq = clk_get_rate(host->src_clk);
+	if (host->src_clk_freq > 200000000)
+		host->src_clk_freq = 200000000;
 	/* Set host parameters to mmc */
+#ifdef SUPPORT_LEGACY_SDIO
+	if (host->cap_eirq)
+		mmc->caps |= MMC_CAP_SDIO_IRQ;
+#endif
 	mmc->ops = &mt_msdc_ops;
 	mmc->f_min = host->src_clk_freq / (4 * 255);
 	mmc->ocr_avail = MMC_VDD_28_29 | MMC_VDD_29_30 | MMC_VDD_30_31 |
 			 MMC_VDD_31_32 | MMC_VDD_32_33;
 
 	mmc->caps |= MMC_CAP_ERASE | MMC_CAP_CMD23;
-	mmc->caps |= MMC_CAP_RUNTIME_RESUME;
 	/* MMC core transfer sizes tunable parameters */
 	mmc->max_segs = MAX_BD_NUM;
 	mmc->max_seg_size = BDMA_DESC_BUFLEN;
@@ -3351,6 +3906,25 @@ static int msdc_drv_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mmc);
 	msdc_ungate_clock(host);
+
+	if (!host->dev_comp->top_reg) {
+		/* just test module reset func */
+		sdr_clr_bits(host->base + MSDC_CFG, MSDC_CFG_MODE);
+		/* do MSDC module reset */
+		val = readl(host->infra_reset);
+		pr_debug("init 0x10001030: 0x%x, MSDC_CFG: 0x%x\n",
+				val, readl(host->base + MSDC_CFG));
+		writel(0x1 << host->module_reset_bit, host->infra_reset);
+		val = readl(host->infra_reset);
+		udelay(1);
+		pr_debug("msdc module resetting 0x10001030: 0x%x\n", val);
+		writel(0x1 << host->module_reset_bit, host->infra_reset + 0x04);
+		udelay(1);
+		val = readl(host->infra_reset);
+		pr_info("msdc module reset done 0x10001030: 0x%x, MSDC_CFG: 0x%x\n",
+				val, readl(host->base + MSDC_CFG));
+	}
+
 	msdc_init_hw(host);
 
 	ret = devm_request_irq(&pdev->dev, host->irq, msdc_irq,
@@ -3358,15 +3932,44 @@ static int msdc_drv_probe(struct platform_device *pdev)
 	if (ret)
 		goto release;
 
+#ifndef SUPPORT_LEGACY_SDIO
+	ret = request_dat1_eint_irq(host);
+	if (ret) {
+		dev_info(host->dev, "failed to register data1 eint irq!\n");
+		goto release;
+	}
+
+	pinctrl_select_state(host->pinctrl, host->pins_dat1);
+#else
+	host->suspend = 0;
+
+	register_legacy_sdio_apis(host);
+	if (host->request_sdio_eirq)
+		host->request_sdio_eirq(msdc_eirq_sdio, (void *)host);
+	if (host->register_pm) {
+		host->register_pm(msdc_pm, (void *)host);
+
+		/* pm not controlled by system but by client. */
+		mmc->pm_flags |= MMC_PM_IGNORE_PM_NOTIFY;
+	}
+#endif
+
 	pm_runtime_set_active(host->dev);
 	pm_runtime_set_autosuspend_delay(host->dev, MTK_MMC_AUTOSUSPEND_DELAY);
 	pm_runtime_use_autosuspend(host->dev);
 	pm_runtime_enable(host->dev);
+
+	if (!host->dev_comp->top_reg)
+		mmc->caps2 |= MMC_CAP2_NO_PRESCAN_POWERUP;
+	host->mmc->caps |= MMC_CAP_NONREMOVABLE;
+	host->mmc->pm_caps |= MMC_PM_KEEP_POWER;
+	host->mmc->pm_flags |= MMC_PM_KEEP_POWER;
+
 	ret = mmc_add_host(mmc);
 	pr_info("%s: add new sdio_host %s, index=%d, ret=%d\n", __func__,
 		mmc_hostname(host->mmc), mmc->index, ret);
-	wifi_host = host;
 
+	sdio_host = host;
 	if (ret)
 		goto end;
 
@@ -3407,6 +4010,9 @@ static int msdc_drv_remove(struct platform_device *pdev)
 	msdc_deinit_hw(host);
 	msdc_gate_clock(host);
 
+	if (host->mmc->caps & MMC_CAP_SDIO_IRQ)
+		pm_runtime_put_sync(host->dev);
+
 	pm_runtime_disable(host->dev);
 	pm_runtime_put_noidle(host->dev);
 	dma_free_coherent(&pdev->dev,
@@ -3426,17 +4032,14 @@ static void msdc_save_reg(struct msdc_host *host)
 	host->save_para.msdc_cfg = readl(host->base + MSDC_CFG);
 	host->save_para.iocon = readl(host->base + MSDC_IOCON);
 	host->save_para.sdc_cfg = readl(host->base + SDC_CFG);
-	host->save_para.pad_tune = readl(host->base + MSDC_PAD_TUNE);
-	host->save_para.patch_bit0 = readl(host->base + MSDC_PATCH_BIT);
+	host->save_para.pad_tune0 = readl(host->base + MSDC_PAD_TUNE0);
+	host->save_para.pad_tune1 = readl(host->base + MSDC_PAD_TUNE1);
+	host->save_para.patch_bit0 = readl(host->base + MSDC_PATCH_BIT0);
 	host->save_para.patch_bit1 = readl(host->base + MSDC_PATCH_BIT1);
-	host->save_para.pad_ds_tune = readl(host->base + PAD_DS_TUNE);
+	host->save_para.patch_bit2 = readl(host->base + MSDC_PATCH_BIT2);
+	host->save_para.pad_ds_tune = readl(host->base + EMMC50_PAD_DS_TUNE);
 	host->save_para.emmc50_cfg0 = readl(host->base + EMMC50_CFG0);
-	host->save_para.top_tune_ctrl1 = readl(host->top +
-					       MSDC_TOP_DAT_TUNE_CTRL1);
-	host->save_para.top_tune_ctrl2 = readl(host->top +
-					       MSDC_TOP_DAT_TUNE_CTRL2);
-	host->save_para.top_tune_ctrl3 = readl(host->top +
-					       MSDC_TOP_DAT_TUNE_CTRL3);
+	host->save_para.msdc_inten = readl(host->base + MSDC_INTEN);
 }
 
 static void msdc_restore_reg(struct msdc_host *host)
@@ -3444,17 +4047,14 @@ static void msdc_restore_reg(struct msdc_host *host)
 	writel(host->save_para.msdc_cfg, host->base + MSDC_CFG);
 	writel(host->save_para.iocon, host->base + MSDC_IOCON);
 	writel(host->save_para.sdc_cfg, host->base + SDC_CFG);
-	writel(host->save_para.pad_tune, host->base + MSDC_PAD_TUNE);
-	writel(host->save_para.patch_bit0, host->base + MSDC_PATCH_BIT);
+	writel(host->save_para.pad_tune0, host->base + MSDC_PAD_TUNE0);
+	writel(host->save_para.pad_tune1, host->base + MSDC_PAD_TUNE1);
+	writel(host->save_para.patch_bit0, host->base + MSDC_PATCH_BIT0);
 	writel(host->save_para.patch_bit1, host->base + MSDC_PATCH_BIT1);
-	writel(host->save_para.pad_ds_tune, host->base + PAD_DS_TUNE);
+	writel(host->save_para.patch_bit2, host->base + MSDC_PATCH_BIT2);
+	writel(host->save_para.pad_ds_tune, host->base + EMMC50_PAD_DS_TUNE);
 	writel(host->save_para.emmc50_cfg0, host->base + EMMC50_CFG0);
-	writel(host->save_para.top_tune_ctrl1,
-	       host->top + MSDC_TOP_DAT_TUNE_CTRL1);
-	writel(host->save_para.top_tune_ctrl2,
-	       host->top + MSDC_TOP_DAT_TUNE_CTRL2);
-	writel(host->save_para.top_tune_ctrl3,
-	       host->top + MSDC_TOP_DAT_TUNE_CTRL3);
+	writel(host->save_para.msdc_inten, host->base + MSDC_INTEN);
 }
 
 static int msdc_runtime_suspend(struct device *dev)
@@ -3462,9 +4062,32 @@ static int msdc_runtime_suspend(struct device *dev)
 	struct mmc_host *mmc = dev_get_drvdata(dev);
 	struct msdc_host *host = mmc_priv(mmc);
 
+#ifdef SUPPORT_LEGACY_SDIO
 	msdc_save_reg(host);
 	msdc_gate_clock(host);
 	return 0;
+#else
+	unsigned long flags;
+
+	msdc_save_reg(host);
+	disable_irq(host->irq);
+	msdc_gate_clock(host);
+	pinctrl_select_state(host->pinctrl, host->pins_dat1_eint);
+	spin_lock_irqsave(&host->irqlock, flags);
+	if (host->sdio_irq_cnt == 0) {
+		enable_irq(host->eint_irq);
+		enable_irq_wake(host->eint_irq);
+		host->sdio_irq_cnt++;
+		/*
+		 * if SDIO card do not support async irq,
+		 * make clk always on.
+		 */
+		if (mmc->card && (mmc->card->cccr.eai == 0))
+			pm_runtime_get_noresume(host->dev);
+	}
+	spin_unlock_irqrestore(&host->irqlock, flags);
+	return 0;
+#endif
 }
 
 static int msdc_runtime_resume(struct device *dev)
@@ -3472,22 +4095,37 @@ static int msdc_runtime_resume(struct device *dev)
 	struct mmc_host *mmc = dev_get_drvdata(dev);
 	struct msdc_host *host = mmc_priv(mmc);
 
+#ifdef SUPPORT_LEGACY_SDIO
 	msdc_ungate_clock(host);
 	msdc_restore_reg(host);
 	return 0;
+#else
+	unsigned long flags;
+
+	spin_lock_irqsave(&host->irqlock, flags);
+	if (host->sdio_irq_cnt > 0) {
+		disable_irq_nosync(host->eint_irq);
+		disable_irq_wake(host->eint_irq);
+		host->sdio_irq_cnt--;
+		if (mmc->card && (mmc->card->cccr.eai == 0))
+			pm_runtime_put_noidle(host->dev);
+	}
+	spin_unlock_irqrestore(&host->irqlock, flags);
+	pinctrl_select_state(host->pinctrl, host->pins_dat1);
+	msdc_ungate_clock(host);
+	msdc_restore_reg(host);
+	enable_irq(host->irq);
+	return 0;
+#endif
 }
 #endif
 
 static const struct dev_pm_ops msdc_dev_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
 				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(msdc_runtime_suspend, msdc_runtime_resume, NULL)
 };
 
-static const struct of_device_id msdc_of_ids[] = {
-	{   .compatible = "mediatek,mt8173-sdio", },
-	{}
-};
 
 static struct platform_driver mt_sdio_driver = {
 	.probe = msdc_drv_probe,

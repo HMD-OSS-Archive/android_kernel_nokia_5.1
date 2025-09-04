@@ -70,11 +70,11 @@ struct msm_pingroup {
 	unsigned *funcs;
 	unsigned nfuncs;
 
-	s16 ctl_reg;
-	s16 io_reg;
-	s16 intr_cfg_reg;
-	s16 intr_status_reg;
-	s16 intr_target_reg;
+	u32 ctl_reg;
+	u32 io_reg;
+	u32 intr_cfg_reg;
+	u32 intr_status_reg;
+	u32 intr_target_reg;
 
 	unsigned mux_bit:5;
 
@@ -99,13 +99,14 @@ struct msm_pingroup {
 
 /**
  * struct msm_pinctrl_soc_data - Qualcomm pin controller driver configuration
- * @pins:       An array describing all pins the pin controller affects.
- * @npins:      The number of entries in @pins.
- * @functions:  An array describing all mux functions the SoC supports.
- * @nfunctions: The number of entries in @functions.
- * @groups:     An array describing all pin groups the pin SoC supports.
- * @ngroups:    The numbmer of entries in @groups.
- * @ngpio:      The number of pingroups the driver should expose as GPIOs.
+ * @pins:	    An array describing all pins the pin controller affects.
+ * @npins:	    The number of entries in @pins.
+ * @functions:	    An array describing all mux functions the SoC supports.
+ * @nfunctions:	    The number of entries in @functions.
+ * @groups:	    An array describing all pin groups the pin SoC supports.
+ * @ngroups:	    The numbmer of entries in @groups.
+ * @ngpio:	    The number of pingroups the driver should expose as GPIOs.
+ * @pull_no_keeper: The SoC does not support keeper bias.
  */
 struct msm_pinctrl_soc_data {
 	const struct pinctrl_pin_desc *pins;
@@ -115,6 +116,7 @@ struct msm_pinctrl_soc_data {
 	const struct msm_pingroup *groups;
 	unsigned ngroups;
 	unsigned ngpios;
+	bool pull_no_keeper;
 };
 
 int msm_pinctrl_probe(struct platform_device *pdev,

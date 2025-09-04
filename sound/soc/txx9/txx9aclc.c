@@ -206,7 +206,7 @@ static void txx9aclc_dma_tasklet(unsigned long data)
 static int txx9aclc_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct txx9aclc_dmadata *dmadata = substream->runtime->private_data;
-	struct txx9aclc_plat_drvdata *drvdata =txx9aclc_drvdata;
+	struct txx9aclc_plat_drvdata *drvdata = txx9aclc_drvdata;
 	void __iomem *base = drvdata->base;
 	unsigned long flags;
 	int ret = 0;
@@ -271,7 +271,7 @@ static int txx9aclc_pcm_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static struct snd_pcm_ops txx9aclc_pcm_ops = {
+static const struct snd_pcm_ops txx9aclc_pcm_ops = {
 	.open		= txx9aclc_pcm_open,
 	.close		= txx9aclc_pcm_close,
 	.ioctl		= snd_pcm_lib_ioctl,
@@ -282,17 +282,12 @@ static struct snd_pcm_ops txx9aclc_pcm_ops = {
 	.pointer	= txx9aclc_pcm_pointer,
 };
 
-static void txx9aclc_pcm_free_dma_buffers(struct snd_pcm *pcm)
-{
-	snd_pcm_lib_preallocate_free_for_all(pcm);
-}
-
 static int txx9aclc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
 	struct snd_soc_dai *dai = rtd->cpu_dai;
 	struct snd_pcm *pcm = rtd->pcm;
-	struct platform_device *pdev = to_platform_device(dai->platform->dev);
+	struct platform_device *pdev = to_platform_device(rtd->platform->dev);
 	struct txx9aclc_soc_device *dev;
 	struct resource *r;
 	int i;
@@ -345,7 +340,7 @@ static bool filter(struct dma_chan *chan, void *param)
 static int txx9aclc_dma_init(struct txx9aclc_soc_device *dev,
 			     struct txx9aclc_dmadata *dmadata)
 {
-	struct txx9aclc_plat_drvdata *drvdata =txx9aclc_drvdata;
+	struct txx9aclc_plat_drvdata *drvdata = txx9aclc_drvdata;
 	struct txx9dmac_slave *ds = &dmadata->dma_slave;
 	dma_cap_mask_t mask;
 
@@ -397,6 +392,7 @@ static int txx9aclc_pcm_remove(struct snd_soc_platform *platform)
 	for (i = 0; i < 2; i++) {
 		struct txx9aclc_dmadata *dmadata = &dev->dmadata[i];
 		struct dma_chan *chan = dmadata->dma_chan;
+
 		if (chan) {
 			dmadata->frag_count = -1;
 			dmaengine_terminate_all(chan);
@@ -407,33 +403,25 @@ static int txx9aclc_pcm_remove(struct snd_soc_platform *platform)
 	return 0;
 }
 
-static struct snd_soc_platform_driver txx9aclc_soc_platform = {
+static const struct snd_soc_platform_driver txx9aclc_soc_platform = {
 	.probe		= txx9aclc_pcm_probe,
 	.remove		= txx9aclc_pcm_remove,
 	.ops		= &txx9aclc_pcm_ops,
 	.pcm_new	= txx9aclc_pcm_new,
-	.pcm_free	= txx9aclc_pcm_free_dma_buffers,
 };
 
 static int txx9aclc_soc_platform_probe(struct platform_device *pdev)
 {
-	return snd_soc_register_platform(&pdev->dev, &txx9aclc_soc_platform);
-}
-
-static int txx9aclc_soc_platform_remove(struct platform_device *pdev)
-{
-	snd_soc_unregister_platform(&pdev->dev);
-	return 0;
+	return devm_snd_soc_register_platform(&pdev->dev,
+					      &txx9aclc_soc_platform);
 }
 
 static struct platform_driver txx9aclc_pcm_driver = {
 	.driver = {
 			.name = "txx9aclc-pcm-audio",
-			.owner = THIS_MODULE,
 	},
 
 	.probe = txx9aclc_soc_platform_probe,
-	.remove = txx9aclc_soc_platform_remove,
 };
 
 module_platform_driver(txx9aclc_pcm_driver);

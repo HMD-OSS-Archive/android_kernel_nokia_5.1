@@ -178,7 +178,7 @@ int tda18271_read_extended(struct dvb_frontend *fe)
 		    (i != R_EB17) &&
 		    (i != R_EB19) &&
 		    (i != R_EB20))
-		regs[i] = regdump[i];
+			regs[i] = regdump[i];
 	}
 
 	if (tda18271_debug & DBG_REG)
@@ -251,8 +251,8 @@ static int __tda18271_write_regs(struct dvb_frontend *fe, int idx, int len,
 	}
 
 	if (ret != 1)
-		tda_err("ERROR: idx = 0x%x, len = %d, "
-			"i2c_transfer returned: %d\n", idx, max, ret);
+		tda_err("ERROR: idx = 0x%x, len = %d, i2c_transfer returned: %d\n",
+			idx, max, ret);
 
 	return (ret == 1 ? 0 : ret);
 }

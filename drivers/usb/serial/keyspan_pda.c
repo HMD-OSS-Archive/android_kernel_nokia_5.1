@@ -1,5 +1,5 @@
 /*
- * USB Keyspan PDA / Xircom / Entregra Converter driver
+ * USB Keyspan PDA / Xircom / Entrega Converter driver
  *
  * Copyright (C) 1999 - 2001 Greg Kroah-Hartman	<greg@kroah.com>
  * Copyright (C) 1999, 2000 Brian Warner	<warner@lothar.com>
@@ -30,12 +30,12 @@
 #include <linux/usb/ezusb.h>
 
 /* make a simple define to handle if we are compiling keyspan_pda or xircom support */
-#if defined(CONFIG_USB_SERIAL_KEYSPAN_PDA) || defined(CONFIG_USB_SERIAL_KEYSPAN_PDA_MODULE)
+#if IS_ENABLED(CONFIG_USB_SERIAL_KEYSPAN_PDA)
 	#define KEYSPAN
 #else
 	#undef KEYSPAN
 #endif
-#if defined(CONFIG_USB_SERIAL_XIRCOM) || defined(CONFIG_USB_SERIAL_XIRCOM_MODULE)
+#if IS_ENABLED(CONFIG_USB_SERIAL_XIRCOM)
 	#define XIRCOM
 #else
 	#undef XIRCOM
@@ -58,12 +58,12 @@ struct keyspan_pda_private {
 #define KEYSPAN_PDA_FAKE_ID		0x0103
 #define KEYSPAN_PDA_ID			0x0104 /* no clue */
 
-/* For Xircom PGSDB9 and older Entregra version of the same device */
+/* For Xircom PGSDB9 and older Entrega version of the same device */
 #define XIRCOM_VENDOR_ID		0x085a
 #define XIRCOM_FAKE_ID			0x8027
-#define XIRCOM_FAKE_ID_2                0x8025 /* "PGMFHUB" serial */
-#define ENTREGRA_VENDOR_ID		0x1645
-#define ENTREGRA_FAKE_ID		0x8093
+#define XIRCOM_FAKE_ID_2		0x8025 /* "PGMFHUB" serial */
+#define ENTREGA_VENDOR_ID		0x1645
+#define ENTREGA_FAKE_ID			0x8093
 
 static const struct usb_device_id id_table_combined[] = {
 #ifdef KEYSPAN
@@ -72,7 +72,7 @@ static const struct usb_device_id id_table_combined[] = {
 #ifdef XIRCOM
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID) },
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID_2) },
-	{ USB_DEVICE(ENTREGRA_VENDOR_ID, ENTREGRA_FAKE_ID) },
+	{ USB_DEVICE(ENTREGA_VENDOR_ID, ENTREGA_FAKE_ID) },
 #endif
 	{ USB_DEVICE(KEYSPAN_VENDOR_ID, KEYSPAN_PDA_ID) },
 	{ }						/* Terminating entry */
@@ -96,7 +96,7 @@ static const struct usb_device_id id_table_fake[] = {
 static const struct usb_device_id id_table_fake_xircom[] = {
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID) },
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID_2) },
-	{ USB_DEVICE(ENTREGRA_VENDOR_ID, ENTREGRA_FAKE_ID) },
+	{ USB_DEVICE(ENTREGA_VENDOR_ID, ENTREGA_FAKE_ID) },
 	{ }
 };
 #endif
@@ -373,8 +373,10 @@ static int keyspan_pda_get_modem_info(struct usb_serial *serial,
 			     3, /* get pins */
 			     USB_TYPE_VENDOR|USB_RECIP_INTERFACE|USB_DIR_IN,
 			     0, 0, data, 1, 2000);
-	if (rc >= 0)
+	if (rc == 1)
 		*value = *data;
+	else if (rc >= 0)
+		rc = -EIO;
 
 	kfree(data);
 	return rc;
@@ -679,7 +681,7 @@ static int keyspan_pda_fake_startup(struct usb_serial *serial)
 #endif
 #ifdef XIRCOM
 	else if ((le16_to_cpu(serial->dev->descriptor.idVendor) == XIRCOM_VENDOR_ID) ||
-		 (le16_to_cpu(serial->dev->descriptor.idVendor) == ENTREGRA_VENDOR_ID))
+		 (le16_to_cpu(serial->dev->descriptor.idVendor) == ENTREGA_VENDOR_ID))
 		fw_name = "keyspan_pda/xircom_pgs.fw";
 #endif
 	else {
@@ -756,7 +758,7 @@ static struct usb_serial_driver xircom_pgs_fake_device = {
 		.owner =	THIS_MODULE,
 		.name =		"xircom_no_firm",
 	},
-	.description =		"Xircom / Entregra PGS - (prerenumeration)",
+	.description =		"Xircom / Entrega PGS - (prerenumeration)",
 	.id_table =		id_table_fake_xircom,
 	.num_ports =		1,
 	.attach =		keyspan_pda_fake_startup,
@@ -771,6 +773,8 @@ static struct usb_serial_driver keyspan_pda_device = {
 	.description =		"Keyspan PDA",
 	.id_table =		id_table_std,
 	.num_ports =		1,
+	.num_bulk_out =		1,
+	.num_interrupt_in =	1,
 	.dtr_rts =		keyspan_pda_dtr_rts,
 	.open =			keyspan_pda_open,
 	.close =		keyspan_pda_close,

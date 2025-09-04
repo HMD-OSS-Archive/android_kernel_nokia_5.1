@@ -1,15 +1,10 @@
 /*
- * Copyright (c) 2014 MediaTek Inc.
- * Author: Flora Fu <flora.fu@mediatek.com>
+ * Copyright (c) 2016 MediaTek Inc.
+ * Author: Chen Zhong <chen.zhong@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -23,8 +18,6 @@
 #include <linux/regulator/mt6323-regulator.h>
 #include <linux/regulator/of_regulator.h>
 
-#define MT6323_BUCK_MODE_AUTO	0
-#define MT6323_BUCK_MODE_FORCE_PWM	1
 #define MT6323_LDO_MODE_NORMAL	0
 #define MT6323_LDO_MODE_LP	1
 
@@ -48,8 +41,7 @@ struct mt6323_regulator_info {
 };
 
 #define MT6323_BUCK(match, vreg, min, max, step, volt_ranges, enreg,	\
-		vosel, vosel_mask, voselon, vosel_ctrl,			\
-		_modeset_reg, _modeset_mask)				\
+		vosel, vosel_mask, voselon, vosel_ctrl)			\
 [MT6323_ID_##vreg] = {							\
 	.desc = {							\
 		.name = #vreg,						\
@@ -70,8 +62,6 @@ struct mt6323_regulator_info {
 	.vselon_reg = voselon,						\
 	.vselctrl_reg = vosel_ctrl,					\
 	.vselctrl_mask = BIT(1),					\
-	.modeset_reg = _modeset_reg,				\
-	.modeset_mask = _modeset_mask,				\
 }
 
 #define MT6323_LDO(match, vreg, ldo_volt_table, enreg, enbit, vosel,	\
@@ -183,70 +173,14 @@ static int mt6323_get_status(struct regulator_dev *rdev)
 	return (regval & info->qi) ? REGULATOR_STATUS_ON : REGULATOR_STATUS_OFF;
 }
 
-static int mt6323_buck_set_mode(struct regulator_dev *rdev, unsigned int mode)
-{
-	int ret, val = 0;
-	struct mt6323_regulator_info *info = rdev_get_drvdata(rdev);
-
-	if (!info->modeset_mask) {
-		dev_err(&rdev->dev, "regulator %s doesn't support set_mode\n", info->desc.name);
-		return -EINVAL;
-	}
-
-	switch (mode) {
-	case REGULATOR_MODE_FAST:
-		val = MT6323_BUCK_MODE_FORCE_PWM;
-		break;
-	case REGULATOR_MODE_NORMAL:
-		val = MT6323_BUCK_MODE_AUTO;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	val <<= ffs(info->modeset_mask) - 1;
-
-	ret = regmap_update_bits(rdev->regmap, info->modeset_reg,
-				  info->modeset_mask, val);
-
-	return ret;
-}
-
-static unsigned int mt6323_buck_get_mode(struct regulator_dev *rdev)
-{
-	unsigned int val;
-	unsigned int mode;
-	int ret;
-	struct mt6323_regulator_info *info = rdev_get_drvdata(rdev);
-
-	if (!info->modeset_mask) {
-		dev_err(&rdev->dev, "regulator %s doesn't support get_mode\n", info->desc.name);
-		return -EINVAL;
-	}
-
-	ret = regmap_read(rdev->regmap, info->modeset_reg, &val);
-	if (ret < 0)
-		return ret;
-
-	val &= info->modeset_mask;
-	val >>= ffs(info->modeset_mask) - 1;
-
-	if (val & 0x1)
-		mode = REGULATOR_MODE_FAST;
-	else
-		mode = REGULATOR_MODE_NORMAL;
-
-	return mode;
-}
-
-
 static int mt6323_ldo_set_mode(struct regulator_dev *rdev, unsigned int mode)
 {
 	int ret, val = 0;
 	struct mt6323_regulator_info *info = rdev_get_drvdata(rdev);
 
 	if (!info->modeset_mask) {
-		dev_err(&rdev->dev, "regulator %s doesn't support set_mode\n", info->desc.name);
+		dev_err(&rdev->dev, "regulator %s doesn't support set_mode\n",
+			info->desc.name);
 		return -EINVAL;
 	}
 
@@ -277,7 +211,8 @@ static unsigned int mt6323_ldo_get_mode(struct regulator_dev *rdev)
 	struct mt6323_regulator_info *info = rdev_get_drvdata(rdev);
 
 	if (!info->modeset_mask) {
-		dev_err(&rdev->dev, "regulator %s doesn't support get_mode\n", info->desc.name);
+		dev_err(&rdev->dev, "regulator %s doesn't support get_mode\n",
+			info->desc.name);
 		return -EINVAL;
 	}
 
@@ -296,7 +231,7 @@ static unsigned int mt6323_ldo_get_mode(struct regulator_dev *rdev)
 	return mode;
 }
 
-static struct regulator_ops mt6323_volt_range_ops = {
+static const struct regulator_ops mt6323_volt_range_ops = {
 	.list_voltage = regulator_list_voltage_linear_range,
 	.map_voltage = regulator_map_voltage_linear_range,
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
@@ -306,11 +241,9 @@ static struct regulator_ops mt6323_volt_range_ops = {
 	.disable = regulator_disable_regmap,
 	.is_enabled = regulator_is_enabled_regmap,
 	.get_status = mt6323_get_status,
-	.set_mode = mt6323_buck_set_mode,
-	.get_mode = mt6323_buck_get_mode,
 };
 
-static struct regulator_ops mt6323_volt_table_ops = {
+static const struct regulator_ops mt6323_volt_table_ops = {
 	.list_voltage = regulator_list_voltage_table,
 	.map_voltage = regulator_map_voltage_iterate,
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
@@ -324,7 +257,7 @@ static struct regulator_ops mt6323_volt_table_ops = {
 	.get_mode = mt6323_ldo_get_mode,
 };
 
-static struct regulator_ops mt6323_volt_fixed_ops = {
+static const struct regulator_ops mt6323_volt_fixed_ops = {
 	.list_voltage = regulator_list_voltage_linear,
 	.enable = regulator_enable_regmap,
 	.disable = regulator_disable_regmap,
@@ -338,21 +271,23 @@ static struct regulator_ops mt6323_volt_fixed_ops = {
 static struct mt6323_regulator_info mt6323_regulators[] = {
 	MT6323_BUCK("buck_vproc", VPROC, 700000, 1493750, 6250,
 		buck_volt_range1, MT6323_VPROC_CON7, MT6323_VPROC_CON9, 0x7f,
-		MT6323_VPROC_CON10, MT6323_VPROC_CON5, MT6323_VPROC_CON2, 0x100),
+		MT6323_VPROC_CON10, MT6323_VPROC_CON5),
 	MT6323_BUCK("buck_vsys", VSYS, 1400000, 2987500, 12500,
 		buck_volt_range2, MT6323_VSYS_CON7, MT6323_VSYS_CON9, 0x7f,
-		MT6323_VSYS_CON10, MT6323_VSYS_CON5, MT6323_VSYS_CON2, 0x100),
+		MT6323_VSYS_CON10, MT6323_VSYS_CON5),
 	MT6323_BUCK("buck_vpa", VPA, 500000, 3650000, 50000,
 		buck_volt_range3, MT6323_VPA_CON7, MT6323_VPA_CON9,
-		0x3f, MT6323_VPA_CON10, MT6323_VPA_CON5, MT6323_VPA_CON2, 0x100),
+		0x3f, MT6323_VPA_CON10, MT6323_VPA_CON5),
 	MT6323_REG_FIXED("ldo_vtcxo", VTCXO, MT6323_ANALDO_CON1, 10, 2800000,
 		MT6323_ANALDO_CON1, 0x2),
 	MT6323_REG_FIXED("ldo_vcn28", VCN28, MT6323_ANALDO_CON19, 12, 2800000,
 		MT6323_ANALDO_CON20, 0x2),
 	MT6323_LDO("ldo_vcn33_bt", VCN33_BT, ldo_volt_table1,
-		MT6323_ANALDO_CON16, 7, MT6323_ANALDO_CON16, 0xC, MT6323_ANALDO_CON21, 0x2),
+		MT6323_ANALDO_CON16, 7, MT6323_ANALDO_CON16, 0xC,
+		MT6323_ANALDO_CON21, 0x2),
 	MT6323_LDO("ldo_vcn33_wifi", VCN33_WIFI, ldo_volt_table1,
-		MT6323_ANALDO_CON17, 12, MT6323_ANALDO_CON16, 0xC, MT6323_ANALDO_CON21, 0x2),
+		MT6323_ANALDO_CON17, 12, MT6323_ANALDO_CON16, 0xC,
+		MT6323_ANALDO_CON21, 0x2),
 	MT6323_REG_FIXED("ldo_va", VA, MT6323_ANALDO_CON2, 14, 2800000,
 		MT6323_ANALDO_CON2, 0x2),
 	MT6323_LDO("ldo_vcama", VCAMA, ldo_volt_table2,
@@ -362,36 +297,49 @@ static struct mt6323_regulator_info mt6323_regulators[] = {
 	MT6323_REG_FIXED("ldo_vusb", VUSB, MT6323_DIGLDO_CON2, 14, 3300000,
 		MT6323_DIGLDO_CON2, 0x2),
 	MT6323_LDO("ldo_vmc", VMC, ldo_volt_table3,
-		MT6323_DIGLDO_CON3, 12, MT6323_DIGLDO_CON24, 0x10, MT6323_DIGLDO_CON3, 0x2),
+		MT6323_DIGLDO_CON3, 12, MT6323_DIGLDO_CON24, 0x10,
+		MT6323_DIGLDO_CON3, 0x2),
 	MT6323_LDO("ldo_vmch", VMCH, ldo_volt_table4,
-		MT6323_DIGLDO_CON5, 14, MT6323_DIGLDO_CON26, 0x80, MT6323_DIGLDO_CON5, 0x2),
+		MT6323_DIGLDO_CON5, 14, MT6323_DIGLDO_CON26, 0x80,
+		MT6323_DIGLDO_CON5, 0x2),
 	MT6323_LDO("ldo_vemc3v3", VEMC3V3, ldo_volt_table4,
-		MT6323_DIGLDO_CON6, 14, MT6323_DIGLDO_CON27, 0x80, MT6323_DIGLDO_CON6, 0x2),
+		MT6323_DIGLDO_CON6, 14, MT6323_DIGLDO_CON27, 0x80,
+		MT6323_DIGLDO_CON6, 0x2),
 	MT6323_LDO("ldo_vgp1", VGP1, ldo_volt_table5,
-		MT6323_DIGLDO_CON7, 15, MT6323_DIGLDO_CON28, 0xE0, MT6323_DIGLDO_CON7, 0x2),
+		MT6323_DIGLDO_CON7, 15, MT6323_DIGLDO_CON28, 0xE0,
+		MT6323_DIGLDO_CON7, 0x2),
 	MT6323_LDO("ldo_vgp2", VGP2, ldo_volt_table6,
-		MT6323_DIGLDO_CON8, 15, MT6323_DIGLDO_CON29, 0xE0, MT6323_DIGLDO_CON8, 0x2),
+		MT6323_DIGLDO_CON8, 15, MT6323_DIGLDO_CON29, 0xE0,
+		MT6323_DIGLDO_CON8, 0x2),
 	MT6323_LDO("ldo_vgp3", VGP3, ldo_volt_table7,
-		MT6323_DIGLDO_CON9, 15, MT6323_DIGLDO_CON30, 0x60, MT6323_DIGLDO_CON9, 0x2),
+		MT6323_DIGLDO_CON9, 15, MT6323_DIGLDO_CON30, 0x60,
+		MT6323_DIGLDO_CON9, 0x2),
 	MT6323_REG_FIXED("ldo_vcn18", VCN18, MT6323_DIGLDO_CON11, 14, 1800000,
 		MT6323_DIGLDO_CON11, 0x2),
 	MT6323_LDO("ldo_vsim1", VSIM1, ldo_volt_table8,
-		MT6323_DIGLDO_CON13, 15, MT6323_DIGLDO_CON34, 0x20, MT6323_DIGLDO_CON13, 0x2),
+		MT6323_DIGLDO_CON13, 15, MT6323_DIGLDO_CON34, 0x20,
+		MT6323_DIGLDO_CON13, 0x2),
 	MT6323_LDO("ldo_vsim2", VSIM2, ldo_volt_table8,
-		MT6323_DIGLDO_CON14, 15, MT6323_DIGLDO_CON35, 0x20, MT6323_DIGLDO_CON14, 0x2),
-	MT6323_REG_FIXED("ldo_vrtc", VRTC, MT6323_DIGLDO_CON15, 8, 2800000, -1, 0),
+		MT6323_DIGLDO_CON14, 15, MT6323_DIGLDO_CON35, 0x20,
+		MT6323_DIGLDO_CON14, 0x2),
+	MT6323_REG_FIXED("ldo_vrtc", VRTC, MT6323_DIGLDO_CON15, 8, 2800000,
+		-1, 0),
 	MT6323_LDO("ldo_vcamaf", VCAMAF, ldo_volt_table5,
-		MT6323_DIGLDO_CON31, 15, MT6323_DIGLDO_CON32, 0xE0, MT6323_DIGLDO_CON31, 0x2),
+		MT6323_DIGLDO_CON31, 15, MT6323_DIGLDO_CON32, 0xE0,
+		MT6323_DIGLDO_CON31, 0x2),
 	MT6323_LDO("ldo_vibr", VIBR, ldo_volt_table5,
-		MT6323_DIGLDO_CON39, 15, MT6323_DIGLDO_CON40, 0xE0, MT6323_DIGLDO_CON39, 0x2),
+		MT6323_DIGLDO_CON39, 15, MT6323_DIGLDO_CON40, 0xE0,
+		MT6323_DIGLDO_CON39, 0x2),
 	MT6323_REG_FIXED("ldo_vrf18", VRF18, MT6323_DIGLDO_CON45, 15, 1825000,
 		MT6323_DIGLDO_CON45, 0x2),
 	MT6323_LDO("ldo_vm", VM, ldo_volt_table9,
-		MT6323_DIGLDO_CON47, 14, MT6323_DIGLDO_CON48, 0x30, MT6323_DIGLDO_CON47, 0x2),
+		MT6323_DIGLDO_CON47, 14, MT6323_DIGLDO_CON48, 0x30,
+		MT6323_DIGLDO_CON47, 0x2),
 	MT6323_REG_FIXED("ldo_vio18", VIO18, MT6323_DIGLDO_CON49, 14, 1800000,
 		MT6323_DIGLDO_CON49, 0x2),
 	MT6323_LDO("ldo_vcamd", VCAMD, ldo_volt_table10,
-		MT6323_DIGLDO_CON51, 14, MT6323_DIGLDO_CON52, 0x60, MT6323_DIGLDO_CON51, 0x2),
+		MT6323_DIGLDO_CON51, 14, MT6323_DIGLDO_CON52, 0x60,
+		MT6323_DIGLDO_CON51, 0x2),
 	MT6323_REG_FIXED("ldo_vcamio", VCAMIO, MT6323_DIGLDO_CON53, 14, 1800000,
 		MT6323_DIGLDO_CON53, 0x2),
 };
@@ -427,7 +375,6 @@ static int mt6323_regulator_probe(struct platform_device *pdev)
 	struct mt6397_chip *mt6323 = dev_get_drvdata(pdev->dev.parent);
 	struct regulator_config config = {};
 	struct regulator_dev *rdev;
-	struct regulation_constraints *c;
 	int i;
 	u32 reg_value;
 
@@ -453,28 +400,26 @@ static int mt6323_regulator_probe(struct platform_device *pdev)
 				mt6323_regulators[i].desc.name);
 			return PTR_ERR(rdev);
 		}
-
-		/* Constrain board-specific capabilities according to what
-		 * this driver and the chip itself can actually do.
-		 */
-		c = rdev->constraints;
-		c->valid_modes_mask |= REGULATOR_MODE_NORMAL|
-			REGULATOR_MODE_STANDBY | REGULATOR_MODE_FAST;
-		c->valid_ops_mask |= REGULATOR_CHANGE_MODE;
 	}
 	return 0;
 }
+
+static const struct platform_device_id mt6323_platform_ids[] = {
+	{"mt6323-regulator", 0},
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(platform, mt6323_platform_ids);
 
 static struct platform_driver mt6323_regulator_driver = {
 	.driver = {
 		.name = "mt6323-regulator",
 	},
 	.probe = mt6323_regulator_probe,
+	.id_table = mt6323_platform_ids,
 };
 
 module_platform_driver(mt6323_regulator_driver);
 
-MODULE_AUTHOR("Flora Fu <flora.fu@mediatek.com>");
-MODULE_DESCRIPTION("Regulator Driver for MediaTek MT6397 PMIC");
-MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:mt6323-regulator");
+MODULE_AUTHOR("Chen Zhong <chen.zhong@mediatek.com>");
+MODULE_DESCRIPTION("Regulator Driver for MediaTek MT6323 PMIC");
+MODULE_LICENSE("GPL v2");

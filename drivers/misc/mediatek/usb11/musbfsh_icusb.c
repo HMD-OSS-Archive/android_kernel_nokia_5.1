@@ -253,7 +253,7 @@ void usb11_wait_disconnect_done(int value)
 		}
 	} else {
 		MYDBG("usb11 is not enabled, skip\n");
-		MYDBG("usb11_wait_disconnect_done()\n");
+		MYDBG("done()\n");
 	}
 
 }
@@ -399,13 +399,6 @@ static void udp_reply(int pid, int seq, void *payload)
 	ret = netlink_unicast(netlink_sock, skb, pid, MSG_DONTWAIT);
 	if (ret < 0)
 		MYDBG("send failed\n");
-	return;
-
-#if 0
-nlmsg_failure:			/* Used by NLMSG_PUT */
-	if (skb)
-		kfree_skb(skb);
-#endif
 }
 
 /* Receive messages from netlink socket. */
@@ -518,7 +511,7 @@ void create_ic_tmp_entry(void)
 {
 	struct proc_dir_entry *pr_entry;
 
-	if (NULL == proc_drv_icusb_dir_entry) {
+	if (proc_drv_icusb_dir_entry == NULL) {
 		MYDBG("[%s]: /proc/driver/icusb not exist\n", __func__);
 		return;
 	}
@@ -603,7 +596,7 @@ void create_ic_usb_cmd_proc_entry(void)
 	MYDBG("");
 	proc_drv_icusb_dir_entry = proc_mkdir("driver/icusb", NULL);
 
-	if (NULL == proc_drv_icusb_dir_entry) {
+	if (proc_drv_icusb_dir_entry == NULL) {
 		MYDBG("[%s]: mkdir /proc/driver/icusb failed\n", __func__);
 		return;
 	}
@@ -629,145 +622,3 @@ void set_icusb_phy_power_negotiation(struct usb_device *udev)
 		set_icusb_phy_power_negotiation_ok();
 	}
 }
-
-#if 0
-static int usb_icusb_probe(struct usb_interface *iface,
-			   const struct usb_device_id *id)
-{
-	struct usb_device *dev = interface_to_usbdev(iface);
-	struct usb_host_interface *interface;
-	struct usb_icusb *icusb;
-
-	interface = iface->altsetting;
-	pr_debug(" extralen = %d\n", interface->extralen);
-
-	if (interface->extralen < ICCD_CLASS_DESCRIPTOR_LENGTH)
-		return -ENODEV;
-
-	icusb = kzalloc(sizeof(struct usb_icusb), GFP_KERNEL);
-
-	if (dev->manufacturer)
-		strlcpy(icusb->name, dev->manufacturer, sizeof(icusb->name));
-
-	if (dev->product) {
-		if (dev->manufacturer)
-			strlcat(icusb->name, " ", sizeof(icusb->name));
-		strlcat(icusb->name, dev->product, sizeof(icusb->name));
-	}
-
-	if (!strlen(icusb->name))
-		snprintf(icusb->name, sizeof(icusb->name),
-			 "USB ICUSB =  %04x:%04x",
-			 le16_to_cpu(dev->descriptor.idVendor),
-			 le16_to_cpu(dev->descriptor.idProduct));
-	pr_debug("icusb_DRIVER = %s\n", icusb->name);
-
-	if (power_resume_time_neogo_attr.value) {
-		icusb_power_negotiation(dev);
-		icusb_resume_time_negotiation(dev);
-	} else {
-		set_icusb_phy_power_negotiation_ok();
-	}
-
-	/* usb_set_intfdata(iface, icusb); */
-
-	return -ENODEV;
-}
-
-static void usb_icusb_disconnect(struct usb_interface *intf)
-{
-	struct usb_icusb *icusb = usb_get_intfdata(intf);
-
-	pr_debug("usb_icusb_disconnect\n");
-
-	if (!check_usb11_sts_disconnect_done())
-		set_usb11_sts_disconnecting();
-
-	mt65xx_usb11_mac_reset_and_phy_stress_set();
-	/* usb_set_intfdata(intf, NULL); */
-
-	if (icusb != NULL)
-		kfree(icusb);
-
-	set_icusb_sts_disconnect_done();
-}
-
-static int usb_icusb_suspend(struct usb_interface *intf, pm_message_t message)
-{
-	pr_debug("usb_icusb_suspend\n");
-	return 0;
-}
-
-static int usb_icusb_resume(struct usb_interface *intf)
-{
-	pr_debug("usb_icusb_resume\n");
-	return 0;
-}
-
-static int usb_icusb_pre_reset(struct usb_interface *intf)
-{
-	pr_debug("usb_icusb_pre_reset\n");
-	return 0;
-
-}
-
-static int usb_icusb_post_reset(struct usb_interface *intf)
-{
-	pr_debug("usb_icusb_post_reset\n");
-	return 0;
-}
-
-static int usb_icusb_reset_resume(struct usb_interface *intf)
-{
-	pr_debug("usb_icusb_reset_resume\n");
-	return 0;
-}
-
-static struct usb_device_id usb_icusb_id_table[] = {
-	{.match_flags = USB_DEVICE_ID_MATCH_INT_CLASS,
-	 .bInterfaceClass = ICCD_INTERFACE_CLASS},
-	{}			/* Terminating entry */
-};
-
-MODULE_DEVICE_TABLE(usb, usb_icusb_id_table);
-
-static struct usb_driver usb_icusb_driver = {
-	.name = "usbicusb",
-	.probe = usb_icusb_probe,
-	.disconnect = usb_icusb_disconnect,
-	.suspend = usb_icusb_suspend,
-	.resume = usb_icusb_resume,
-	.pre_reset = usb_icusb_pre_reset,
-	.post_reset = usb_icusb_post_reset,
-	.reset_resume = usb_icusb_reset_resume,
-	.id_table = usb_icusb_id_table,
-};
-
-
-static int __init icusb_init(void)
-{
-	int rc;
-
-	pr_debug("icusb_init\n");
-	rc = usb_register(&usb_icusb_driver);
-	if (rc != 0)
-		goto err_register;
-	pr_debug("icusb_register done\n");
-/* create_icusb_cmd_proc_entry(); */
-	/* 3.10 specific */
-	netlink_sock = netlink_kernel_create(&init_net,
-					     NETLINK_USERSOCK, &nl_cfg);
-
-err_register:
-	return rc;
-}
-
-static void __exit icusb_exit(void)
-{
-	usb_deregister(&usb_icusb_driver);
-}
-
-
-module_init(icusb_init);
-module_exit(icusb_exit);
-#endif

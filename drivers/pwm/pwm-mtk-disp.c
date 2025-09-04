@@ -25,9 +25,6 @@
 
 #define DISP_PWM_EN		0x00
 
-#define DISP_PWM_COMMIT		0x08
-#define PWM_COMMIT_MASK		BIT(0)
-
 #define PWM_CLKDIV_SHIFT	16
 #define PWM_CLKDIV_MAX		0x3ff
 #define PWM_CLKDIV_MASK		(PWM_CLKDIV_MAX << PWM_CLKDIV_SHIFT)
@@ -38,26 +35,26 @@
 #define PWM_HIGH_WIDTH_SHIFT	16
 #define PWM_HIGH_WIDTH_MASK	(0x1fff << PWM_HIGH_WIDTH_SHIFT)
 
-#define PWM_MANUAL_SEL_MASK	BIT(1)
-
-#define HW_VERSION_V1		1
-#define HW_VERSION_V2		2
-
 struct mtk_pwm_data {
-	unsigned int enable_mask;
-	unsigned int enable_value;
+	u32 enable_mask;
 	unsigned int con0;
-	unsigned int con0_sel;
+	u32 con0_sel;
 	unsigned int con1;
-	unsigned int version;
+
+	bool has_commit;
+	unsigned int commit;
+	unsigned int commit_mask;
+
+	unsigned int bls_debug;
+	u32 bls_debug_mask;
 };
 
 struct mtk_disp_pwm {
 	struct pwm_chip chip;
+	const struct mtk_pwm_data *data;
 	struct clk *clk_main;
 	struct clk *clk_mm;
 	void __iomem *base;
-	const struct mtk_pwm_data *data;
 };
 
 static inline struct mtk_disp_pwm *to_mtk_disp_pwm(struct pwm_chip *chip)
@@ -120,17 +117,20 @@ static int mtk_disp_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	}
 
 	mtk_disp_pwm_update_bits(mdp, mdp->data->con0,
-			PWM_CLKDIV_MASK, clk_div << PWM_CLKDIV_SHIFT);
-	if (HW_VERSION_V2 == mdp->data->version)
-		mtk_disp_pwm_update_bits(mdp, mdp->data->con0,
-				PWM_MANUAL_SEL_MASK, mdp->data->con0_sel);
+				 PWM_CLKDIV_MASK,
+				 clk_div << PWM_CLKDIV_SHIFT);
 	mtk_disp_pwm_update_bits(mdp, mdp->data->con1,
-			PWM_PERIOD_MASK | PWM_HIGH_WIDTH_MASK, value);
-	if (HW_VERSION_V1 == mdp->data->version) {
-		mtk_disp_pwm_update_bits(mdp, DISP_PWM_COMMIT, PWM_COMMIT_MASK, 1);
-		mtk_disp_pwm_update_bits(mdp, DISP_PWM_COMMIT, PWM_COMMIT_MASK, 0);
-	}
+				 PWM_PERIOD_MASK | PWM_HIGH_WIDTH_MASK,
+				 value);
 
+	if (mdp->data->has_commit) {
+		mtk_disp_pwm_update_bits(mdp, mdp->data->commit,
+					 mdp->data->commit_mask,
+					 mdp->data->commit_mask);
+		mtk_disp_pwm_update_bits(mdp, mdp->data->commit,
+					 mdp->data->commit_mask,
+					 0x0);
+	}
 
 	clk_disable(mdp->clk_mm);
 	clk_disable(mdp->clk_main);
@@ -153,8 +153,8 @@ static int mtk_disp_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 		return err;
 	}
 
-	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN,
-			mdp->data->enable_mask, mdp->data->enable_value);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, mdp->data->enable_mask,
+				 mdp->data->enable_mask);
 
 	return 0;
 }
@@ -163,8 +163,8 @@ static void mtk_disp_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct mtk_disp_pwm *mdp = to_mtk_disp_pwm(chip);
 
-	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN,
-			mdp->data->enable_mask, 0);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, mdp->data->enable_mask,
+				 0x0);
 
 	clk_disable(mdp->clk_mm);
 	clk_disable(mdp->clk_main);
@@ -177,46 +177,17 @@ static const struct pwm_ops mtk_disp_pwm_ops = {
 	.owner = THIS_MODULE,
 };
 
-static const struct mtk_pwm_data mt8173_pwm_data = {
-	.enable_mask = BIT(0),
-	.enable_value = 0x1,
-	.con0 = 0x10,
-	.con0_sel = 0x0,
-	.con1 = 0x14,
-	.version = HW_VERSION_V1,
-};
-
-static const struct mtk_pwm_data mt2701_pwm_data = {
-	.enable_mask = BIT(16),
-	.enable_value = 0x10000,
-	.con0 = 0xa8,
-	.con0_sel = 0x2,
-	.con1 = 0xac,
-	.version = HW_VERSION_V2,
-};
-
-static const struct of_device_id mtk_disp_pwm_of_match[] = {
-	{ .compatible = "mediatek,mt8173-disp-pwm", .data = &mt8173_pwm_data},
-	{ .compatible = "mediatek,mt6595-disp-pwm", .data = &mt8173_pwm_data},
-	{ .compatible = "mediatek,mt2701-disp-bls", .data = &mt2701_pwm_data},
-	{ }
-};
-MODULE_DEVICE_TABLE(of, mtk_disp_pwm_of_match);
-
 static int mtk_disp_pwm_probe(struct platform_device *pdev)
 {
-	const struct of_device_id *id;
 	struct mtk_disp_pwm *mdp;
 	struct resource *r;
 	int ret;
 
-	id = of_match_device(mtk_disp_pwm_of_match, &pdev->dev);
-	if (!id)
-		return -EINVAL;
-
 	mdp = devm_kzalloc(&pdev->dev, sizeof(*mdp), GFP_KERNEL);
 	if (!mdp)
 		return -ENOMEM;
+
+	mdp->data = of_device_get_match_data(&pdev->dev);
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	mdp->base = devm_ioremap_resource(&pdev->dev, r);
@@ -243,7 +214,6 @@ static int mtk_disp_pwm_probe(struct platform_device *pdev)
 	mdp->chip.ops = &mtk_disp_pwm_ops;
 	mdp->chip.base = -1;
 	mdp->chip.npwm = 1;
-	mdp->data = id->data;
 
 	ret = pwmchip_add(&mdp->chip);
 	if (ret < 0) {
@@ -252,6 +222,19 @@ static int mtk_disp_pwm_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, mdp);
+
+	/*
+	 * For MT2701, disable double buffer before writing register
+	 * and select manual mode and use PWM_PERIOD/PWM_HIGH_WIDTH.
+	 */
+	if (!mdp->data->has_commit) {
+		mtk_disp_pwm_update_bits(mdp, mdp->data->bls_debug,
+					 mdp->data->bls_debug_mask,
+					 mdp->data->bls_debug_mask);
+		mtk_disp_pwm_update_bits(mdp, mdp->data->con0,
+					 mdp->data->con0_sel,
+					 mdp->data->con0_sel);
+	}
 
 	return 0;
 
@@ -273,6 +256,34 @@ static int mtk_disp_pwm_remove(struct platform_device *pdev)
 
 	return ret;
 }
+
+static const struct mtk_pwm_data mt2701_pwm_data = {
+	.enable_mask = BIT(16),
+	.con0 = 0xa8,
+	.con0_sel = 0x2,
+	.con1 = 0xac,
+	.has_commit = false,
+	.bls_debug = 0xb0,
+	.bls_debug_mask = 0x3,
+};
+
+static const struct mtk_pwm_data mt8173_pwm_data = {
+	.enable_mask = BIT(0),
+	.con0 = 0x10,
+	.con0_sel = 0x0,
+	.con1 = 0x14,
+	.has_commit = true,
+	.commit = 0x8,
+	.commit_mask = 0x1,
+};
+
+static const struct of_device_id mtk_disp_pwm_of_match[] = {
+	{ .compatible = "mediatek,mt2701-disp-pwm", .data = &mt2701_pwm_data},
+	{ .compatible = "mediatek,mt6595-disp-pwm", .data = &mt8173_pwm_data},
+	{ .compatible = "mediatek,mt8173-disp-pwm", .data = &mt8173_pwm_data},
+	{ }
+};
+MODULE_DEVICE_TABLE(of, mtk_disp_pwm_of_match);
 
 static struct platform_driver mtk_disp_pwm_driver = {
 	.driver = {

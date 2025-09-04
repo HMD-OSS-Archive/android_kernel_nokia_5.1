@@ -27,11 +27,11 @@
 #include <linux/device.h>
 #include <linux/firmware.h>
 #include <linux/module.h>
+#include <linux/io.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/asoundef.h>
 #include <sound/info.h>
-#include <asm/io.h>
 #include <sound/vx_core.h>
 #include "vx_cmd.h"
 
@@ -256,8 +256,8 @@ int vx_send_msg_nolock(struct vx_core *chip, struct vx_rmh *rmh)
 	if (rmh->LgCmd > 1) {
 		printk(KERN_DEBUG "  ");
 		for (i = 1; i < rmh->LgCmd; i++)
-			printk("0x%06x ", rmh->Cmd[i]);
-		printk("\n");
+			printk(KERN_CONT "0x%06x ", rmh->Cmd[i]);
+		printk(KERN_CONT "\n");
 	}
 #endif
 	/* Check bit M is set according to length of the command */
@@ -416,6 +416,7 @@ int vx_send_rih(struct vx_core *chip, int cmd)
 
 /**
  * snd_vx_boot_xilinx - boot up the xilinx interface
+ * @chip: VX core instance
  * @boot: the boot record to load
  */
 int snd_vx_load_boot_image(struct vx_core *chip, const struct firmware *boot)
@@ -538,6 +539,8 @@ EXPORT_SYMBOL(snd_vx_threaded_irq_handler);
 
 /**
  * snd_vx_irq_handler - interrupt handler
+ * @irq: irq number
+ * @dev: VX core instance
  */
 irqreturn_t snd_vx_irq_handler(int irq, void *dev)
 {
@@ -649,6 +652,8 @@ static void vx_proc_init(struct vx_core *chip)
 
 /**
  * snd_vx_dsp_boot - load the DSP boot
+ * @chip: VX core instance
+ * @boot: firmware data
  */
 int snd_vx_dsp_boot(struct vx_core *chip, const struct firmware *boot)
 {
@@ -669,6 +674,8 @@ EXPORT_SYMBOL(snd_vx_dsp_boot);
 
 /**
  * snd_vx_dsp_load - load the DSP image
+ * @chip: VX core instance
+ * @dsp: firmware data
  */
 int snd_vx_dsp_load(struct vx_core *chip, const struct firmware *dsp)
 {
@@ -768,7 +775,10 @@ EXPORT_SYMBOL(snd_vx_resume);
 
 /**
  * snd_vx_create - constructor for struct vx_core
+ * @card: card instance
  * @hw: hardware specific record
+ * @ops: VX ops pointer
+ * @extra_size: extra byte size to allocate appending to chip
  *
  * this function allocates the instance and prepare for the hardware
  * initialization.
@@ -785,10 +795,8 @@ struct vx_core *snd_vx_create(struct snd_card *card, struct snd_vx_hardware *hw,
 		return NULL;
 
 	chip = kzalloc(sizeof(*chip) + extra_size, GFP_KERNEL);
-	if (! chip) {
-		snd_printk(KERN_ERR "vx_core: no memory\n");
+	if (! chip)
 		return NULL;
-	}
 	mutex_init(&chip->lock);
 	chip->irq = -1;
 	chip->hw = hw;

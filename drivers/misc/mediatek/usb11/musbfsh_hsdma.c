@@ -100,7 +100,7 @@ static struct dma_channel *dma_channel_allocate(struct dma_controller *c,
 	INFO("epnum=%d\n", hw_ep->epnum);
 
 /* reserve dma channel 0 for QMU */
-#ifdef MUSBFSH_QMU_SUPPORT
+#ifdef CONFIG_MTK_MUSBFSH_QMU_SUPPORT
 	start_bit = 1;
 #else
 	start_bit = 0;
@@ -163,7 +163,8 @@ static void configure_channel(struct dma_channel *channel,
 
 	if (mode) {		/* mode 1,multi-packet */
 		csr |= 1 << MUSBFSH_HSDMA_MODE1_SHIFT;
-		BUG_ON(len < packet_sz);
+		if (len < packet_sz)
+			musbfsh_bug();
 	}
 	csr |= MUSBFSH_HSDMA_BURSTMODE_INCR16 << MUSBFSH_HSDMA_BURSTMODE_SHIFT;
 
@@ -198,8 +199,9 @@ static int dma_channel_program(struct dma_channel *channel,
 	     musbfsh_channel->transmit ? "Tx" : "Rx", packet_sz,
 	     (unsigned int)dma_addr, len, mode);
 
-	BUG_ON(channel->status == MUSBFSH_DMA_STATUS_UNKNOWN ||
-	       channel->status == MUSBFSH_DMA_STATUS_BUSY);
+	if (channel->status == MUSBFSH_DMA_STATUS_UNKNOWN ||
+	       channel->status == MUSBFSH_DMA_STATUS_BUSY)
+		musbfsh_bug();
 
 	channel->actual_len = 0;
 	musbfsh_channel->start_addr = dma_addr;
@@ -377,8 +379,8 @@ irqreturn_t musbfsh_dma_controller_irq(int irq, void *private_data)
 					 **/
 					txcsr |= MUSBFSH_TXCSR_TXPKTRDY;
 					musbfsh_writew(mbase, offset, txcsr);
-				}
-				musbfsh_dma_completion(musbfsh,
+				} else
+					musbfsh_dma_completion(musbfsh,
 						       musbfsh_chan->epnum,
 						       musbfsh_chan->transmit);
 			}
@@ -406,7 +408,7 @@ void musbfsh_dma_controller_destroy(struct dma_controller *c)
 	kfree(controller);
 }
 
-struct dma_controller *__init
+struct dma_controller *
 musbfsh_dma_controller_create(struct musbfsh *musbfsh, void __iomem *base)
 {
 	struct musbfsh_dma_controller *controller;

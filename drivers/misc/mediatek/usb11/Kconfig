@@ -2,34 +2,35 @@
 # MediaTek ICUSB Driver
 #
 
-config MTK_USBFSH # USBFSH
+config MTK_USBFSH
 	bool "MediaTek USB fullspeed Host driver"
-	default n
 	---help---
-	  This is support of Mediatek customized Host-only MUSB hardware.
-	  This MUSB HOST periphal been has removed USB Device functions.
-	  External devices such as the secound MODEM or speicial SIM card
-	  like ICUSB will be connect to this port.
+	  This is support for Mediatek customized Host-only MUSB hardware
+	  The USBFSH driver remove USB Device functions
+	  And provide supports for second MODEM or ICUSB, etc.
+	  Enable USB port1. before enable, you must
+	  confirm that your hw can support. if you can't
+	  sure, please set n.
 
 config MTK_ICUSB_SUPPORT
-	bool "MTK_ICUSB_SUPPORT"
-	default n
+	bool "MediaTek ICUSB SIM card driver"
+	depends on MTK_USBFSH
 	---help---
-	  To enable the ICUSB featurea in phone over MTK_MUSBFSH USB port.
-	  This port is usaually configurerd as USB port 1 on device.
-	  ICUSB is a standard USB interface to connect special SIM card.
-	  Device can mount a USB Mass Storage from this kind of SIM card
-	  through ICUSB interface.
+	  To support the ICUSB feature on USBFSH port
+	  ICUSB is a standard USB interface to connect special SIM card
+	  Beside normal SIM card feature, ICUSB provide more features
+	  Like Mass Storage, EEM, etc.
+	  This port is usually configured as USB port 1 on device.
 
 config MTK_DT_USB_SUPPORT
-	bool "MTK_DT_USB_SUPPORT"
-	default n
+	bool "MediaTek USBFSH dual talk feature driver"
+	depends on MTK_USBFSH
 	---help---
-	  To enable the dual talk feature in phone over MTK_MUSBFSH USB port.
-	  This port is usaually configurerd as USB port 1 on device.
-	  When there is secound MODEM on the device and connected to main
+	  To enable the dual talk feature in phone over MTK_MUSBFSH USB port
+	  When there is second MODEM on the device and connected to main
 	  SoC via MTK_MUSBFSH USB port. MTK_DT_USB_SUPPORT is need for
-	  supporting dual talk to transfer data between 2 MODEMs.
+	  supporting dual talk to transfer data between 2 MODEMs
+	  This port is usually configured as USB port 1 on device.
 
 config MTK_MUSBFSH_QMU_SUPPORT
 	bool "QMU Transfer mode of MediaTek MUSBFSH"
@@ -39,3 +40,21 @@ config MTK_MUSBFSH_QMU_SUPPORT
 	  controller based on the MTK MUSBFSH IP.
 	  QMU is some kind of enhanced DMA mode by HW queeu rather
 	  than SW queue to reduce SW effort.
+
+config MUSBFSH_VBUS
+	bool "HOST VBUS CONTROL of MediaTek MUSBFSH"
+	depends on MTK_USBFSH
+	---help---
+	  Say Y here if your system has support USB11
+	  controller based on the MTK MUSBFSH IP. And the HOST
+	  power can be control when you want to close or open
+	  the USB11 VBUS.
+
+config MUSBFSH_IDDIG
+	bool "HOST IDDIG CONTROL of MediaTek MUSBFSH"
+	depends on MTK_USBFSH
+	---help---
+	  Say Y here if your system has support USB11
+	  controller based on the MTK MUSBFSH IP. And the HOST
+	  related power and clock can be control when you plug
+	  or unplug usb via PORT1 IDDIG pin.

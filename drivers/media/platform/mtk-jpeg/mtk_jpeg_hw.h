@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2015 MediaTek Inc.
+ * Copyright (c) 2016 MediaTek Inc.
  * Author: Ming Hsiu Tsai <minghsiu.tsai@mediatek.com>
+ *         Rick Chang <rick.chang@mediatek.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,7 +12,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
 
 #ifndef _MTK_JPEG_HW_H
 #define _MTK_JPEG_HW_H
@@ -67,13 +67,6 @@ static inline u32 mtk_jpeg_align(u32 val, u32 align)
 	return (val + align - 1) & ~(align - 1);
 }
 
-struct mtk_jpeg_src_buf {
-	struct vb2_buffer b;
-	struct list_head list;
-
-	struct mtk_jpeg_dec_param dec_param;
-};
-
 struct mtk_jpeg_bs {
 	dma_addr_t	str_addr;
 	dma_addr_t	end_addr;
@@ -94,6 +87,5 @@ void mtk_jpeg_dec_set_config(void __iomem *base,
 			     struct mtk_jpeg_fb *fb);
 void mtk_jpeg_dec_reset(void __iomem *dec_reg_base);
 void mtk_jpeg_dec_start(void __iomem *dec_reg_base);
-
 
 #endif /* _MTK_JPEG_HW_H */

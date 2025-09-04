@@ -29,6 +29,8 @@
 #include "rndis.h"
 #include "configfs.h"
 
+#define F_RNDIS_LOG "[USB_RNDIS]"
+
 /*
  * This function is an RNDIS Ethernet port -- a Microsoft protocol that's
  * been promoted instead of the standard CDC Ethernet.  The published RNDIS
@@ -71,20 +73,24 @@
  */
 
 static unsigned int rndis_dl_max_pkt_per_xfer = 10;
-module_param(rndis_dl_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
+module_param(rndis_dl_max_pkt_per_xfer, uint, 0644);
 MODULE_PARM_DESC(rndis_dl_max_pkt_per_xfer,
 	"Maximum packets per transfer for DL aggregation");
 
 static unsigned int rndis_ul_max_pkt_per_xfer = 1;
-module_param(rndis_ul_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
+module_param(rndis_ul_max_pkt_per_xfer, uint, 0644);
 MODULE_PARM_DESC(rndis_ul_max_pkt_per_xfer,
-       "Maximum packets per transfer for UL aggregation");
+	"Maximum packets per transfer for UL aggregation");
 
 static unsigned int f_rndis_debug;
-module_param(f_rndis_debug, uint, S_IRUGO | S_IWUSR);
+module_param(f_rndis_debug, uint, 0644);
 MODULE_PARM_DESC(f_rndis_debug,
 		"f_rndis debug flag");
-#define F_RNDIS_DBG(fmt, args...) pr_debug("F_RNDIS,%s, " fmt, __func__, ## args)
+#define F_RNDIS_DBG(fmt, args...) \
+	pr_notice("F_RNDIS,%s, " fmt, __func__, ## args)
+
+static struct f_rndis *_rndis;
+static spinlock_t rndis_lock;
 
 struct f_rndis {
 	struct gether			port;
@@ -92,6 +98,7 @@ struct f_rndis {
 	u8				ethaddr[ETH_ALEN];
 	u32				vendorID;
 	const char			*manufacturer;
+	struct rndis_params		*params;
 	int				config;
 
 	struct usb_ep			*notify;
@@ -133,9 +140,9 @@ static struct usb_interface_descriptor rndis_control_intf = {
 	/* .bInterfaceNumber = DYNAMIC */
 	/* status endpoint is optional; this could be patched later */
 	.bNumEndpoints =	1,
-	.bInterfaceClass =	USB_CLASS_COMM,
-	.bInterfaceSubClass =   USB_CDC_SUBCLASS_ACM,
-	.bInterfaceProtocol =   USB_CDC_ACM_PROTO_VENDOR,
+	.bInterfaceClass =	USB_CLASS_WIRELESS_CONTROLLER,
+	.bInterfaceSubClass =	0x01,
+	.bInterfaceProtocol =	0x03,
 	/* .iInterface = DYNAMIC */
 };
 
@@ -193,10 +200,10 @@ rndis_iad_descriptor = {
 	.bDescriptorType =	USB_DT_INTERFACE_ASSOCIATION,
 
 	.bFirstInterface =	0, /* XXX, hardcoded */
-	.bInterfaceCount = 	2,	// control + data
-	.bFunctionClass =	USB_CLASS_COMM,
-	.bFunctionSubClass =	USB_CDC_SUBCLASS_ETHERNET,
-	.bFunctionProtocol =	USB_CDC_PROTO_NONE,
+	.bInterfaceCount = 2,	/* control + data */
+	.bFunctionClass =	USB_CLASS_WIRELESS_CONTROLLER,
+	.bFunctionSubClass =	0x01,
+	.bFunctionProtocol =	0x03,
 	/* .iFunction = DYNAMIC */
 };
 
@@ -384,7 +391,6 @@ static struct usb_gadget_strings *rndis_strings[] = {
 };
 
 /*-------------------------------------------------------------------------*/
-
 static struct sk_buff *rndis_add_header(struct gether *port,
 					struct sk_buff *skb)
 {
@@ -398,27 +404,29 @@ static struct sk_buff *rndis_add_header(struct gether *port,
 			memset(header, 0, sizeof(*header));
 			header->MessageType = cpu_to_le32(RNDIS_MSG_PACKET);
 			header->MessageLength = cpu_to_le32(skb->len +
-							sizeof(*header));
+				sizeof(*header));
 			header->DataOffset = cpu_to_le32(36);
 			header->DataLength = cpu_to_le32(skb->len);
 			pr_debug("MessageLength:%d DataLength:%d\n",
-						header->MessageLength,
-						header->DataLength);
+				header->MessageLength,
+				header->DataLength);
 			return skb;
 		}
-		pr_err("RNDIS header is NULL.\n");
+		pr_notice("RNDIS header is NULL.\n");
 		return NULL;
 
-	} else {
-		skb2 = skb_realloc_headroom(skb,
-				sizeof(struct rndis_packet_msg_type));
-		if (skb2)
-			rndis_add_hdr(skb2);
+		} else {
+			skb2 = skb_realloc_headroom(skb,
+			sizeof(struct rndis_packet_msg_type));
+			if (skb2)
+				rndis_add_hdr(skb2);
 
-		dev_kfree_skb(skb);
-		return skb2;
-	}
+			dev_kfree_skb(skb);
+			return skb2;
+		}
+
 }
+
 
 static void rndis_response_available(void *_rndis)
 {
@@ -448,12 +456,24 @@ static void rndis_response_available(void *_rndis)
 
 static void rndis_response_complete(struct usb_ep *ep, struct usb_request *req)
 {
-	struct f_rndis			*rndis = req->context;
-	struct usb_composite_dev	*cdev;
+	struct f_rndis			*rndis;
 	int				status = req->status;
+	struct usb_composite_dev	*cdev;
+	struct usb_ep *notify_ep;
 
-	if (!rndis->port.func.config || !rndis->port.func.config->cdev)
+	spin_lock(&rndis_lock);
+	rndis = _rndis;
+	if (!rndis || !rndis->notify) {
+		pr_notice("%s():rndis is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
 		return;
+	}
+
+	if (!rndis->port.func.config || !rndis->port.func.config->cdev) {
+		pr_notice("%s(): cdev or config is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
+		return;
+	}
 
 	cdev = rndis->port.func.config->cdev;
 
@@ -466,7 +486,7 @@ static void rndis_response_complete(struct usb_ep *ep, struct usb_request *req)
 	case -ESHUTDOWN:
 		/* connection gone */
 		atomic_set(&rndis->notify_count, 0);
-		break;
+		goto out;
 	default:
 		DBG(cdev, "RNDIS %s response error %d, %d/%d\n",
 			ep->name, status,
@@ -474,37 +494,56 @@ static void rndis_response_complete(struct usb_ep *ep, struct usb_request *req)
 		/* FALLTHROUGH */
 	case 0:
 		if (ep != rndis->notify)
-			break;
+			goto out;
 
 		/* handle multiple pending RNDIS_RESPONSE_AVAILABLE
 		 * notifications by resending until we're done
 		 */
 		if (atomic_dec_and_test(&rndis->notify_count))
-			break;
-		status = usb_ep_queue(rndis->notify, req, GFP_ATOMIC);
+			goto out;
+		notify_ep = rndis->notify;
+		spin_unlock(&rndis_lock);
+		status = usb_ep_queue(notify_ep, req, GFP_ATOMIC);
 		if (status) {
+			spin_lock(&rndis_lock);
+			if (!_rndis)
+				goto out;
 			atomic_dec(&rndis->notify_count);
 			DBG(cdev, "notify/1 --> %d\n", status);
+			spin_unlock(&rndis_lock);
 		}
-		break;
+		return;
 	}
+out:
+	spin_unlock(&rndis_lock);
 }
 
 static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 {
-	struct f_rndis			*rndis = req->context;
+	struct f_rndis			*rndis;
 	struct usb_composite_dev	*cdev;
 	int				status;
 	rndis_init_msg_type		*buf;
 
-	if (!rndis->port.func.config || !rndis->port.func.config->cdev)
+	spin_lock(&rndis_lock);
+	rndis = _rndis;
+	if (!rndis || !rndis->notify) {
+		pr_notice("%s():rndis is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
 		return;
+	}
+
+	if (!rndis->port.func.config || !rndis->port.func.config->cdev) {
+		pr_notice("%s(): cdev or config is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
+		return;
+	}
 
 	cdev = rndis->port.func.config->cdev;
 
 	/* received RNDIS command from USB_CDC_SEND_ENCAPSULATED_COMMAND */
 //	spin_lock(&dev->lock);
-	status = rndis_msg_parser(rndis->config, (u8 *) req->buf);
+	status = rndis_msg_parser(rndis->params, (u8 *) req->buf);
 	if (status < 0)
 		pr_err("RNDIS command error %d, %d/%d\n",
 			status, req->actual, req->length);
@@ -526,7 +565,7 @@ static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 		if (rndis_dl_max_pkt_per_xfer <= 1)
 			rndis->port.multi_pkt_xfer = 0;
 	}
-//	spin_unlock(&dev->lock);
+	spin_unlock(&rndis_lock);
 }
 
 static int
@@ -540,12 +579,17 @@ rndis_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 	u16			w_value = le16_to_cpu(ctrl->wValue);
 	u16			w_length = le16_to_cpu(ctrl->wLength);
 
+	spin_lock(&rndis_lock);
+
+	if (!rndis || !rndis->notify) {
+		pr_notice("%s():rndis is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
+		return -EFAULT;
+	}
+
 	/* composite driver infrastructure handles everything except
 	 * CDC class messages; interface activation uses set_alt().
 	 */
-	if (f_rndis_debug)
-		F_RNDIS_DBG("ctrl->bRequestType:0x%x, ctrl->bRequest:0x%x, w_index:0x%x, w_value:0x%x\n",
-				ctrl->bRequestType , ctrl->bRequest, w_index, w_value);
 	switch ((ctrl->bRequestType << 8) | ctrl->bRequest) {
 
 	/* RNDIS uses the CDC command encapsulation mechanism to implement
@@ -559,6 +603,7 @@ rndis_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 		value = w_length;
 		req->complete = rndis_command_complete;
 		req->context = rndis;
+
 		/* later, rndis_response_available() sends a notification */
 		break;
 
@@ -573,7 +618,7 @@ rndis_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 			__le32 *tmp;
 
 			/* return the result */
-			buf = rndis_get_next_response(rndis->config, &n);
+			buf = rndis_get_next_response(rndis->params, &n);
 			if (buf) {
 				memcpy(req->buf, buf, n);
 				req->complete = rndis_response_complete;
@@ -584,13 +629,8 @@ rndis_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 				MsgLength = get_unaligned_le32(tmp++);
 				MsgID = get_unaligned_le32(tmp++);
 
-				rndis_free_response(rndis->config, buf);
+				rndis_free_response(rndis->params, buf);
 				value = n;
-
-				if (f_rndis_debug)
-					F_RNDIS_DBG("response MsgLength %d, msg type:0x%x, RequestID:0x%x\n",
-							MsgLength, MsgType, MsgID);
-				rndis_test_last_resp_id = MsgID;
 			}
 			/* else stalls ... spec says to avoid that */
 		}
@@ -598,10 +638,6 @@ rndis_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 
 	default:
 invalid:
-		F_RNDIS_DBG("invalid control req%02x.%02x v%04x i%04x l%d\n",
-				ctrl->bRequestType, ctrl->bRequest,
-				w_value, w_index, w_length);
-
 		VDBG(cdev, "invalid control req%02x.%02x v%04x i%04x l%d\n",
 			ctrl->bRequestType, ctrl->bRequest,
 			w_value, w_index, w_length);
@@ -614,10 +650,16 @@ invalid:
 			w_value, w_index, w_length);
 		req->zero = (value < w_length);
 		req->length = value;
+
+		spin_unlock(&rndis_lock);
 		value = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+		spin_lock(&rndis_lock);
+
 		if (value < 0)
 			ERROR(cdev, "rndis response on err %d\n", value);
 	}
+
+	spin_unlock(&rndis_lock);
 
 	/* device either stalls (value < 0) or reports success */
 	return value;
@@ -630,16 +672,11 @@ static int rndis_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	struct usb_composite_dev *cdev = f->config->cdev;
 
 	/* we know alt == 0 */
-	F_RNDIS_DBG("interface :%d, rndis ctrl id :%d, rndis data id :%d\n" ,
-			intf, rndis->ctrl_id, rndis->data_id);
-
 
 	if (intf == rndis->ctrl_id) {
-		if (rndis->notify->driver_data) {
-			F_RNDIS_DBG("reset rndis control %d\n", intf);
-			VDBG(cdev, "reset rndis control %d\n", intf);
-			usb_ep_disable(rndis->notify);
-		}
+		VDBG(cdev, "reset rndis control %d\n", intf);
+		usb_ep_disable(rndis->notify);
+
 		if (!rndis->notify->desc) {
 			F_RNDIS_DBG("init rndis ctrl %d\n", intf);
 			VDBG(cdev, "init rndis ctrl %d\n", intf);
@@ -647,22 +684,19 @@ static int rndis_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 				goto fail;
 		}
 		usb_ep_enable(rndis->notify);
-		rndis->notify->driver_data = rndis;
 
 	} else if (intf == rndis->data_id) {
 		struct net_device	*net;
 
-		if (rndis->port.in_ep->driver_data) {
-			F_RNDIS_DBG("reset rndis\n");
+		if (rndis->port.in_ep->enabled) {
 			DBG(cdev, "reset rndis\n");
 			gether_disconnect(&rndis->port);
 		}
 
 		if (!rndis->port.in_ep->desc || !rndis->port.out_ep->desc) {
-			F_RNDIS_DBG("init rndis\n");
 			DBG(cdev, "init rndis\n");
 			if (config_ep_by_speed(cdev->gadget, f,
-					       rndis->port.in_ep) ||
+						rndis->port.in_ep) ||
 			    config_ep_by_speed(cdev->gadget, f,
 					       rndis->port.out_ep)) {
 				rndis->port.in_ep->desc = NULL;
@@ -688,12 +722,12 @@ static int rndis_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 		 */
 		rndis->port.cdc_filter = 0;
 
-		DBG(cdev, "RNDIS RX/TX early activation ...\n");
+		DBG(cdev, "RNDIS RX/TX early activation ... \n");
 		net = gether_connect(&rndis->port);
 		if (IS_ERR(net))
 			return PTR_ERR(net);
 
-		rndis_set_param_dev(rndis->config, net,
+		rndis_set_param_dev(rndis->params, net,
 				&rndis->port.cdc_filter);
 	} else
 		goto fail;
@@ -707,18 +741,18 @@ static void rndis_disable(struct usb_function *f)
 {
 	struct f_rndis		*rndis = func_to_rndis(f);
 	struct usb_composite_dev *cdev = f->config->cdev;
+	unsigned long flags;
 
-	if (!rndis->notify->driver_data)
+	if (!rndis->notify->enabled)
 		return;
 
-	F_RNDIS_DBG("\n");
 	DBG(cdev, "rndis deactivated\n");
-
-	rndis_uninit(rndis->config);
+	spin_lock_irqsave(&rndis_lock, flags);
+	rndis_uninit(rndis->params);
+	spin_unlock_irqrestore(&rndis_lock, flags);
 	gether_disconnect(&rndis->port);
 
 	usb_ep_disable(rndis->notify);
-	rndis->notify->driver_data = NULL;
 }
 
 /*-------------------------------------------------------------------------*/
@@ -738,9 +772,9 @@ static void rndis_open(struct gether *geth)
 	F_RNDIS_DBG("\n");
 	DBG(cdev, "%s\n", __func__);
 
-	rndis_set_param_medium(rndis->config, RNDIS_MEDIUM_802_3,
+	rndis_set_param_medium(rndis->params, RNDIS_MEDIUM_802_3,
 				bitrate(cdev->gadget) / 100);
-	rndis_signal_connect(rndis->config);
+	rndis_signal_connect(rndis->params);
 }
 
 static void rndis_close(struct gether *geth)
@@ -750,8 +784,8 @@ static void rndis_close(struct gether *geth)
 	F_RNDIS_DBG("\n");
 	DBG(geth->func.config->cdev, "%s\n", __func__);
 
-	rndis_set_param_medium(rndis->config, RNDIS_MEDIUM_802_3, 0);
-	rndis_signal_disconnect(rndis->config);
+	rndis_set_param_medium(rndis->params, RNDIS_MEDIUM_802_3, 0);
+	rndis_signal_disconnect(rndis->params);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -776,8 +810,6 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 
 	struct f_rndis_opts *rndis_opts;
 
-	F_RNDIS_DBG("\n");
-
 	if (!can_support_rndis(c))
 		return -EINVAL;
 
@@ -799,14 +831,15 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	 * with list_for_each_entry, so we assume no race condition
 	 * with regard to rndis_opts->bound access
 	 */
-
-	/* if (!rndis_opts->bound) { */
-	if (rndis_opts && !rndis_opts->bound) {
-		gether_set_gadget(rndis_opts->net, cdev->gadget);
-		status = gether_register_netdev(rndis_opts->net);
-		if (status)
-			goto fail;
-		rndis_opts->bound = true;
+	 /* if (!rndis_opts->bound) { */
+	if (rndis_opts) {
+		if (!rndis_opts->bound) {
+			gether_set_gadget(rndis_opts->net, cdev->gadget);
+			status = gether_register_netdev(rndis_opts->net);
+			if (status)
+				goto fail;
+			rndis_opts->bound = true;
+		}
 	}
 
 	us = usb_gstrings_attach(cdev, rndis_strings,
@@ -848,13 +881,11 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	if (!ep)
 		goto fail;
 	rndis->port.in_ep = ep;
-	ep->driver_data = cdev;	/* claim */
 
 	ep = usb_ep_autoconfig(cdev->gadget, &fs_out_desc);
 	if (!ep)
 		goto fail;
 	rndis->port.out_ep = ep;
-	ep->driver_data = cdev;	/* claim */
 
 	/* NOTE:  a status/notification endpoint is, strictly speaking,
 	 * optional.  We don't treat it that way though!  It's simpler,
@@ -864,7 +895,6 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	if (!ep)
 		goto fail;
 	rndis->notify = ep;
-	ep->driver_data = cdev;	/* claim */
 
 	status = -ENOMEM;
 
@@ -873,7 +903,8 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	if (!rndis->notify_req)
 		goto fail;
 #if defined(CONFIG_64BIT) && defined(CONFIG_MTK_LM_MODE)
-	rndis->notify_req->buf = kmalloc(STATUS_BYTECOUNT, GFP_KERNEL | GFP_DMA);
+	rndis->notify_req->buf = kmalloc(STATUS_BYTECOUNT,
+					GFP_KERNEL | GFP_DMA);
 #else
 	rndis->notify_req->buf = kmalloc(STATUS_BYTECOUNT, GFP_KERNEL);
 #endif
@@ -896,19 +927,19 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	ss_notify_desc.bEndpointAddress = fs_notify_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, eth_fs_function, eth_hs_function,
-			eth_ss_function);
+			eth_ss_function, NULL);
 	if (status)
 		goto fail;
 
 	rndis->port.open = rndis_open;
 	rndis->port.close = rndis_close;
 
-	rndis_set_param_medium(rndis->config, RNDIS_MEDIUM_802_3, 0);
-	rndis_set_host_mac(rndis->config, rndis->ethaddr);
-	rndis_set_max_pkt_xfer(rndis->config, rndis_ul_max_pkt_per_xfer);
+	rndis_set_param_medium(rndis->params, RNDIS_MEDIUM_802_3, 0);
+	rndis_set_host_mac(rndis->params, rndis->ethaddr);
+	rndis_set_max_pkt_xfer(rndis->params, rndis_ul_max_pkt_per_xfer);
 
 	if (rndis->manufacturer && rndis->vendorID &&
-			rndis_set_param_vendor(rndis->config, rndis->vendorID,
+			rndis_set_param_vendor(rndis->params, rndis->vendorID,
 					       rndis->manufacturer)) {
 		status = -EINVAL;
 		goto fail_free_descs;
@@ -919,12 +950,7 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	 * until we're activated via set_alt().
 	 */
 
-	F_RNDIS_DBG("RNDIS: %s speed IN/%s OUT/%s NOTIFY/%s\n",
-			gadget_is_superspeed(c->cdev->gadget) ? "super" :
-			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
-			rndis->port.in_ep->name, rndis->port.out_ep->name,
-			rndis->notify->name);
-	DBG(cdev, "RNDIS: %s speed IN/%s OUT/%s NOTIFY/%s\n",
+	INFO(cdev, "RNDIS: %s speed IN/%s OUT/%s NOTIFY/%s\n",
 			gadget_is_superspeed(c->cdev->gadget) ? "super" :
 			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			rndis->port.in_ep->name, rndis->port.out_ep->name,
@@ -942,86 +968,8 @@ fail:
 		usb_ep_free_request(rndis->notify, rndis->notify_req);
 	}
 
-	/* we might as well release our claims on endpoints */
-	if (rndis->notify)
-		rndis->notify->driver_data = NULL;
-	if (rndis->port.out_ep)
-		rndis->port.out_ep->driver_data = NULL;
-	if (rndis->port.in_ep)
-		rndis->port.in_ep->driver_data = NULL;
-
 	ERROR(cdev, "%s: can't bind, err %d\n", f->name, status);
 
-	return status;
-}
-
-static void
-rndis_old_unbind(struct usb_configuration *c, struct usb_function *f)
-{
-	struct f_rndis	*rndis = func_to_rndis(f);
-
-	F_RNDIS_DBG("\n");
-
-	rndis_deregister(rndis->config);
-
-	usb_free_all_descriptors(f);
-
-	kfree(rndis->notify_req->buf);
-	usb_ep_free_request(rndis->notify, rndis->notify_req);
-
-	kfree(rndis);
-}
-
-int
-rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
-		u32 vendorID, const char *manufacturer, struct eth_dev *dev)
-{
-	struct f_rndis	*rndis;
-	int		status;
-
-	/* allocate and initialize one new instance */
-	status = -ENOMEM;
-	rndis = kzalloc(sizeof(*rndis), GFP_KERNEL);
-	if (!rndis)
-		goto fail;
-
-	ether_addr_copy(rndis->ethaddr, ethaddr);
-	rndis->vendorID = vendorID;
-	rndis->manufacturer = manufacturer;
-
-	rndis->port.ioport = dev;
-	/* RNDIS activates when the host changes this filter */
-	rndis->port.cdc_filter = 0;
-
-	/* RNDIS has special (and complex) framing */
-	rndis->port.header_len = sizeof(struct rndis_packet_msg_type);
-	rndis->port.wrap = rndis_add_header;
-	rndis->port.unwrap = rndis_rm_hdr;
-	rndis->port.ul_max_pkts_per_xfer = rndis_ul_max_pkt_per_xfer;
-	rndis->port.dl_max_pkts_per_xfer = rndis_dl_max_pkt_per_xfer;
-
-	rndis->port.func.name = "rndis";
-	/* descriptors are per-instance copies */
-	rndis->port.func.bind = rndis_bind;
-	/* note here use rndis_old_unbind */
-	rndis->port.func.unbind = rndis_old_unbind;
-	rndis->port.func.set_alt = rndis_set_alt;
-	rndis->port.func.setup = rndis_setup;
-	rndis->port.func.disable = rndis_disable;
-
-	status = rndis_register(rndis_response_available, rndis);
-	if (status < 0) {
-		kfree(rndis);
-		return status;
-	}
-	rndis->config = status;
-
-	status = usb_add_function(c, &rndis->port.func);
-	if (status)
-		kfree(rndis);
-fail:
-
-	F_RNDIS_DBG("done, status %d\n", status);
 	return status;
 }
 
@@ -1061,10 +1009,10 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(rndis);
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(rndis);
 
 static struct configfs_attribute *rndis_attrs[] = {
-	&f_rndis_opts_dev_addr.attr,
-	&f_rndis_opts_host_addr.attr,
-	&f_rndis_opts_qmult.attr,
-	&f_rndis_opts_ifname.attr,
+	&rndis_opts_attr_dev_addr,
+	&rndis_opts_attr_host_addr,
+	&rndis_opts_attr_qmult,
+	&rndis_opts_attr_ifname,
 	NULL,
 };
 
@@ -1086,7 +1034,7 @@ static void rndis_free_inst(struct usb_function_instance *f)
 			free_netdev(opts->net);
 	}
 
-	kfree(opts->rndis_os_desc.group.default_groups); /* single VLA chunk */
+	kfree(opts->rndis_interf_group);	/* single VLA chunk */
 	kfree(opts);
 }
 
@@ -1095,6 +1043,7 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 	struct f_rndis_opts *opts;
 	struct usb_os_desc *descs[1];
 	char *names[1];
+	struct config_group *rndis_interf_group;
 
 	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 	if (!opts)
@@ -1103,7 +1052,7 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 
 	mutex_init(&opts->lock);
 	opts->func_inst.free_func_inst = rndis_free_inst;
-	opts->net = gether_setup_default();
+	opts->net = gether_setup_name_default("rndis");
 	if (IS_ERR(opts->net)) {
 		struct net_device *net = opts->net;
 		kfree(opts);
@@ -1113,10 +1062,16 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 
 	descs[0] = &opts->rndis_os_desc;
 	names[0] = "rndis";
-	usb_os_desc_prepare_interf_dir(&opts->func_inst.group, 1, descs,
-				       names, THIS_MODULE);
 	config_group_init_type_name(&opts->func_inst.group, "",
 				    &rndis_func_type);
+	rndis_interf_group =
+		usb_os_desc_prepare_interf_dir(&opts->func_inst.group, 1, descs,
+					       names, THIS_MODULE);
+	if (IS_ERR(rndis_interf_group)) {
+		rndis_free_inst(&opts->func_inst);
+		return ERR_CAST(rndis_interf_group);
+	}
+	opts->rndis_interf_group = rndis_interf_group;
 
 	return &opts->func_inst;
 }
@@ -1125,11 +1080,17 @@ static void rndis_free(struct usb_function *f)
 {
 	struct f_rndis *rndis;
 	struct f_rndis_opts *opts;
+	unsigned long flags;
 
 	rndis = func_to_rndis(f);
-	rndis_deregister(rndis->config);
+	rndis_deregister(rndis->params);
 	opts = container_of(f->fi, struct f_rndis_opts, func_inst);
+
+	spin_lock_irqsave(&rndis_lock, flags);
 	kfree(rndis);
+	_rndis = NULL;
+	spin_unlock_irqrestore(&rndis_lock, flags);
+
 	mutex_lock(&opts->lock);
 	opts->refcnt--;
 	mutex_unlock(&opts->lock);
@@ -1139,7 +1100,6 @@ static void rndis_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_rndis		*rndis = func_to_rndis(f);
 
-	F_RNDIS_DBG("\n");
 	kfree(f->os_desc_table);
 	f->os_desc_n = 0;
 	usb_free_all_descriptors(f);
@@ -1152,12 +1112,14 @@ static struct usb_function *rndis_alloc(struct usb_function_instance *fi)
 {
 	struct f_rndis	*rndis;
 	struct f_rndis_opts *opts;
-	int status;
+	struct rndis_params *params;
 
 	/* allocate and initialize one new instance */
 	rndis = kzalloc(sizeof(*rndis), GFP_KERNEL);
 	if (!rndis)
 		return ERR_PTR(-ENOMEM);
+
+	_rndis = rndis;
 
 	opts = container_of(fi, struct f_rndis_opts, func_inst);
 	mutex_lock(&opts->lock);
@@ -1188,36 +1150,18 @@ static struct usb_function *rndis_alloc(struct usb_function_instance *fi)
 	rndis->port.func.disable = rndis_disable;
 	rndis->port.func.free_func = rndis_free;
 
-	status = rndis_register(rndis_response_available, rndis);
-	if (status < 0) {
+	spin_lock_init(&rndis_lock);
+
+	params = rndis_register(rndis_response_available, rndis);
+	if (IS_ERR(params)) {
 		kfree(rndis);
-		return ERR_PTR(status);
+		return ERR_CAST(params);
 	}
-	rndis->config = status;
+	rndis->params = params;
 
 	return &rndis->port.func;
 }
 
-DECLARE_USB_FUNCTION(rndis, rndis_alloc_inst, rndis_alloc);
-
-static int __init rndis_mod_init(void)
-{
-	int ret;
-
-	ret = rndis_init();
-	if (ret)
-		return ret;
-
-	return usb_function_register(&rndisusb_func);
-}
-module_init(rndis_mod_init);
-
-static void __exit rndis_mod_exit(void)
-{
-	usb_function_unregister(&rndisusb_func);
-	rndis_exit();
-}
-module_exit(rndis_mod_exit);
-
+DECLARE_USB_FUNCTION_INIT(rndis, rndis_alloc_inst, rndis_alloc);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("David Brownell");

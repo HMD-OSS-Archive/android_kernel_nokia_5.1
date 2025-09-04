@@ -21,9 +21,9 @@
 #ifndef GT1X_TPD_COMMON_H__
 #define GT1X_TPD_COMMON_H__
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #ifdef CONFIG_MTK_BOOT
-#include "mt_boot_common.h"
+#include "mtk_boot_common.h"
 #endif
 #include "tpd.h"
 #include "upmu_common.h"
@@ -38,7 +38,7 @@
 #include <linux/input.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
-#include <linux/sched.h>
+#include <uapi/linux/sched/types.h>
 #include <linux/kthread.h>
 #include <linux/bitops.h>
 #include <linux/kernel.h>
@@ -48,10 +48,11 @@
 #include <linux/time.h>
 #include <linux/input.h>
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #ifdef CONFIG_MTK_I2C_EXTENSION
-#define TPD_SUPPORT_I2C_DMA         1	/* if gt9l, better enable it if hardware platform supported*/
+/* if gt9l, better enable it if hardware platform supported*/
+#define TPD_SUPPORT_I2C_DMA         1
 #else
 #define TPD_SUPPORT_I2C_DMA         0
 #endif
@@ -70,30 +71,41 @@
 #define TPD_HAVE_CALIBRATION
 #define TPD_CALIBRATION_MATRIX        {962, 0, 0, 0, 1600, 0, 0, 0}
 #define KEY_GESTURE           KEY_F24	/* customize gesture-key */
+#define DEFAULT_MAX_TOUCH_NUM         10
 
 extern int tpd_em_log;
 
-#define CFG_GROUP_LEN(p_cfg_grp)  (sizeof(p_cfg_grp) / sizeof(p_cfg_grp[0]))
+#define CFG_GROUP_LEN(p_cfg_grp)  (ARRAY_SIZE(p_cfg_grp) / sizeof(p_cfg_grp[0]))
 
 #ifdef CONFIG_GTP_CUSTOM_CFG
 #define GTP_INT_TRIGGER  1	/*0:Rising 1:Falling*/
 #define GTP_WAKEUP_LEVEL 1
 #endif
+
 #ifdef CONFIG_MTK_LCM_PHYSICAL_ROTATION_HW
+#ifdef CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM
 #define GTP_WARP_X_ON         1
 #define GTP_WARP_Y_ON         1
-#else
+#else   /* CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM */
 #define GTP_WARP_X_ON         0
 #define GTP_WARP_Y_ON         0
-#endif
+#endif  /* CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM */
+#else   /* CONFIG_MTK_LCM_PHYSICAL_ROTATION_HW */
+#ifdef CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM
+#define GTP_WARP_X_ON         0
+#define GTP_WARP_Y_ON         0
+#else   /* CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM */
+#define GTP_WARP_X_ON         1
+#define GTP_WARP_Y_ON         1
+#endif  /* CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM */
+#endif  /* CONFIG_MTK_LCM_PHYSICAL_ROTATION_HW */
 
-#define GTP_MAX_TOUCH    5
 #ifdef CONFIG_GTP_WITH_STYLUS
 #define GTP_STYLUS_KEY_TAB {BTN_STYLUS, BTN_STYLUS2}
 #endif
 
 
-/****************************PART3:OTHER define*********************************/
+/****************************PART3:OTHER define*******************************/
 #define GTP_DRIVER_VERSION          "V1.0<2014/09/28>"
 #define GTP_I2C_NAME                "Goodix-TS"
 #define GT1X_DEBUG_PROC_FILE        "gt1x_debug"
@@ -165,9 +177,12 @@ extern int tpd_em_log;
 #define GTP_CMD_HN_EXIT_SLAVE       0x28
 
 /* define offset in the config*/
-#define RESOLUTION_LOC              (GTP_REG_CONFIG_RESOLUTION - GTP_REG_CONFIG_DATA)
-#define TRIGGER_LOC                 (GTP_REG_CONFIG_TRIGGER - GTP_REG_CONFIG_DATA)
-#define MODULE_SWITCH3_LOC			(GTP_REG_MODULE_SWITCH3 - GTP_REG_CONFIG_DATA)
+#define RESOLUTION_LOC              \
+	(GTP_REG_CONFIG_RESOLUTION - GTP_REG_CONFIG_DATA)
+#define TRIGGER_LOC                 \
+	(GTP_REG_CONFIG_TRIGGER - GTP_REG_CONFIG_DATA)
+#define MODULE_SWITCH3_LOC	    \
+	(GTP_REG_MODULE_SWITCH3 - GTP_REG_CONFIG_DATA)
 
 #define GTP_I2C_ADDRESS				0xBA
 
@@ -183,35 +198,40 @@ extern int tpd_em_log;
 #define GTP_WARP_Y(y_max, y) y
 #endif
 
-#define IS_NUM_OR_CHAR(x)    (((x) > 'A' && (x) < 'Z') || ((x) > '0' && (x) < '9'))
+#define IS_NUM_OR_CHAR(x)    \
+	(((x) > 'A' && (x) < 'Z') || ((x) > '0' && (x) < '9'))
 
 /*Log define*/
-#define GTP_INFO(fmt, arg...)           pr_info("<<GTP-INF>>[%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
-#define GTP_ERROR(fmt, arg...)          pr_err("<<GTP-ERR>>[%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
+#define GTP_INFO(fmt, arg...)           \
+	pr_info("<<GTP-INF>>[%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
+#define GTP_ERROR(fmt, arg...)          \
+	pr_info("<<GTP-ERR>>[%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
 #define GTP_DEBUG(fmt, arg...)				\
-	do {									\
+	do {								\
 		if (tpd_em_log)						\
-			pr_debug("<<GTP-DBG>>[%s:%d]"fmt"\n", __func__, __LINE__, ##arg);\
+			pr_debug("<<GTP-DBG>>[%s:%d]"fmt"\n", \
+			__func__, __LINE__, ##arg);\
 	} while (0)
 #ifdef CONFIG_GTP_DEBUG_ARRAY_ON
 #define GTP_DEBUG_ARRAY(array, num)			\
-	do {									\
-		s32 i;								\
+	do {								\
+		s32 i;							\
 		u8 *a = array;						\
 		pr_debug("<<GTP-DBG>>");		\
 		for (i = 0; i < (num); i++) {	\
 			pr_debug("%02x ", (a)[i]);	\
 			if ((i + 1) % 10 == 0) {	\
 				pr_debug("\n<<GTP-DBG>>");\
-			}							\
-		}								\
+			}						\
+		}							\
 		pr_debug("\n");						\
 	} while (0)
 #else
 #define GTP_DEBUG_ARRAY(array, num)	do {} while (0)
 #endif
 #ifdef CONFIG_GTP_DEBUG_FUNC_ON
-#define GTP_DEBUG_FUNC()	pr_debug("<<GTP-FUNC>> Func:%s@Line:%d\n", __func__, __LINE__)
+#define GTP_DEBUG_FUNC()	\
+	pr_debug("<<GTP-FUNC>> Func:%s@Line:%d\n", __func__, __LINE__)
 #else
 #define GTP_DEBUG_FUNC()	do {} while (0)
 #endif
@@ -232,17 +252,17 @@ struct gt1x_version_info {
 };
 #pragma pack()
 
-typedef enum {
+enum DOZE_T {
 	DOZE_DISABLED = 0,
 	DOZE_ENABLED = 1,
 	DOZE_WAKEUP = 2,
-} DOZE_T;
+};
 
-typedef enum {
+enum CHIP_TYPE_T {
 	CHIP_TYPE_GT1X = 0,
 	CHIP_TYPE_GT2X = 1,
 	CHIP_TYPE_NONE = 0xFF
-} CHIP_TYPE_T;
+};
 
 #define _ERROR(e)      ((0x01 << e) | (0x01 << (sizeof(s32) * 8 - 1)))
 #define ERROR          _ERROR(1)	/*for common use */
@@ -291,9 +311,8 @@ extern s32 hotknot_event_handler(u8 *data);
 #endif				/*CONFIG_GTP_HOTKNOT */
 extern s32 gt1x_init_node(void);
 extern bool check_flag;
-
 #ifdef CONFIG_GTP_GESTURE_WAKEUP
-extern DOZE_T gesture_doze_status;
+extern enum DOZE_T gesture_doze_status;
 extern int gesture_enabled;
 extern s32 gesture_event_handler(struct input_dev *dev);
 extern s32 gesture_enter_doze(void);
@@ -307,8 +326,6 @@ extern void gt1x_power_switch(s32 state);
 extern void gt1x_irq_enable(void);
 extern void gt1x_irq_disable(void);
 extern int gt1x_debug_proc(u8 *buf, int count);
-extern int mt_eint_set_deint(int eint_num, int irq_num);
-extern int mt_eint_clr_deint(int eint_num);
 
 struct fw_update_info {
 	int update_type;
@@ -338,7 +355,8 @@ extern int gt1x_update_firmware(char *filename);
 extern void gt1x_enter_update_mode(void);
 extern void gt1x_leave_update_mode(void);
 extern int gt1x_hold_ss51_dsp_no_reset(void);
-extern int gt1x_load_patch(u8 *patch, u32 patch_size, int offset, int bank_size);
+extern int gt1x_load_patch(
+	u8 *patch, u32 patch_size, int offset, int bank_size);
 extern int gt1x_startup_patch(void);
 extern void gt1x_auto_update_done(void);
 extern int gt1x_is_tpd_halt(void);
@@ -352,7 +370,7 @@ extern void gt1x_deinit_tool_node(void);
 /* Export from gt1x_generic.c */
 extern struct i2c_client *gt1x_i2c_client;
 
-extern CHIP_TYPE_T gt1x_chip_type;
+extern enum CHIP_TYPE_T gt1x_chip_type;
 extern struct gt1x_version_info gt1x_version;
 
 extern s32 gt1x_init_debug_node(void);
@@ -389,8 +407,10 @@ extern s32 gt1x_send_cfg(u8 *config, int cfg_len);
 extern void gt1x_select_addr(void);
 extern s32 gt1x_reset_guitar(void);
 extern void gt1x_power_reset(void);
+extern void gt1x_power_reset2(void);
 extern int gt1x_parse_config(char *filename, u8 *gt1x_config);
-extern s32 gt1x_touch_event_handler(u8 *data, struct input_dev *dev, struct input_dev *pen_dev);
+extern s32 gt1x_touch_event_handler(
+	u8 *data, struct input_dev *dev, struct input_dev *pen_dev);
 
 
 #ifdef CONFIG_GTP_WITH_STYLUS
@@ -428,5 +448,10 @@ extern bool upmu_is_chr_det(void);
 extern struct tpd_filter_t tpd_filter;
 extern wait_queue_head_t init_waiter;
 extern u8 is_resetting;
+
+/* AF power is connected to Touch power */
+#ifdef CONFIG_MTK_LENS
+extern void AF_PowerDown(void);
+#endif
 
 #endif /* GT1X_TPD_COMMON_H__ */

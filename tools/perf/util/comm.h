@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __PERF_COMM_H
 #define __PERF_COMM_H
 
@@ -12,6 +13,10 @@ struct comm {
 	u64 start;
 	struct list_head list;
 	bool exec;
+	union { /* Tool specific area */
+		void	*priv;
+		u64	db_id;
+	};
 };
 
 void comm__free(struct comm *comm);

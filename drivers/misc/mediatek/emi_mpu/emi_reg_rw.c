@@ -26,14 +26,14 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 
-#include <mt-plat/mt_device_apc.h>
+#include <mt-plat/mtk_device_apc.h>
 #include <mt-plat/sync_write.h>
 #include <mt-plat/dma.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include "mach/emi_mpu.h"
-#include "mach/mt_secure_api.h"
+#include <mt-plat/mtk_secure_api.h>
 
 static void __iomem *emi_base;
 
@@ -75,8 +75,10 @@ int mt_emi_mpu_set_region_protection(unsigned long long start,
 				     unsigned long long end,
 				     unsigned int region_permission)
 {
+#ifdef CONFIG_ARM64
 #if defined(CONFIG_ARM_PSCI) || defined(CONFIG_MTK_PSCI)
 	return emi_mpu_smc_set(start, end, region_permission);
+#endif
 #endif
 	return 0;
 }

@@ -10,7 +10,6 @@
 #include <linux/string.h>
 
 #include "do_mounts.h"
-#include "../drivers/md/dm.h"
 
 #define DM_MAX_NAME 32
 #define DM_MAX_UUID 129
@@ -176,8 +175,7 @@ static void __init dm_substitute_devices(char *str, size_t str_len)
 			continue;
 
 		/* Temporarily terminate with a nul */
-		if (*candidate_end)
-			candidate_end--;
+		candidate_end--;
 		old_char = *candidate_end;
 		*candidate_end = '\0';
 
@@ -335,7 +333,6 @@ static void __init dm_setup_drive(void)
 		goto dm_table_create_fail;
 	}
 
-	dm_lock_md_type(md);
 	target = dm_setup_args.target;
 	while (target) {
 		DMINFO("adding target '%llu %llu %s %s'",
@@ -354,17 +351,6 @@ static void __init dm_setup_drive(void)
 		DMDEBUG("failed to complete the table");
 		goto table_complete_fail;
 	}
-
-	if (dm_get_md_type(md) == DM_TYPE_NONE) {
-		dm_set_md_type(md, dm_table_get_type(table));
-		if (dm_setup_md_queue(md)) {
-			DMWARN("unable to set up device queue for new table.");
-			goto setup_md_queue_fail;
-		}
-	} else if (dm_get_md_type(md) != dm_table_get_type(table)) {
-		DMWARN("can't change device type after initial table load.");
-		goto setup_md_queue_fail;
-        }
 
 	/* Suspend the device so that we can bind it to the table. */
 	if (dm_suspend(md, 0)) {
@@ -394,7 +380,6 @@ static void __init dm_setup_drive(void)
 	}
 	printk(KERN_INFO "dm: dm-%d is ready\n", dm_setup_args.minor);
 
-	dm_unlock_md_type(md);
 	dm_setup_cleanup();
 	return;
 
@@ -402,10 +387,8 @@ export_fail:
 resume_fail:
 table_bind_fail:
 suspend_fail:
-setup_md_queue_fail:
 table_complete_fail:
 add_target_fail:
-	dm_unlock_md_type(md);
 dm_table_create_fail:
 	dm_put(md);
 dm_create_fail:

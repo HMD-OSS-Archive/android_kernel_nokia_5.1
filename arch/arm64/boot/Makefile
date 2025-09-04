@@ -14,9 +14,9 @@
 # Based on the ia64 boot/Makefile.
 #
 
-subdir-ccflags-y += -Werror
-
 include $(srctree)/arch/arm64/boot/dts/Makefile
+
+OBJCOPYFLAGS_Image :=-O binary -R .note -R .note.gnu.build-id -R .comment -S
 
 targets := Image Image.gz
 
@@ -28,8 +28,11 @@ DTB_LIST := $(dtb-y)
 endif
 DTB_OBJS := $(addprefix $(obj)/dts/,$(DTB_LIST))
 
-$(obj)/Image: vmlinux FORCE
+$(obj)/Image: vmlinux $(obj)/mtk.dtb FORCE
 	$(call if_changed,objcopy)
+
+$(obj)/Image.bz2: $(obj)/Image FORCE
+	$(call if_changed,bzip2)
 
 $(obj)/Image-dtb: $(obj)/Image $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
@@ -37,13 +40,25 @@ $(obj)/Image-dtb: $(obj)/Image $(DTB_OBJS) FORCE
 $(obj)/Image.gz: $(obj)/Image FORCE
 	$(call if_changed,gzip)
 
+$(obj)/Image.lz4: $(obj)/Image FORCE
+	$(call if_changed,lz4)
+
+$(obj)/Image.lzma: $(obj)/Image FORCE
+	$(call if_changed,lzma)
+
+$(obj)/Image.lzo: $(obj)/Image FORCE
+	$(call if_changed,lzo)
+
 $(obj)/Image.gz-dtb: $(obj)/Image.gz $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
-install: $(obj)/Image
+$(obj)/mtk.dtb: $(DTB_OBJS) FORCE
+	$(call if_changed,cat)
+
+install:
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
 	$(obj)/Image System.map "$(INSTALL_PATH)"
 
-zinstall: $(obj)/Image.gz
+zinstall:
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
 	$(obj)/Image.gz System.map "$(INSTALL_PATH)"

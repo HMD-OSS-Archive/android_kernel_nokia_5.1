@@ -18,7 +18,10 @@
 #ifndef __XFS_DIR2_H__
 #define __XFS_DIR2_H__
 
-struct xfs_bmap_free;
+#include "xfs_da_format.h"
+#include "xfs_da_btree.h"
+
+struct xfs_defer_ops;
 struct xfs_da_args;
 struct xfs_inode;
 struct xfs_mount;
@@ -32,6 +35,11 @@ struct xfs_dir2_data_unused;
 extern struct xfs_name	xfs_name_dotdot;
 
 /*
+ * Convert inode mode to directory entry filetype
+ */
+extern unsigned char xfs_mode_to_ftype(int mode);
+
+/*
  * directory operations vector for encode/decode routines
  */
 struct xfs_dir_ops {
@@ -39,9 +47,9 @@ struct xfs_dir_ops {
 	struct xfs_dir2_sf_entry *
 		(*sf_nextentry)(struct xfs_dir2_sf_hdr *hdr,
 				struct xfs_dir2_sf_entry *sfep);
-	__uint8_t (*sf_get_ftype)(struct xfs_dir2_sf_entry *sfep);
+	uint8_t (*sf_get_ftype)(struct xfs_dir2_sf_entry *sfep);
 	void	(*sf_put_ftype)(struct xfs_dir2_sf_entry *sfep,
-				__uint8_t ftype);
+				uint8_t ftype);
 	xfs_ino_t (*sf_get_ino)(struct xfs_dir2_sf_hdr *hdr,
 				struct xfs_dir2_sf_entry *sfep);
 	void	(*sf_put_ino)(struct xfs_dir2_sf_hdr *hdr,
@@ -52,9 +60,9 @@ struct xfs_dir_ops {
 				     xfs_ino_t ino);
 
 	int	(*data_entsize)(int len);
-	__uint8_t (*data_get_ftype)(struct xfs_dir2_data_entry *dep);
+	uint8_t (*data_get_ftype)(struct xfs_dir2_data_entry *dep);
 	void	(*data_put_ftype)(struct xfs_dir2_data_entry *dep,
-				__uint8_t ftype);
+				uint8_t ftype);
 	__be16 * (*data_entry_tag_p)(struct xfs_dir2_data_entry *dep);
 	struct xfs_dir2_data_free *
 		(*data_bestfree_p)(struct xfs_dir2_data_hdr *hdr);
@@ -123,18 +131,18 @@ extern int xfs_dir_init(struct xfs_trans *tp, struct xfs_inode *dp,
 extern int xfs_dir_createname(struct xfs_trans *tp, struct xfs_inode *dp,
 				struct xfs_name *name, xfs_ino_t inum,
 				xfs_fsblock_t *first,
-				struct xfs_bmap_free *flist, xfs_extlen_t tot);
+				struct xfs_defer_ops *dfops, xfs_extlen_t tot);
 extern int xfs_dir_lookup(struct xfs_trans *tp, struct xfs_inode *dp,
 				struct xfs_name *name, xfs_ino_t *inum,
 				struct xfs_name *ci_name);
 extern int xfs_dir_removename(struct xfs_trans *tp, struct xfs_inode *dp,
 				struct xfs_name *name, xfs_ino_t ino,
 				xfs_fsblock_t *first,
-				struct xfs_bmap_free *flist, xfs_extlen_t tot);
+				struct xfs_defer_ops *dfops, xfs_extlen_t tot);
 extern int xfs_dir_replace(struct xfs_trans *tp, struct xfs_inode *dp,
 				struct xfs_name *name, xfs_ino_t inum,
 				xfs_fsblock_t *first,
-				struct xfs_bmap_free *flist, xfs_extlen_t tot);
+				struct xfs_defer_ops *dfops, xfs_extlen_t tot);
 extern int xfs_dir_canenter(struct xfs_trans *tp, struct xfs_inode *dp,
 				struct xfs_name *name);
 
@@ -151,6 +159,9 @@ extern int xfs_dir2_isleaf(struct xfs_da_args *args, int *r);
 extern int xfs_dir2_shrink_inode(struct xfs_da_args *args, xfs_dir2_db_t db,
 				struct xfs_buf *bp);
 
+extern void xfs_dir2_data_freescan_int(struct xfs_da_geometry *geo,
+		const struct xfs_dir_ops *ops,
+		struct xfs_dir2_data_hdr *hdr, int *loghead);
 extern void xfs_dir2_data_freescan(struct xfs_inode *dp,
 		struct xfs_dir2_data_hdr *hdr, int *loghead);
 extern void xfs_dir2_data_log_entry(struct xfs_da_args *args,
@@ -171,10 +182,146 @@ extern struct xfs_dir2_data_free *xfs_dir2_data_freefind(
 		struct xfs_dir2_data_hdr *hdr, struct xfs_dir2_data_free *bf,
 		struct xfs_dir2_data_unused *dup);
 
+extern int xfs_dir_ino_validate(struct xfs_mount *mp, xfs_ino_t ino);
+
 extern const struct xfs_buf_ops xfs_dir3_block_buf_ops;
 extern const struct xfs_buf_ops xfs_dir3_leafn_buf_ops;
 extern const struct xfs_buf_ops xfs_dir3_leaf1_buf_ops;
 extern const struct xfs_buf_ops xfs_dir3_free_buf_ops;
 extern const struct xfs_buf_ops xfs_dir3_data_buf_ops;
+
+/*
+ * Directory offset/block conversion functions.
+ *
+ * DB blocks here are logical directory block numbers, not filesystem blocks.
+ */
+
+/*
+ * Convert dataptr to byte in file space
+ */
+static inline xfs_dir2_off_t
+xfs_dir2_dataptr_to_byte(xfs_dir2_dataptr_t dp)
+{
+	return (xfs_dir2_off_t)dp << XFS_DIR2_DATA_ALIGN_LOG;
+}
+
+/*
+ * Convert byte in file space to dataptr.  It had better be aligned.
+ */
+static inline xfs_dir2_dataptr_t
+xfs_dir2_byte_to_dataptr(xfs_dir2_off_t by)
+{
+	return (xfs_dir2_dataptr_t)(by >> XFS_DIR2_DATA_ALIGN_LOG);
+}
+
+/*
+ * Convert byte in space to (DB) block
+ */
+static inline xfs_dir2_db_t
+xfs_dir2_byte_to_db(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
+{
+	return (xfs_dir2_db_t)(by >> geo->blklog);
+}
+
+/*
+ * Convert dataptr to a block number
+ */
+static inline xfs_dir2_db_t
+xfs_dir2_dataptr_to_db(struct xfs_da_geometry *geo, xfs_dir2_dataptr_t dp)
+{
+	return xfs_dir2_byte_to_db(geo, xfs_dir2_dataptr_to_byte(dp));
+}
+
+/*
+ * Convert byte in space to offset in a block
+ */
+static inline xfs_dir2_data_aoff_t
+xfs_dir2_byte_to_off(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
+{
+	return (xfs_dir2_data_aoff_t)(by & (geo->blksize - 1));
+}
+
+/*
+ * Convert dataptr to a byte offset in a block
+ */
+static inline xfs_dir2_data_aoff_t
+xfs_dir2_dataptr_to_off(struct xfs_da_geometry *geo, xfs_dir2_dataptr_t dp)
+{
+	return xfs_dir2_byte_to_off(geo, xfs_dir2_dataptr_to_byte(dp));
+}
+
+/*
+ * Convert block and offset to byte in space
+ */
+static inline xfs_dir2_off_t
+xfs_dir2_db_off_to_byte(struct xfs_da_geometry *geo, xfs_dir2_db_t db,
+			xfs_dir2_data_aoff_t o)
+{
+	return ((xfs_dir2_off_t)db << geo->blklog) + o;
+}
+
+/*
+ * Convert block (DB) to block (dablk)
+ */
+static inline xfs_dablk_t
+xfs_dir2_db_to_da(struct xfs_da_geometry *geo, xfs_dir2_db_t db)
+{
+	return (xfs_dablk_t)(db << (geo->blklog - geo->fsblog));
+}
+
+/*
+ * Convert byte in space to (DA) block
+ */
+static inline xfs_dablk_t
+xfs_dir2_byte_to_da(struct xfs_da_geometry *geo, xfs_dir2_off_t by)
+{
+	return xfs_dir2_db_to_da(geo, xfs_dir2_byte_to_db(geo, by));
+}
+
+/*
+ * Convert block and offset to dataptr
+ */
+static inline xfs_dir2_dataptr_t
+xfs_dir2_db_off_to_dataptr(struct xfs_da_geometry *geo, xfs_dir2_db_t db,
+			   xfs_dir2_data_aoff_t o)
+{
+	return xfs_dir2_byte_to_dataptr(xfs_dir2_db_off_to_byte(geo, db, o));
+}
+
+/*
+ * Convert block (dablk) to block (DB)
+ */
+static inline xfs_dir2_db_t
+xfs_dir2_da_to_db(struct xfs_da_geometry *geo, xfs_dablk_t da)
+{
+	return (xfs_dir2_db_t)(da >> (geo->blklog - geo->fsblog));
+}
+
+/*
+ * Convert block (dablk) to byte offset in space
+ */
+static inline xfs_dir2_off_t
+xfs_dir2_da_to_byte(struct xfs_da_geometry *geo, xfs_dablk_t da)
+{
+	return xfs_dir2_db_off_to_byte(geo, xfs_dir2_da_to_db(geo, da), 0);
+}
+
+/*
+ * Directory tail pointer accessor functions. Based on block geometry.
+ */
+static inline struct xfs_dir2_block_tail *
+xfs_dir2_block_tail_p(struct xfs_da_geometry *geo, struct xfs_dir2_data_hdr *hdr)
+{
+	return ((struct xfs_dir2_block_tail *)
+		((char *)hdr + geo->blksize)) - 1;
+}
+
+static inline struct xfs_dir2_leaf_tail *
+xfs_dir2_leaf_tail_p(struct xfs_da_geometry *geo, struct xfs_dir2_leaf *lp)
+{
+	return (struct xfs_dir2_leaf_tail *)
+		((char *)lp + geo->blksize -
+		  sizeof(struct xfs_dir2_leaf_tail));
+}
 
 #endif	/* __XFS_DIR2_H__ */

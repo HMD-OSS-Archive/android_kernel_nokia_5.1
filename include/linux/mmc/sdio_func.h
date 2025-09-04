@@ -61,7 +61,7 @@ struct sdio_func {
 	unsigned int		state;		/* function state */
 #define SDIO_STATE_PRESENT	(1<<0)		/* present in sysfs */
 
-	u8			tmpbuf[4];	/* DMA:able scratch buffer */
+	u8			*tmpbuf;	/* DMA:able scratch buffer */
 
 	unsigned		num_info;	/* number of info strings */
 	const char		**info;		/* info strings */
@@ -91,8 +91,6 @@ struct sdio_driver {
 
 	struct device_driver drv;
 };
-
-#define to_sdio_driver(d)	container_of(d, struct sdio_driver, drv)
 
 /**
  * SDIO_DEVICE - macro used to describe a specific SDIO device
@@ -138,8 +136,6 @@ extern int sdio_release_irq(struct sdio_func *func);
 extern unsigned int sdio_align_size(struct sdio_func *func, unsigned int sz);
 
 extern u8 sdio_readb(struct sdio_func *func, unsigned int addr, int *err_ret);
-extern u8 sdio_readb_ext(struct sdio_func *func, unsigned int addr, int *err_ret,
-	unsigned in);
 extern u16 sdio_readw(struct sdio_func *func, unsigned int addr, int *err_ret);
 extern u32 sdio_readl(struct sdio_func *func, unsigned int addr, int *err_ret);
 

@@ -1,7 +1,7 @@
 /*
  * rcar_du_kms.c  --  R-Car Display Unit Mode Setting
  *
- * Copyright (C) 2013-2014 Renesas Electronics Corporation
+ * Copyright (C) 2013-2015 Renesas Electronics Corporation
  *
  * Contact: Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -12,12 +12,15 @@
  */
 
 #include <drm/drmP.h>
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_gem_cma_helper.h>
 
 #include <linux/of_graph.h>
+#include <linux/wait.h>
 
 #include "rcar_du_crtc.h"
 #include "rcar_du_drv.h"
@@ -25,6 +28,7 @@
 #include "rcar_du_kms.h"
 #include "rcar_du_lvdsenc.h"
 #include "rcar_du_regs.h"
+#include "rcar_du_vsp.h"
 
 /* -----------------------------------------------------------------------------
  * Format helpers
@@ -86,12 +90,44 @@ static const struct rcar_du_format_info rcar_du_format_infos[] = {
 		.pnmr = PnMR_SPIM_TP_OFF | PnMR_DDDF_YC,
 		.edf = PnDDCR4_EDF_NONE,
 	}, {
-		/* In YUV 4:2:2, only NV16 is supported (NV61 isn't) */
 		.fourcc = DRM_FORMAT_NV16,
 		.bpp = 16,
 		.planes = 2,
 		.pnmr = PnMR_SPIM_TP_OFF | PnMR_DDDF_YC,
 		.edf = PnDDCR4_EDF_NONE,
+	},
+	/*
+	 * The following formats are not supported on Gen2 and thus have no
+	 * associated .pnmr or .edf settings.
+	 */
+	{
+		.fourcc = DRM_FORMAT_NV61,
+		.bpp = 16,
+		.planes = 2,
+	}, {
+		.fourcc = DRM_FORMAT_YUV420,
+		.bpp = 12,
+		.planes = 3,
+	}, {
+		.fourcc = DRM_FORMAT_YVU420,
+		.bpp = 12,
+		.planes = 3,
+	}, {
+		.fourcc = DRM_FORMAT_YUV422,
+		.bpp = 16,
+		.planes = 3,
+	}, {
+		.fourcc = DRM_FORMAT_YVU422,
+		.bpp = 16,
+		.planes = 3,
+	}, {
+		.fourcc = DRM_FORMAT_YUV444,
+		.bpp = 24,
+		.planes = 3,
+	}, {
+		.fourcc = DRM_FORMAT_YVU444,
+		.bpp = 24,
+		.planes = 3,
 	},
 };
 
@@ -118,7 +154,8 @@ int rcar_du_dumb_create(struct drm_file *file, struct drm_device *dev,
 	unsigned int min_pitch = DIV_ROUND_UP(args->width * args->bpp, 8);
 	unsigned int align;
 
-	/* The R8A7779 DU requires a 16 pixels pitch alignment as documented,
+	/*
+	 * The R8A7779 DU requires a 16 pixels pitch alignment as documented,
 	 * but the R8A7790 DU seems to require a 128 bytes pitch alignment.
 	 */
 	if (rcar_du_needs(rcdu, RCAR_DU_QUIRK_ALIGN_128B))
@@ -126,20 +163,21 @@ int rcar_du_dumb_create(struct drm_file *file, struct drm_device *dev,
 	else
 		align = 16 * args->bpp / 8;
 
-	args->pitch = roundup(max(args->pitch, min_pitch), align);
+	args->pitch = roundup(min_pitch, align);
 
-	return drm_gem_cma_dumb_create(file, dev, args);
+	return drm_gem_cma_dumb_create_internal(file, dev, args);
 }
 
 static struct drm_framebuffer *
 rcar_du_fb_create(struct drm_device *dev, struct drm_file *file_priv,
-		  struct drm_mode_fb_cmd2 *mode_cmd)
+		  const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct rcar_du_device *rcdu = dev->dev_private;
 	const struct rcar_du_format_info *format;
 	unsigned int max_pitch;
 	unsigned int align;
 	unsigned int bpp;
+	unsigned int i;
 
 	format = rcar_du_format_info(mode_cmd->pixel_format);
 	if (format == NULL) {
@@ -152,7 +190,7 @@ rcar_du_fb_create(struct drm_device *dev, struct drm_file *file_priv,
 	 * The pitch and alignment constraints are expressed in pixels on the
 	 * hardware side and in bytes in the DRM API.
 	 */
-	bpp = format->planes == 2 ? 1 : format->bpp / 8;
+	bpp = format->planes == 1 ? format->bpp / 8 : 1;
 	max_pitch =  4096 * bpp;
 
 	if (rcar_du_needs(rcdu, RCAR_DU_QUIRK_ALIGN_128B))
@@ -167,8 +205,8 @@ rcar_du_fb_create(struct drm_device *dev, struct drm_file *file_priv,
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (format->planes == 2) {
-		if (mode_cmd->pitches[1] != mode_cmd->pitches[0]) {
+	for (i = 1; i < format->planes; ++i) {
+		if (mode_cmd->pitches[i] != mode_cmd->pitches[0]) {
 			dev_dbg(dev->dev,
 				"luma and chroma pitches do not match\n");
 			return ERR_PTR(-EINVAL);
@@ -185,61 +223,72 @@ static void rcar_du_output_poll_changed(struct drm_device *dev)
 	drm_fbdev_cma_hotplug_event(rcdu->fbdev);
 }
 
+/* -----------------------------------------------------------------------------
+ * Atomic Check and Update
+ */
+
+static int rcar_du_atomic_check(struct drm_device *dev,
+				struct drm_atomic_state *state)
+{
+	struct rcar_du_device *rcdu = dev->dev_private;
+	int ret;
+
+	ret = drm_atomic_helper_check_modeset(dev, state);
+	if (ret)
+		return ret;
+
+	ret = drm_atomic_normalize_zpos(dev, state);
+	if (ret)
+		return ret;
+
+	ret = drm_atomic_helper_check_planes(dev, state);
+	if (ret)
+		return ret;
+
+	if (rcar_du_has(rcdu, RCAR_DU_FEATURE_VSP1_SOURCE))
+		return 0;
+
+	return rcar_du_atomic_check_planes(dev, state);
+}
+
+static void rcar_du_atomic_commit_tail(struct drm_atomic_state *old_state)
+{
+	struct drm_device *dev = old_state->dev;
+
+	/* Apply the atomic update. */
+	drm_atomic_helper_commit_modeset_disables(dev, old_state);
+	drm_atomic_helper_commit_planes(dev, old_state,
+					DRM_PLANE_COMMIT_ACTIVE_ONLY);
+	drm_atomic_helper_commit_modeset_enables(dev, old_state);
+
+	drm_atomic_helper_commit_hw_done(old_state);
+	drm_atomic_helper_wait_for_flip_done(dev, old_state);
+
+	drm_atomic_helper_cleanup_planes(dev, old_state);
+}
+
+/* -----------------------------------------------------------------------------
+ * Initialization
+ */
+
+static const struct drm_mode_config_helper_funcs rcar_du_mode_config_helper = {
+	.atomic_commit_tail = rcar_du_atomic_commit_tail,
+};
+
 static const struct drm_mode_config_funcs rcar_du_mode_config_funcs = {
 	.fb_create = rcar_du_fb_create,
 	.output_poll_changed = rcar_du_output_poll_changed,
+	.atomic_check = rcar_du_atomic_check,
+	.atomic_commit = drm_atomic_helper_commit,
 };
 
-static int rcar_du_encoders_init_pdata(struct rcar_du_device *rcdu)
+static int rcar_du_encoders_init_one(struct rcar_du_device *rcdu,
+				     enum rcar_du_output output,
+				     struct of_endpoint *ep)
 {
-	unsigned int num_encoders = 0;
-	unsigned int i;
-	int ret;
-
-	for (i = 0; i < rcdu->pdata->num_encoders; ++i) {
-		const struct rcar_du_encoder_data *pdata =
-			&rcdu->pdata->encoders[i];
-		const struct rcar_du_output_routing *route =
-			&rcdu->info->routes[pdata->output];
-
-		if (pdata->type == RCAR_DU_ENCODER_UNUSED)
-			continue;
-
-		if (pdata->output >= RCAR_DU_OUTPUT_MAX ||
-		    route->possible_crtcs == 0) {
-			dev_warn(rcdu->dev,
-				 "encoder %u references unexisting output %u, skipping\n",
-				 i, pdata->output);
-			continue;
-		}
-
-		ret = rcar_du_encoder_init(rcdu, pdata->type, pdata->output,
-					   pdata, NULL);
-		if (ret < 0)
-			return ret;
-
-		num_encoders++;
-	}
-
-	return num_encoders;
-}
-
-static int rcar_du_encoders_init_dt_one(struct rcar_du_device *rcdu,
-					enum rcar_du_output output,
-					struct of_endpoint *ep)
-{
-	static const struct {
-		const char *compatible;
-		enum rcar_du_encoder_type type;
-	} encoders[] = {
-		{ "adi,adv7123", RCAR_DU_ENCODER_VGA },
-		{ "thine,thc63lvdm83d", RCAR_DU_ENCODER_LVDS },
-	};
-
-	enum rcar_du_encoder_type enc_type = RCAR_DU_ENCODER_NONE;
 	struct device_node *connector = NULL;
 	struct device_node *encoder = NULL;
-	struct device_node *prev = NULL;
+	struct device_node *ep_node = NULL;
 	struct device_node *entity_ep_node;
 	struct device_node *entity;
 	int ret;
@@ -250,23 +299,21 @@ static int rcar_du_encoders_init_dt_one(struct rcar_du_device *rcdu,
 	 */
 	entity = of_graph_get_remote_port_parent(ep->local_node);
 	if (!entity) {
-		dev_dbg(rcdu->dev, "unconnected endpoint %s, skipping\n",
-			ep->local_node->full_name);
-		return 0;
+		dev_dbg(rcdu->dev, "unconnected endpoint %pOF, skipping\n",
+			ep->local_node);
+		return -ENODEV;
 	}
 
-	entity_ep_node = of_parse_phandle(ep->local_node, "remote-endpoint", 0);
+	if (!of_device_is_available(entity)) {
+		dev_dbg(rcdu->dev,
+			"connected entity %pOF is disabled, skipping\n",
+			entity);
+		return -ENODEV;
+	}
 
-	while (1) {
-		struct device_node *ep_node;
+	entity_ep_node = of_graph_get_remote_endpoint(ep->local_node);
 
-		ep_node = of_graph_get_next_endpoint(entity, prev);
-		of_node_put(prev);
-		prev = ep_node;
-
-		if (!ep_node)
-			break;
-
+	for_each_endpoint_of_node(entity, ep_node) {
 		if (ep_node == entity_ep_node)
 			continue;
 
@@ -280,11 +327,11 @@ static int rcar_du_encoders_init_dt_one(struct rcar_du_device *rcdu,
 
 		if (!connector) {
 			dev_warn(rcdu->dev,
-				 "no connector for encoder %s, skipping\n",
-				 encoder->full_name);
+				 "no connector for encoder %pOF, skipping\n",
+				 encoder);
 			of_node_put(entity_ep_node);
 			of_node_put(encoder);
-			return 0;
+			return -ENODEV;
 		}
 
 		break;
@@ -292,30 +339,7 @@ static int rcar_du_encoders_init_dt_one(struct rcar_du_device *rcdu,
 
 	of_node_put(entity_ep_node);
 
-	if (encoder) {
-		/*
-		 * If an encoder has been found, get its type based on its
-		 * compatible string.
-		 */
-		unsigned int i;
-
-		for (i = 0; i < ARRAY_SIZE(encoders); ++i) {
-			if (of_device_is_compatible(encoder,
-						    encoders[i].compatible)) {
-				enc_type = encoders[i].type;
-				break;
-			}
-		}
-
-		if (i == ARRAY_SIZE(encoders)) {
-			dev_warn(rcdu->dev,
-				 "unknown encoder type for %s, skipping\n",
-				 encoder->full_name);
-			of_node_put(encoder);
-			of_node_put(connector);
-			return 0;
-		}
-	} else {
+	if (!encoder) {
 		/*
 		 * If no encoder has been found the entity must be the
 		 * connector.
@@ -323,36 +347,33 @@ static int rcar_du_encoders_init_dt_one(struct rcar_du_device *rcdu,
 		connector = entity;
 	}
 
-	ret = rcar_du_encoder_init(rcdu, enc_type, output, NULL, connector);
+	ret = rcar_du_encoder_init(rcdu, output, encoder, connector);
+	if (ret && ret != -EPROBE_DEFER)
+		dev_warn(rcdu->dev,
+			 "failed to initialize encoder %pOF on output %u (%d), skipping\n",
+			 encoder, output, ret);
+
 	of_node_put(encoder);
 	of_node_put(connector);
 
-	return ret < 0 ? ret : 1;
+	return ret;
 }
 
-static int rcar_du_encoders_init_dt(struct rcar_du_device *rcdu)
+static int rcar_du_encoders_init(struct rcar_du_device *rcdu)
 {
 	struct device_node *np = rcdu->dev->of_node;
-	struct device_node *prev = NULL;
+	struct device_node *ep_node;
 	unsigned int num_encoders = 0;
 
 	/*
 	 * Iterate over the endpoints and create one encoder for each output
 	 * pipeline.
 	 */
-	while (1) {
-		struct device_node *ep_node;
+	for_each_endpoint_of_node(np, ep_node) {
 		enum rcar_du_output output;
 		struct of_endpoint ep;
 		unsigned int i;
 		int ret;
-
-		ep_node = of_graph_get_next_endpoint(np, prev);
-		of_node_put(prev);
-		prev = ep_node;
-
-		if (ep_node == NULL)
-			break;
 
 		ret = of_graph_parse_endpoint(ep_node, &ep);
 		if (ret < 0) {
@@ -377,16 +398,116 @@ static int rcar_du_encoders_init_dt(struct rcar_du_device *rcdu)
 		}
 
 		/* Process the output pipeline. */
-		ret = rcar_du_encoders_init_dt_one(rcdu, output, &ep);
+		ret = rcar_du_encoders_init_one(rcdu, output, &ep);
 		if (ret < 0) {
-			of_node_put(ep_node);
-			return ret;
+			if (ret == -EPROBE_DEFER) {
+				of_node_put(ep_node);
+				return ret;
+			}
+
+			continue;
 		}
 
-		num_encoders += ret;
+		num_encoders++;
 	}
 
 	return num_encoders;
+}
+
+static int rcar_du_properties_init(struct rcar_du_device *rcdu)
+{
+	rcdu->props.alpha =
+		drm_property_create_range(rcdu->ddev, 0, "alpha", 0, 255);
+	if (rcdu->props.alpha == NULL)
+		return -ENOMEM;
+
+	/*
+	 * The color key is expressed as an RGB888 triplet stored in a 32-bit
+	 * integer in XRGB8888 format. Bit 24 is used as a flag to disable (0)
+	 * or enable source color keying (1).
+	 */
+	rcdu->props.colorkey =
+		drm_property_create_range(rcdu->ddev, 0, "colorkey",
+					  0, 0x01ffffff);
+	if (rcdu->props.colorkey == NULL)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int rcar_du_vsps_init(struct rcar_du_device *rcdu)
+{
+	const struct device_node *np = rcdu->dev->of_node;
+	struct of_phandle_args args;
+	struct {
+		struct device_node *np;
+		unsigned int crtcs_mask;
+	} vsps[RCAR_DU_MAX_VSPS] = { { 0, }, };
+	unsigned int vsps_count = 0;
+	unsigned int cells;
+	unsigned int i;
+	int ret;
+
+	/*
+	 * First parse the DT vsps property to populate the list of VSPs. Each
+	 * entry contains a pointer to the VSP DT node and a bitmask of the
+	 * connected DU CRTCs.
+	 */
+	cells = of_property_count_u32_elems(np, "vsps") / rcdu->num_crtcs - 1;
+	if (cells > 1)
+		return -EINVAL;
+
+	for (i = 0; i < rcdu->num_crtcs; ++i) {
+		unsigned int j;
+
+		ret = of_parse_phandle_with_fixed_args(np, "vsps", cells, i,
+						       &args);
+		if (ret < 0)
+			goto error;
+
+		/*
+		 * Add the VSP to the list or update the corresponding existing
+		 * entry if the VSP has already been added.
+		 */
+		for (j = 0; j < vsps_count; ++j) {
+			if (vsps[j].np == args.np)
+				break;
+		}
+
+		if (j < vsps_count)
+			of_node_put(args.np);
+		else
+			vsps[vsps_count++].np = args.np;
+
+		vsps[j].crtcs_mask |= BIT(i);
+
+		/* Store the VSP pointer and pipe index in the CRTC. */
+		rcdu->crtcs[i].vsp = &rcdu->vsps[j];
+		rcdu->crtcs[i].vsp_pipe = cells >= 1 ? args.args[0] : 0;
+	}
+
+	/*
+	 * Then initialize all the VSPs from the node pointers and CRTCs bitmask
+	 * computed previously.
+	 */
+	for (i = 0; i < vsps_count; ++i) {
+		struct rcar_du_vsp *vsp = &rcdu->vsps[i];
+
+		vsp->index = i;
+		vsp->dev = rcdu;
+
+		ret = rcar_du_vsp_init(vsp, vsps[i].np, vsps[i].crtcs_mask);
+		if (ret < 0)
+			goto error;
+	}
+
+	return 0;
+
+error:
+	for (i = 0; i < ARRAY_SIZE(vsps); ++i)
+		of_node_put(vsps[i].np);
+
+	return ret;
 }
 
 int rcar_du_modeset_init(struct rcar_du_device *rcdu)
@@ -410,8 +531,21 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	dev->mode_config.max_width = 4095;
 	dev->mode_config.max_height = 2047;
 	dev->mode_config.funcs = &rcar_du_mode_config_funcs;
+	dev->mode_config.helper_private = &rcar_du_mode_config_helper;
 
 	rcdu->num_crtcs = rcdu->info->num_crtcs;
+
+	ret = rcar_du_properties_init(rcdu);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * Initialize vertical blanking interrupts handling. Start with vblank
+	 * disabled for all CRTCs.
+	 */
+	ret = drm_vblank_init(dev, (1 << rcdu->info->num_crtcs) - 1);
+	if (ret < 0)
+		return ret;
 
 	/* Initialize the groups. */
 	num_groups = DIV_ROUND_UP(rcdu->num_crtcs, 2);
@@ -419,11 +553,33 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	for (i = 0; i < num_groups; ++i) {
 		struct rcar_du_group *rgrp = &rcdu->groups[i];
 
+		mutex_init(&rgrp->lock);
+
 		rgrp->dev = rcdu;
 		rgrp->mmio_offset = mmio_offsets[i];
 		rgrp->index = i;
+		rgrp->num_crtcs = min(rcdu->num_crtcs - 2 * i, 2U);
 
-		ret = rcar_du_planes_init(rgrp);
+		/*
+		 * If we have more than one CRTCs in this group pre-associate
+		 * the low-order planes with CRTC 0 and the high-order planes
+		 * with CRTC 1 to minimize flicker occurring when the
+		 * association is changed.
+		 */
+		rgrp->dptsr_planes = rgrp->num_crtcs > 1
+				   ? (rcdu->info->gen >= 3 ? 0x04 : 0xf0)
+				   : 0;
+
+		if (!rcar_du_has(rcdu, RCAR_DU_FEATURE_VSP1_SOURCE)) {
+			ret = rcar_du_planes_init(rgrp);
+			if (ret < 0)
+				return ret;
+		}
+	}
+
+	/* Initialize the compositors. */
+	if (rcar_du_has(rcdu, RCAR_DU_FEATURE_VSP1_SOURCE)) {
+		ret = rcar_du_vsps_init(rcdu);
 		if (ret < 0)
 			return ret;
 	}
@@ -442,17 +598,19 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	if (ret < 0)
 		return ret;
 
-	if (rcdu->pdata)
-		ret = rcar_du_encoders_init_pdata(rcdu);
-	else
-		ret = rcar_du_encoders_init_dt(rcdu);
-
+	ret = rcar_du_encoders_init(rcdu);
 	if (ret < 0)
 		return ret;
 
+	if (ret == 0) {
+		dev_err(rcdu->dev, "error: no encoder could be initialized\n");
+		return -EINVAL;
+	}
+
 	num_encoders = ret;
 
-	/* Set the possible CRTCs and possible clones. There's always at least
+	/*
+	 * Set the possible CRTCs and possible clones. There's always at least
 	 * one way for all encoders to clone each other, set all bits in the
 	 * possible clones field.
 	 */
@@ -465,27 +623,21 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 		encoder->possible_clones = (1 << num_encoders) - 1;
 	}
 
-	/* Now that the CRTCs have been initialized register the planes. */
-	for (i = 0; i < num_groups; ++i) {
-		ret = rcar_du_planes_register(&rcdu->groups[i]);
-		if (ret < 0)
-			return ret;
-	}
+	drm_mode_config_reset(dev);
 
 	drm_kms_helper_poll_init(dev);
 
-	drm_helper_disable_unused_functions(dev);
+	if (dev->mode_config.num_connector) {
+		fbdev = drm_fbdev_cma_init(dev, 32,
+					   dev->mode_config.num_connector);
+		if (IS_ERR(fbdev))
+			return PTR_ERR(fbdev);
 
-	fbdev = drm_fbdev_cma_init(dev, 32, dev->mode_config.num_crtc,
-				   dev->mode_config.num_connector);
-	if (IS_ERR(fbdev))
-		return PTR_ERR(fbdev);
-
-#ifndef CONFIG_FRAMEBUFFER_CONSOLE
-	drm_fbdev_cma_restore_mode(fbdev);
-#endif
-
-	rcdu->fbdev = fbdev;
+		rcdu->fbdev = fbdev;
+	} else {
+		dev_info(rcdu->dev,
+			 "no connector found, disabling fbdev emulation\n");
+	}
 
 	return 0;
 }

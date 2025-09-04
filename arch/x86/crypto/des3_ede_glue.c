@@ -277,8 +277,7 @@ static void ctr_crypt_final(struct des3_ede_x86_ctx *ctx,
 	unsigned int nbytes = walk->nbytes;
 
 	des3_ede_enc_blk(ctx, keystream, ctrblk);
-	crypto_xor(keystream, src, nbytes);
-	memcpy(dst, keystream, nbytes);
+	crypto_xor_cpy(dst, keystream, src, nbytes);
 
 	crypto_inc(ctrblk, DES3_EDE_BLOCK_SIZE);
 }
@@ -504,6 +503,4 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Triple DES EDE Cipher Algorithm, asm optimized");
 MODULE_ALIAS_CRYPTO("des3_ede");
 MODULE_ALIAS_CRYPTO("des3_ede-asm");
-MODULE_ALIAS_CRYPTO("des");
-MODULE_ALIAS_CRYPTO("des-asm");
 MODULE_AUTHOR("Jussi Kivilinna <jussi.kivilinna@iki.fi>");

@@ -129,6 +129,10 @@ static int au0828_get_key_au8522(struct au0828_rc *ir)
 	int prv_bit, bit, width;
 	bool first = true;
 
+	/* do nothing if device is disconnected */
+	if (test_bit(DEV_DISCONNECTED, &ir->dev->dev_state))
+		return 0;
+
 	/* Check IR int */
 	rc = au8522_rc_read(ir, 0xe1, -1, buf, 1);
 	if (rc < 0 || !(buf[0] & (1 << 4))) {
@@ -255,8 +259,11 @@ static void au0828_rc_stop(struct rc_dev *rc)
 
 	cancel_delayed_work_sync(&ir->work);
 
-	/* Disable IR */
-	au8522_rc_clear(ir, 0xe0, 1 << 4);
+	/* do nothing if device is disconnected */
+	if (!test_bit(DEV_DISCONNECTED, &ir->dev->dev_state)) {
+		/* Disable IR */
+		au8522_rc_clear(ir, 0xe0, 1 << 4);
+	}
 }
 
 static int au0828_probe_i2c_ir(struct au0828_dev *dev)
@@ -291,7 +298,7 @@ int au0828_rc_register(struct au0828_dev *dev)
 		return -ENODEV;
 
 	ir = kzalloc(sizeof(*ir), GFP_KERNEL);
-	rc = rc_allocate_device();
+	rc = rc_allocate_device(RC_DRIVER_IR_RAW);
 	if (!ir || !rc)
 		goto error;
 
@@ -328,7 +335,7 @@ int au0828_rc_register(struct au0828_dev *dev)
 	usb_make_path(dev->usbdev, ir->phys, sizeof(ir->phys));
 	strlcat(ir->phys, "/input0", sizeof(ir->phys));
 
-	rc->input_name = ir->name;
+	rc->device_name = ir->name;
 	rc->input_phys = ir->phys;
 	rc->input_id.bustype = BUS_USB;
 	rc->input_id.version = 1;
@@ -336,15 +343,15 @@ int au0828_rc_register(struct au0828_dev *dev)
 	rc->input_id.product = le16_to_cpu(dev->usbdev->descriptor.idProduct);
 	rc->dev.parent = &dev->usbdev->dev;
 	rc->driver_name = "au0828-input";
-	rc->driver_type = RC_DRIVER_IR_RAW;
-	rc->allowed_protocols = RC_BIT_NEC | RC_BIT_RC5;
+	rc->allowed_protocols = RC_PROTO_BIT_NEC | RC_PROTO_BIT_NECX |
+				RC_PROTO_BIT_NEC32 | RC_PROTO_BIT_RC5;
 
 	/* all done */
 	err = rc_register_device(rc);
 	if (err)
 		goto error;
 
-	pr_info("Remote controller %s initalized\n", ir->name);
+	pr_info("Remote controller %s initialized\n", ir->name);
 
 	return 0;
 
@@ -363,8 +370,7 @@ void au0828_rc_unregister(struct au0828_dev *dev)
 	if (!ir)
 		return;
 
-	if (ir->rc)
-		rc_unregister_device(ir->rc);
+	rc_unregister_device(ir->rc);
 
 	/* done */
 	kfree(ir);

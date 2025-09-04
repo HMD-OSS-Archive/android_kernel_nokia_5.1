@@ -20,8 +20,6 @@
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
-#include "xfs_sb.h"
-#include "xfs_ag.h"
 #include "xfs_quota.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
@@ -35,7 +33,7 @@ xfs_fill_statvfs_from_dquot(
 	struct kstatfs		*statp,
 	struct xfs_dquot	*dqp)
 {
-	__uint64_t		limit;
+	uint64_t		limit;
 
 	limit = dqp->q_core.d_blk_softlimit ?
 		be64_to_cpu(dqp->q_core.d_blk_softlimit) :

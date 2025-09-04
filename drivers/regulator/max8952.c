@@ -113,7 +113,7 @@ static int max8952_set_voltage_sel(struct regulator_dev *rdev,
 	return 0;
 }
 
-static struct regulator_ops max8952_ops = {
+static const struct regulator_ops max8952_ops = {
 	.list_voltage		= max8952_list_voltage,
 	.get_voltage_sel	= max8952_get_voltage_sel,
 	.set_voltage_sel	= max8952_set_voltage_sel,
@@ -174,7 +174,7 @@ static struct max8952_platform_data *max8952_parse_dt(struct device *dev)
 	if (of_property_read_u32(np, "max8952,ramp-speed", &pd->ramp_speed))
 		dev_warn(dev, "max8952,ramp-speed property not specified, defaulting to 32mV/us\n");
 
-	pd->reg_data = of_get_regulator_init_data(dev, np);
+	pd->reg_data = of_get_regulator_init_data(dev, np, &regulator);
 	if (!pd->reg_data) {
 		dev_err(dev, "Failed to parse regulator init data\n");
 		return NULL;
@@ -225,6 +225,8 @@ static int max8952_pmic_probe(struct i2c_client *client,
 	config.of_node = client->dev.of_node;
 
 	config.ena_gpio = pdata->gpio_en;
+	if (client->dev.of_node)
+		config.ena_gpio_initialized = true;
 	if (pdata->reg_data->constraints.boot_on)
 		config.ena_gpio_flags |= GPIOF_OUT_INIT_HIGH;
 

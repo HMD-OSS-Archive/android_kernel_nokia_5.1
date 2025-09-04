@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2015 MediaTek Inc.
+# Copyright (C) 2018 MediaTek Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -11,46 +11,34 @@
 # GNU General Public License for more details.
 #
 
-ifneq ($(CONFIG_MTK_SMI_VARIANT),y)
+ifeq ($(CONFIG_MTK_SMI_EXT), y)
+ccflags-y += -I$(srctree)/drivers/clk/mediatek/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v3/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v3/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/emi/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/emi_bwl/$(MTK_PLATFORM)/
+ccflags-$(CONFIG_MTK_IOMMU_V2) += -I$(srctree)/drivers/iommu/
+ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmdvfs/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/smi/$(MTK_PLATFORM)/
 
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/$(MTK_PLATFORM)/
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/
-obj-y += smi_common.o
-obj-y += smi_debug.o
-obj-y += smi_info_util.o
-obj-y += smi_config_util.o
-obj-y += smi_configuration.o
-obj-y += smi_internal.o
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/ # qos/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmp/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/sspm/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/sspm/$(MTK_PLATFORM)/
 
-ifeq ($(CONFIG_ARCH_MT6735),y)
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/freqhopping/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/freqhopping/$(CONFIG_MTK_PLATFORM)
+
+ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6739"))
+ccflags-y += -DSMI_ZIO
+ccflags-y += -DMMDVFS_HOOK
 ccflags-y += -I$(srctree)/drivers/clk/mediatek
-ccflags-y += -DSMI_D1
-obj-y += mmdvfs_mgr.o
-else ifeq ($(CONFIG_ARCH_MT6735M),y)
-ccflags-y += -DSMI_D2
-obj-y += mmdvfs_mgr.o
-else ifeq ($(CONFIG_ARCH_MT6753),y)
-ccflags-y += -DSMI_D3
-obj-y += mmdvfs_mgr.o
-else ifeq ($(CONFIG_ARCH_MT6580),y)
-ccflags-y += -DSMI_R
-else ifeq ($(CONFIG_ARCH_MT6570),y)
-ccflags-y += -DSMI_RU
-else ifeq ($(CONFIG_ARCH_MT6755),y)
-ccflags-y += -DSMI_J
-ccflags-y += -I$(srctree)/drivers/clk/mediatek
-obj-y += mmdvfs_mgr_v2.o
-else ifeq ($(CONFIG_ARCH_MT6797),y)
-ccflags-y += -DSMI_EV
-ccflags-y += -I$(srctree)/drivers/clk/mediatek
-obj-y += mmdvfs_mgr_v2.o
-else 
-ccflags-y += -DSMI_BRINGUP
+obj-y += mmdvfs_mgr_v3.o
+obj-y += mmdvfs_profile_adaptor.o
+obj-y += mmdvfs_mgr_util.o
 endif
 
-else
-obj-y += $(subst ",,variant)/
+obj-y += smi_drv.o
 endif

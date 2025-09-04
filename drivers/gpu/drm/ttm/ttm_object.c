@@ -304,7 +304,7 @@ bool ttm_ref_object_exists(struct ttm_object_file *tfile,
 	 * Verify that the ref->obj pointer was actually valid!
 	 */
 	rmb();
-	if (unlikely(atomic_read(&ref->kref.refcount) == 0))
+	if (unlikely(kref_read(&ref->kref) == 0))
 		goto out_false;
 
 	rcu_read_unlock();
@@ -453,10 +453,10 @@ void ttm_object_file_release(struct ttm_object_file **p_tfile)
 		ttm_ref_object_release(&ref->kref);
 	}
 
+	spin_unlock(&tfile->lock);
 	for (i = 0; i < TTM_REF_NUM; ++i)
 		drm_ht_remove(&tfile->ref_hash[i]);
 
-	spin_unlock(&tfile->lock);
 	ttm_object_file_unref(&tfile);
 }
 EXPORT_SYMBOL(ttm_object_file_release);
@@ -533,9 +533,7 @@ void ttm_object_device_release(struct ttm_object_device **p_tdev)
 
 	*p_tdev = NULL;
 
-	spin_lock(&tdev->object_lock);
 	drm_ht_remove(&tdev->object_hash);
-	spin_unlock(&tdev->object_lock);
 
 	kfree(tdev);
 }
@@ -687,6 +685,12 @@ int ttm_prime_handle_to_fd(struct ttm_object_file *tfile,
 
 	dma_buf = prime->dma_buf;
 	if (!dma_buf || !get_dma_buf_unless_doomed(dma_buf)) {
+		DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+
+		exp_info.ops = &tdev->ops;
+		exp_info.size = prime->size;
+		exp_info.flags = flags;
+		exp_info.priv = prime;
 
 		/*
 		 * Need to create a new dma_buf, with memory accounting.
@@ -698,8 +702,7 @@ int ttm_prime_handle_to_fd(struct ttm_object_file *tfile,
 			goto out_unref;
 		}
 
-		dma_buf = dma_buf_export(prime, &tdev->ops,
-					 prime->size, flags, NULL);
+		dma_buf = dma_buf_export(&exp_info);
 		if (IS_ERR(dma_buf)) {
 			ret = PTR_ERR(dma_buf);
 			ttm_mem_global_free(tdev->mem_glob,

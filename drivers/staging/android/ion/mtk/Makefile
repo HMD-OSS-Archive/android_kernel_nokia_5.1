@@ -11,39 +11,44 @@
 # GNU General Public License for more details.
 #
 
-obj-$(CONFIG_MTK_ION) += ion_drv.o ion_mm_heap.o ion_fb_heap.o ion_sec_heap.o
+obj-$(CONFIG_MTK_ION) += ion_drv.o ion_mm_heap.o ion_fb_heap.o ion_sec_heap.o ion_profile.o
 ccflags-$(CONFIG_MTK_ION)  += -I$(srctree)/drivers/staging/android/ion #fro kernel-3.10 ion
 ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
+ifeq ($(CONFIG_MACH_MT6739), y)
+ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/2.0/
+else
+ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/2.4/
+endif
+ccflags-$(CONFIG_MTK_PSEUDO_M4U) += -I$(srctree)/drivers/misc/mediatek/pseudo_m4u/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmp/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
+ccflags-y += -I$(srctree)/arch/arm/
+ccflags-y += -I$(srctree)/drivers/iommu/
 
 ccflags-y += -DION_HISTORY_RECORD
 obj-$(CONFIG_MTK_ION) += ion_history.o
+obj-$(CONFIG_MTK_ION) += ion_comm.o
 
-ifeq ($(CONFIG_MT_ENG_BUILD), y)
+ifeq ($(CONFIG_MTK_ENG_BUILD), y)
 ccflags-y += -DION_RUNTIME_DEBUGGER=1
 else
 ccflags-y += -DION_RUNTIME_DEBUGGER=0
 endif
 
-ifeq ($(CONFIG_MTK_SEC_VIDEO_PATH_SUPPORT),y)
-ifeq ($(CONFIG_TRUSTONIC_TEE_SUPPORT),y)
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/secmem/
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/secmem/$(MTK_PLATFORM)/
-endif
+ifeq ($(CONFIG_MTK_LEGACY_SECMEM_SUPPORT),y)
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/secmem
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/secmem/includes
+else ifeq ($(CONFIG_MTK_SECURE_MEM_SUPPORT),y)
+include $(srctree)/drivers/misc/mediatek/trusted_mem/Makefile.include
 endif
 
 ifeq ($(CONFIG_MTK_IN_HOUSE_TEE_SUPPORT),y)
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/trustzone
 ccflags-y += -I$(srctree)/include/trustzone
-ccflags-y += -I$(srctree)/include
 endif
 
-ifeq ($(CONFIG_ARCH_MT6735),y)
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/mt6735/
-endif
-ifeq ($(CONFIG_ARCH_MT6735M),y)
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/mt6735m/
-endif
-ifeq ($(CONFIG_ARCH_MT6753),y)
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/mt6753/
+ifeq ($(CONFIG_MTK_TRUSTED_MEMORY_SUBSYSTEM),y)
+cflags-y += -I$(srctree)/drivers/misc/mediatek/secmem/includes
+include $(srctree)/drivers/misc/mediatek/trusted_mem/Makefile.include
 endif

@@ -15,7 +15,15 @@
 	model = "Voipac i.MX53 X53-DMM-668";
 	compatible = "voipac,imx53-dmm-668", "fsl,imx53";
 
+	memory@70000000 {
+		device_type = "memory";
+		reg = <0x70000000 0x20000000>;
+	};
 
+	memory@b0000000 {
+		device_type = "memory";
+		reg = <0xb0000000 0x20000000>;
+	};
 
 	regulators {
 		compatible = "simple-bus";
@@ -121,7 +129,6 @@
 &ecspi1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_ecspi1>;
-	fsl,spi-num-chipselects = <4>;
 	cs-gpios = <&gpio2 30 0>, <&gpio3 19 0>, <&gpio2 16 0>, <&gpio2 17 0>;
 	status = "okay";
 };
@@ -130,7 +137,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_fec>;
 	phy-mode = "rmii";
-	phy-reset-gpios = <&gpio4 2 0>;
+	phy-reset-gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
 	status = "okay";
 };
 

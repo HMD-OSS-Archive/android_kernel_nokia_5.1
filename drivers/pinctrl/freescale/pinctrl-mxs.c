@@ -12,7 +12,6 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/pinctrl/machine.h>
@@ -195,6 +194,16 @@ static int mxs_pinctrl_get_func_groups(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
+static void mxs_pinctrl_rmwl(u32 value, u32 mask, u8 shift, void __iomem *reg)
+{
+	u32 tmp;
+
+	tmp = readl(reg);
+	tmp &= ~(mask << shift);
+	tmp |= value << shift;
+	writel(tmp, reg);
+}
+
 static int mxs_pinctrl_set_mux(struct pinctrl_dev *pctldev, unsigned selector,
 			       unsigned group)
 {
@@ -212,8 +221,7 @@ static int mxs_pinctrl_set_mux(struct pinctrl_dev *pctldev, unsigned selector,
 		reg += bank * 0x20 + pin / 16 * 0x10;
 		shift = pin % 16 * 2;
 
-		writel(0x3 << shift, reg + CLR);
-		writel(g->muxsel[i] << shift, reg + SET);
+		mxs_pinctrl_rmwl(g->muxsel[i], 0x3, shift, reg);
 	}
 
 	return 0;
@@ -280,8 +288,7 @@ static int mxs_pinconf_group_set(struct pinctrl_dev *pctldev,
 			/* mA */
 			if (config & MA_PRESENT) {
 				shift = pin % 8 * 4;
-				writel(0x3 << shift, reg + CLR);
-				writel(ma << shift, reg + SET);
+				mxs_pinctrl_rmwl(ma, 0x3, shift, reg);
 			}
 
 			/* vol */
@@ -445,11 +452,36 @@ static int mxs_pinctrl_probe_dt(struct platform_device *pdev,
 		if (of_property_read_u32(child, "reg", &val))
 			continue;
 		if (strcmp(fn, child->name)) {
+			struct device_node *child2;
+
+			/*
+			 * This reference is dropped by
+			 * of_get_next_child(np, * child)
+			 */
+			of_node_get(child);
+
+			/*
+			 * The logic parsing the functions from dt currently
+			 * doesn't handle if functions with the same name are
+			 * not grouped together. Only the first contiguous
+			 * cluster is usable for each function name. This is a
+			 * bug that is not trivial to fix, but at least warn
+			 * about it.
+			 */
+			for (child2 = of_get_next_child(np, child);
+			     child2 != NULL;
+			     child2 = of_get_next_child(np, child2)) {
+				if (!strcmp(child2->name, fn))
+					dev_warn(&pdev->dev,
+						 "function nodes must be grouped by name (failed for: %s)",
+						 fn);
+			}
+
 			f = &soc->functions[idxf++];
 			f->name = fn = child->name;
 		}
 		f->ngroups++;
-	};
+	}
 
 	/* Get groups for each function */
 	idxf = 0;
@@ -515,9 +547,9 @@ int mxs_pinctrl_probe(struct platform_device *pdev,
 	}
 
 	d->pctl = pinctrl_register(&mxs_pinctrl_desc, &pdev->dev, d);
-	if (!d->pctl) {
+	if (IS_ERR(d->pctl)) {
 		dev_err(&pdev->dev, "Couldn't register MXS pinctrl driver\n");
-		ret = -EINVAL;
+		ret = PTR_ERR(d->pctl);
 		goto err;
 	}
 
@@ -528,14 +560,3 @@ err:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mxs_pinctrl_probe);
-
-int mxs_pinctrl_remove(struct platform_device *pdev)
-{
-	struct mxs_pinctrl_data *d = platform_get_drvdata(pdev);
-
-	pinctrl_unregister(d->pctl);
-	iounmap(d->base);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(mxs_pinctrl_remove);

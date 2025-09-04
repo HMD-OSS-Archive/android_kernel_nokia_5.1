@@ -27,12 +27,7 @@ void trace_end(void);
 #define trace_end()
 #endif
 
-#if defined(CONFIG_MTK_HIBERNATION) && defined(CONFIG_MTK_SCHED_TRACERS)
-int resize_ring_buffer_for_hibernation(int enable);
-#else
-#define resize_ring_buffer_for_hibernation(on) (0)
-#endif				/* CONFIG_MTK_HIBERNATION */
-
+struct trace_array;
 extern bool ring_buffer_expanded;
 ssize_t tracing_resize_ring_buffer(struct trace_array *tr,
 				   unsigned long size, int cpu_id);
@@ -41,6 +36,10 @@ ssize_t tracing_resize_ring_buffer(struct trace_array *tr,
 struct trace_buffer;
 void print_enabled_events(struct trace_buffer *buf, struct seq_file *m);
 void update_buf_size(unsigned long size);
+bool boot_ftrace_check(unsigned long trace_en);
+#ifdef CONFIG_MTPROF
+extern int boot_finish;
+#endif
 #else
 #define print_enabled_events(b, m)
 #endif/* CONFIG_TRACING && CONFIG_MTK_SCHED_TRACERS */

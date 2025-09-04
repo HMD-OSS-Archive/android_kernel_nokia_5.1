@@ -18,6 +18,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/initrd.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/root_dev.h>
@@ -91,8 +92,6 @@ __tagtable(ATAG_VIDEOTEXT, parse_tag_videotext);
 #ifdef CONFIG_BLK_DEV_RAM
 static int __init parse_tag_ramdisk(const struct tag *tag)
 {
-	extern int rd_size, rd_image_start, rd_prompt, rd_doload;
-
 	rd_image_start = tag->u.ramdisk.start;
 	rd_doload = (tag->u.ramdisk.flags & 1) == 0;
 	rd_prompt = (tag->u.ramdisk.flags & 2) == 0;
@@ -167,8 +166,7 @@ static void __init parse_tags(const struct tag *t)
 {
 	for (; t->hdr.size; t = tag_next(t))
 		if (!parse_tag(t))
-			printk(KERN_WARNING
-				"Ignoring unrecognised tag 0x%08x\n",
+			pr_warn("Ignoring unrecognised tag 0x%08x\n",
 				t->hdr.tag);
 }
 
@@ -193,7 +191,7 @@ setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
 	 */
 	for_each_machine_desc(p)
 		if (machine_nr == p->nr) {
-			printk("Machine: %s\n", p->name);
+			pr_info("Machine: %s\n", p->name);
 			mdesc = p;
 			break;
 		}

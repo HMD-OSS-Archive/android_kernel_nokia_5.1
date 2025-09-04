@@ -1,18 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0
 #define pr_fmt(fmt) "kcov: " fmt
 
+#define DISABLE_BRANCH_PROFILING
+#include <linux/atomic.h>
 #include <linux/compiler.h>
+#include <linux/errno.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/init.h>
 #include <linux/mm.h>
+#include <linux/preempt.h>
 #include <linux/printk.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/vmalloc.h>
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
 #include <linux/kcov.h>
-#include <linux/sched.h>
+#include <asm/setup.h>
 
 /*
  * kcov descriptor (one per opened debugfs file).
@@ -44,7 +52,7 @@ struct kcov {
  * Entry point from instrumented code.
  * This is called once per basic-block/edge.
  */
-void __sanitizer_cov_trace_pc(void)
+void notrace __sanitizer_cov_trace_pc(void)
 {
 	struct task_struct *t;
 	enum kcov_mode mode;
@@ -54,12 +62,17 @@ void __sanitizer_cov_trace_pc(void)
 	 * We are interested in code coverage as a function of a syscall inputs,
 	 * so we ignore code executed in interrupts.
 	 */
-	if (!t || in_interrupt())
+	if (!t || !in_task())
 		return;
 	mode = READ_ONCE(t->kcov_mode);
 	if (mode == KCOV_MODE_TRACE) {
 		unsigned long *area;
 		unsigned long pos;
+		unsigned long ip = _RET_IP_;
+
+#ifdef CONFIG_RANDOMIZE_BASE
+		ip -= kaslr_offset();
+#endif
 
 		/*
 		 * There is some code that runs in interrupts but for which
@@ -73,7 +86,7 @@ void __sanitizer_cov_trace_pc(void)
 		/* The first word is number of subsequent PCs. */
 		pos = READ_ONCE(area[0]) + 1;
 		if (likely(pos < t->kcov_size)) {
-			area[pos] = _RET_IP_;
+			area[pos] = ip;
 			WRITE_ONCE(area[0], pos);
 		}
 	}
@@ -95,7 +108,8 @@ static void kcov_put(struct kcov *kcov)
 
 void kcov_task_init(struct task_struct *t)
 {
-	t->kcov_mode = KCOV_MODE_DISABLED;
+	WRITE_ONCE(t->kcov_mode, KCOV_MODE_DISABLED);
+	barrier();
 	t->kcov_size = 0;
 	t->kcov_area = NULL;
 	t->kcov = NULL;
@@ -212,9 +226,9 @@ static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
 		if (unused != 0 || kcov->mode == KCOV_MODE_DISABLED ||
 		    kcov->area == NULL)
 			return -EINVAL;
-		if (kcov->t != NULL)
-			return -EBUSY;
 		t = current;
+		if (kcov->t != NULL || t->kcov != NULL)
+			return -EBUSY;
 		/* Cache in task struct for performance. */
 		t->kcov_size = kcov->size;
 		t->kcov_area = kcov->area;
@@ -258,13 +272,19 @@ static long kcov_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 static const struct file_operations kcov_fops = {
 	.open		= kcov_open,
 	.unlocked_ioctl	= kcov_ioctl,
+	.compat_ioctl	= kcov_ioctl,
 	.mmap		= kcov_mmap,
 	.release        = kcov_close,
 };
 
 static int __init kcov_init(void)
 {
-	if (!debugfs_create_file("kcov", 0600, NULL, NULL, &kcov_fops)) {
+	/*
+	 * The kcov debugfs file won't ever get removed and thus,
+	 * there is no need to protect it against removal races. The
+	 * use of debugfs_create_file_unsafe() is actually safe here.
+	 */
+	if (!debugfs_create_file_unsafe("kcov", 0600, NULL, NULL, &kcov_fops)) {
 		pr_err("failed to create kcov in debugfs\n");
 		return -ENOMEM;
 	}

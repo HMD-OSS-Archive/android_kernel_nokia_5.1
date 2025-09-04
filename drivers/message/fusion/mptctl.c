@@ -58,7 +58,7 @@
 #include <linux/compat.h>
 
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -1038,6 +1038,10 @@ kbuf_alloc_2_sgl(int bytes, u32 sgdir, int sge_offset, int *frags,
 	int		 i, buflist_ent;
 	int		 sg_spill = MAX_FRAGS_SPILL1;
 	int		 dir;
+
+	if (bytes < 0)
+		return NULL;
+
 	/* initialization */
 	*frags = 0;
 	*blp = NULL;
@@ -2694,6 +2698,8 @@ mptctl_hp_targetinfo(unsigned long arg)
 				__FILE__, __LINE__, iocnum);
 		return -ENODEV;
 	}
+	if (karg.hdr.id >= MPT_MAX_FC_DEVICES)
+		return -EINVAL;
 	dctlprintk(ioc, printk(MYIOC_s_DEBUG_FMT "mptctl_hp_targetinfo called.\n",
 	    ioc->name));
 

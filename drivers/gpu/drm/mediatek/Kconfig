@@ -2,11 +2,14 @@ config DRM_MEDIATEK
 	tristate "DRM Support for Mediatek SoCs"
 	depends on DRM
 	depends on ARCH_MEDIATEK || (ARM && COMPILE_TEST)
+	depends on COMMON_CLK
+	depends on HAVE_ARM_SMCCC
+	depends on OF
+	select DRM_GEM_CMA_HELPER
 	select DRM_KMS_HELPER
 	select DRM_MIPI_DSI
 	select DRM_PANEL
-	select DRM_PANEL_SIMPLE
-	select IOMMU_DMA
+	select MEMORY
 	select MTK_SMI
 	help
 	  Choose this option if you have a Mediatek SoCs.
@@ -14,22 +17,10 @@ config DRM_MEDIATEK
 	  This driver provides kernel mode setting and
 	  buffer management to userspace.
 
-config DRM_MEDIATEK_FBDEV
-	bool "Enable legacy fbdev support for Mediatek DRM"
-	depends on DRM_MEDIATEK
-	select FB_SYS_FILLRECT
-	select FB_SYS_COPYAREA
-	select FB_SYS_IMAGEBLIT
-	select DRM_KMS_FB_HELPER
-	help
-	  Choose this option if you have a need for the legacy
-	  fbdev support.  Note that this support also provides
-	  the Linux console on top of the Mediatek DRM mode
-	  setting driver.
-
 config DRM_MEDIATEK_HDMI
 	tristate "DRM HDMI Support for Mediatek SoCs"
 	depends on DRM_MEDIATEK
+	select SND_SOC_HDMI_CODEC if SND_SOC
 	select GENERIC_PHY
 	help
 	  DRM/KMS HDMI driver for Mediatek SoCs

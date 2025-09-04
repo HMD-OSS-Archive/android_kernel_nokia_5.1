@@ -1,5 +1,0 @@
-config MTK_HALL_SENSOR
-	tristate "MediaTek HALL driver"
-	default n
-	---help---
-	  If unsure, say N.

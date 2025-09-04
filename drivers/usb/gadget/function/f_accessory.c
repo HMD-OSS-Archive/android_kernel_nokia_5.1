@@ -215,15 +215,12 @@ static inline struct acc_dev *func_to_dev(struct usb_function *f)
 static struct usb_request *acc_request_new(struct usb_ep *ep, int buffer_size)
 {
 	struct usb_request *req = usb_ep_alloc_request(ep, GFP_KERNEL);
+
 	if (!req)
 		return NULL;
 
 	/* now allocate buffers for the requests */
-#if defined(CONFIG_64BIT) && defined(CONFIG_MTK_LM_MODE)
-	req->buf = kmalloc(buffer_size, GFP_KERNEL | GFP_DMA);
-#else
 	req->buf = kmalloc(buffer_size, GFP_KERNEL);
-#endif
 	if (!req->buf) {
 		usb_ep_free_request(ep, req);
 		return NULL;
@@ -585,7 +582,6 @@ static ssize_t acc_read(struct file *fp, char __user *buf,
 	if (count > BULK_BUFFER_SIZE)
 		count = BULK_BUFFER_SIZE;
 
-
 	/* we will block until we're online */
 	pr_debug("acc_read: waiting for online\n");
 	ret = wait_event_interruptible(dev->read_wq, dev->online);
@@ -639,7 +635,6 @@ copy_data:
 
 		pr_debug("rx %p %u\n", req, req->actual);
 		xfer = (req->actual < count) ? req->actual : count;
-
 		r = xfer;
 		if (copy_to_user(buf, req->buf, xfer))
 			r = -EFAULT;
@@ -658,7 +653,6 @@ static ssize_t acc_write(struct file *fp, const char __user *buf,
 	struct usb_request *req = 0;
 	ssize_t r = count;
 	unsigned xfer;
-	int sendZLP = 0;
 	int ret;
 
 	pr_debug("acc_write(%zu)\n", count);
@@ -668,17 +662,7 @@ static ssize_t acc_write(struct file *fp, const char __user *buf,
 		return -ENODEV;
 	}
 
-	/* we need to send a zero length packet to signal the end of transfer
-	 * if the transfer size is aligned to a packet boundary.
-	 */
-	if ((count & (dev->ep_in->maxpacket - 1)) == 0)
-		sendZLP = 1;
-
-	while (count > 0 || sendZLP) {
-		/* so we exit after sending ZLP */
-		if (count == 0)
-			sendZLP = 0;
-
+	while (count > 0) {
 		if (!dev->online) {
 			pr_debug("acc_write dev->error\n");
 			r = -EIO;
@@ -694,11 +678,17 @@ static ssize_t acc_write(struct file *fp, const char __user *buf,
 			break;
 		}
 
-		if (count > BULK_BUFFER_SIZE)
+		if (count > BULK_BUFFER_SIZE) {
 			xfer = BULK_BUFFER_SIZE;
-		else
+			/* ZLP, They will be more TX requests so not yet. */
+			req->zero = 0;
+		} else {
 			xfer = count;
-
+			/* If the data length is a multple of the
+			 * maxpacket size then send a zero length packet(ZLP).
+			*/
+			req->zero = ((xfer % dev->ep_in->maxpacket) == 0);
+		}
 		if (copy_from_user(req->buf, buf, xfer)) {
 			r = -EFAULT;
 			break;
@@ -829,6 +819,14 @@ static struct hid_driver acc_hid_driver = {
 	.probe = acc_hid_probe,
 };
 
+static void acc_complete_setup_noop(struct usb_ep *ep, struct usb_request *req)
+{
+	/*
+	 * Default no-op function when nothing needs to be done for the
+	 * setup request
+	 */
+}
+
 int acc_ctrlrequest(struct usb_composite_dev *cdev,
 				const struct usb_ctrlrequest *ctrl)
 {
@@ -856,6 +854,7 @@ int acc_ctrlrequest(struct usb_composite_dev *cdev,
 			schedule_delayed_work(
 				&dev->start_work, msecs_to_jiffies(10));
 			value = 0;
+			cdev->req->complete = acc_complete_setup_noop;
 		} else if (b_request == ACCESSORY_SEND_STRING) {
 			dev->string_index = w_index;
 			cdev->gadget->ep0->driver_data = dev;
@@ -864,10 +863,13 @@ int acc_ctrlrequest(struct usb_composite_dev *cdev,
 		} else if (b_request == ACCESSORY_SET_AUDIO_MODE &&
 				w_index == 0 && w_length == 0) {
 			dev->audio_mode = w_value;
+			cdev->req->complete = acc_complete_setup_noop;
 			value = 0;
 		} else if (b_request == ACCESSORY_REGISTER_HID) {
+			cdev->req->complete = acc_complete_setup_noop;
 			value = acc_register_hid(dev, w_value, w_index);
 		} else if (b_request == ACCESSORY_UNREGISTER_HID) {
+			cdev->req->complete = acc_complete_setup_noop;
 			value = acc_unregister_hid(dev, w_value);
 		} else if (b_request == ACCESSORY_SET_HID_REPORT_DESC) {
 			spin_lock_irqsave(&dev->lock, flags);
@@ -902,7 +904,7 @@ int acc_ctrlrequest(struct usb_composite_dev *cdev,
 		if (b_request == ACCESSORY_GET_PROTOCOL) {
 			*((u16 *)cdev->req->buf) = PROTOCOL_VERSION;
 			value = sizeof(u16);
-
+			cdev->req->complete = acc_complete_setup_noop;
 			/* clear any string left over from a previous session */
 			memset(dev->manufacturer, 0, sizeof(dev->manufacturer));
 			memset(dev->model, 0, sizeof(dev->model));
@@ -956,7 +958,6 @@ __acc_function_bind(struct usb_configuration *c,
 		}
 		dev->cdev = c->cdev;
 	}
-
 	ret = hid_register_driver(&acc_hid_driver);
 	if (ret)
 		return ret;
@@ -987,11 +988,6 @@ __acc_function_bind(struct usb_configuration *c,
 			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			f->name, dev->ep_in->name, dev->ep_out->name);
 	return 0;
-}
-
-static int
-acc_function_bind(struct usb_configuration *c, struct usb_function *f) {
-	return __acc_function_bind(c, f, false);
 }
 
 static int
@@ -1056,6 +1052,7 @@ acc_function_unbind(struct usb_configuration *c, struct usb_function *f)
 static void acc_start_work(struct work_struct *data)
 {
 	char *envp[2] = { "ACCESSORY=START", NULL };
+
 	kobject_uevent_env(&acc_device.this_device->kobj, KOBJ_CHANGE, envp);
 }
 
@@ -1197,35 +1194,6 @@ static void acc_function_disable(struct usb_function *f)
 	wake_up(&dev->read_wq);
 
 	VDBG(cdev, "%s disabled\n", dev->function.name);
-}
-
-static int acc_bind_config(struct usb_configuration *c)
-{
-	struct acc_dev *dev = _acc_dev;
-	int ret;
-
-	pr_info("acc_bind_config\n");
-
-	/* allocate a string ID for our interface */
-	if (acc_string_defs[INTERFACE_STRING_INDEX].id == 0) {
-		ret = usb_string_id(c->cdev);
-		if (ret < 0)
-			return ret;
-		acc_string_defs[INTERFACE_STRING_INDEX].id = ret;
-		acc_interface_desc.iInterface = ret;
-	}
-
-	dev->cdev = c->cdev;
-	dev->function.name = "accessory";
-	dev->function.strings = acc_strings,
-	dev->function.fs_descriptors = fs_acc_descs;
-	dev->function.hs_descriptors = hs_acc_descs;
-	dev->function.bind = acc_function_bind;
-	dev->function.unbind = acc_function_unbind;
-	dev->function.set_alt = acc_function_set_alt;
-	dev->function.disable = acc_function_disable;
-
-	return usb_add_function(c, &dev->function);
 }
 
 static int acc_setup(void)

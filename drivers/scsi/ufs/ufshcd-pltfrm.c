@@ -40,6 +40,8 @@
 #include "ufshcd.h"
 #include "ufshcd-pltfrm.h"
 
+#define UFSHCD_DEFAULT_LANES_PER_DIRECTION		2
+
 static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 {
 	int ret = 0;
@@ -55,8 +57,6 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 
 	if (!np)
 		goto out;
-
-	INIT_LIST_HEAD(&hba->clk_list_head);
 
 	cnt = of_property_count_strings(np, "clock-names");
 	if (!cnt || (cnt == -EINVAL)) {
@@ -106,6 +106,13 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 				"clock-names", i/2, (const char **)&name);
 		if (ret)
 			goto out;
+
+		/* skip vendor clk, vendor clk shall be handled by vops */
+		if (strstr(name, "vendor")) {
+			dev_info(dev, "%s: vendor clk %s is found and skipped\n",
+				 __func__, name);
+			continue;
+		}
 
 		clki = devm_kzalloc(dev, sizeof(*clki), GFP_KERNEL);
 		if (!clki) {
@@ -161,7 +168,7 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 	if (ret) {
 		dev_err(dev, "%s: unable to find %s err %d\n",
 				__func__, prop_name, ret);
-		goto out_free;
+		goto out;
 	}
 
 	vreg->min_uA = 0;
@@ -183,9 +190,6 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 
 	goto out;
 
-out_free:
-	devm_kfree(dev, vreg);
-	vreg = NULL;
 out:
 	if (!ret)
 		*out_vreg = vreg;
@@ -250,33 +254,47 @@ int ufshcd_pltfrm_resume(struct device *dev)
 	return ufshcd_system_resume(dev_get_drvdata(dev));
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_resume);
-#endif
 
-#ifdef CONFIG_PM_RUNTIME
-static int ufshcd_pltfrm_runtime_suspend(struct device *dev)
+int ufshcd_pltfrm_runtime_suspend(struct device *dev)
 {
 	return ufshcd_runtime_suspend(dev_get_drvdata(dev));
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_runtime_suspend);
 
-static int ufshcd_pltfrm_runtime_resume(struct device *dev)
+int ufshcd_pltfrm_runtime_resume(struct device *dev)
 {
 	return ufshcd_runtime_resume(dev_get_drvdata(dev));
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_runtime_resume);
 
-static int ufshcd_pltfrm_runtime_idle(struct device *dev)
+int ufshcd_pltfrm_runtime_idle(struct device *dev)
 {
 	return ufshcd_runtime_idle(dev_get_drvdata(dev));
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_runtime_idle);
-#endif /* CONFIG_PM_RUNTIME */
+
+#endif /* CONFIG_PM */
 
 void ufshcd_pltfrm_shutdown(struct platform_device *pdev)
 {
 	ufshcd_shutdown((struct ufs_hba *)platform_get_drvdata(pdev));
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_shutdown);
+
+static void ufshcd_init_lanes_per_dir(struct ufs_hba *hba)
+{
+	struct device *dev = hba->dev;
+	int ret;
+
+	ret = of_property_read_u32(dev->of_node, "lanes-per-direction",
+		&hba->lanes_per_direction);
+	if (ret) {
+		dev_dbg(hba->dev,
+			"%s: failed to read lanes-per-direction, ret=%d\n",
+			__func__, ret);
+		hba->lanes_per_direction = UFSHCD_DEFAULT_LANES_PER_DIRECTION;
+	}
+}
 
 /**
  * ufshcd_pltfrm_init - probe routine of the driver
@@ -296,8 +314,8 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 
 	mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	mmio_base = devm_ioremap_resource(dev, mem_res);
-	if (IS_ERR(*(void **)&mmio_base)) {
-		err = PTR_ERR(*(void **)&mmio_base);
+	if (IS_ERR(mmio_base)) {
+		err = PTR_ERR(mmio_base);
 		goto out;
 	}
 
@@ -329,22 +347,21 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 		goto dealloc_host;
 	}
 
-	pm_runtime_set_active(&pdev->dev);
-	pm_runtime_enable(&pdev->dev);
+	ufshcd_init_lanes_per_dir(hba);
 
 	err = ufshcd_init(hba, mmio_base, irq);
 	if (err) {
 		dev_err(dev, "Initialization failed\n");
-		goto out_disable_rpm;
+		goto dealloc_host;
 	}
 
 	platform_set_drvdata(pdev, hba);
 
+	pm_runtime_set_active(&pdev->dev);
+	pm_runtime_enable(&pdev->dev);
+
 	return 0;
 
-out_disable_rpm:
-	pm_runtime_disable(&pdev->dev);
-	pm_runtime_set_suspended(&pdev->dev);
 dealloc_host:
 	ufshcd_dealloc_host(hba);
 out:
@@ -354,6 +371,6 @@ EXPORT_SYMBOL_GPL(ufshcd_pltfrm_init);
 
 MODULE_AUTHOR("Santosh Yaragnavi <santosh.sy@samsung.com>");
 MODULE_AUTHOR("Vinayak Holikatti <h.vinayak@samsung.com>");
-MODULE_DESCRIPTION("UFS host controller Pltform bus based glue driver");
+MODULE_DESCRIPTION("UFS host controller Platform bus based glue driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(UFSHCD_DRIVER_VERSION);

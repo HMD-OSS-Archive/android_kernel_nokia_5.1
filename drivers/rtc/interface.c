@@ -17,61 +17,8 @@
 #include <linux/log2.h>
 #include <linux/workqueue.h>
 
-#ifdef CONFIG_DEBUG_MUTEXES
-static struct timer_list timer;
-struct task_struct *tsk;
-struct {
-	const char *func;
-	int step;
-} rtc_mutex_lock_info;
-#endif
-
 static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer);
 static void rtc_timer_remove(struct rtc_device *rtc, struct rtc_timer *timer);
-
-static void rtc_mutex_monitor_start(const char *rtc);
-static void rtc_mutex_monitor_stop(void);
-static void rtc_mutex_monitor_update(int step);
-
-#ifdef CONFIG_DEBUG_MUTEXES
-static void rtc_mutex_monitor(unsigned long data)
-{
-	pr_emerg("%s: mutex_is_locked by %s, %d\n", __func__, rtc_mutex_lock_info.func, rtc_mutex_lock_info.step);
-
-	rtc_mutex_monitor_start(rtc_mutex_lock_info.func);
-}
-#endif
-
-static void rtc_mutex_monitor_start(const char *func)
-{
-#ifdef CONFIG_DEBUG_MUTEXES
-	static bool init_done;
-
-	if (init_done == false) {
-		init_timer(&timer);
-		timer.function = rtc_mutex_monitor;
-		init_done = true;
-	}
-
-	timer.expires = jiffies + HZ;
-	rtc_mutex_lock_info.func = func;
-	add_timer(&timer);
-#endif
-}
-
-static void rtc_mutex_monitor_stop(void)
-{
-#ifdef CONFIG_DEBUG_MUTEXES
-	del_timer_sync(&timer);
-#endif
-}
-
-static void rtc_mutex_monitor_update(int step)
-{
-#ifdef CONFIG_DEBUG_MUTEXES
-	rtc_mutex_lock_info.step = step;
-#endif
-}
 
 static int __rtc_read_time(struct rtc_device *rtc, struct rtc_time *tm)
 {
@@ -83,6 +30,15 @@ static int __rtc_read_time(struct rtc_device *rtc, struct rtc_time *tm)
 	else {
 		memset(tm, 0, sizeof(struct rtc_time));
 		err = rtc->ops->read_time(rtc->dev.parent, tm);
+		if (err < 0) {
+			dev_dbg(&rtc->dev, "read_time: fail to read: %d\n",
+				err);
+			return err;
+		}
+
+		err = rtc_valid_tm(tm);
+		if (err < 0)
+			dev_dbg(&rtc->dev, "read_time: rtc_time isn't valid\n");
 	}
 	return err;
 }
@@ -91,19 +47,11 @@ int rtc_read_time(struct rtc_device *rtc, struct rtc_time *tm)
 {
 	int err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	err = __rtc_read_time(rtc, tm);
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
@@ -117,30 +65,25 @@ int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm)
 	if (err != 0)
 		return err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	if (!rtc->ops)
 		err = -ENODEV;
 	else if (rtc->ops->set_time)
 		err = rtc->ops->set_time(rtc->dev.parent, tm);
-	else if (rtc->ops->set_mmss) {
+	else if (rtc->ops->set_mmss64) {
 		time64_t secs64 = rtc_tm_to_time64(tm);
 
+		err = rtc->ops->set_mmss64(rtc->dev.parent, secs64);
+	} else if (rtc->ops->set_mmss) {
+		time64_t secs64 = rtc_tm_to_time64(tm);
 		err = rtc->ops->set_mmss(rtc->dev.parent, secs64);
 	} else
 		err = -EINVAL;
 
 	pm_stay_awake(rtc->dev.parent);
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	/* A timer might have just expired */
 	schedule_work(&rtc->irqwork);
@@ -148,82 +91,33 @@ int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm)
 }
 EXPORT_SYMBOL_GPL(rtc_set_time);
 
-int rtc_set_mmss(struct rtc_device *rtc, unsigned long secs)
-{
-	int err;
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
-	err = mutex_lock_interruptible(&rtc->ops_lock);
-	if (err)
-		return err;
-	rtc_mutex_monitor_start(__func__);
-
-	if (!rtc->ops)
-		err = -ENODEV;
-	else if (rtc->ops->set_mmss)
-		err = rtc->ops->set_mmss(rtc->dev.parent, secs);
-	else if (rtc->ops->read_time && rtc->ops->set_time) {
-		struct rtc_time new, old;
-
-		err = rtc->ops->read_time(rtc->dev.parent, &old);
-		if (err == 0) {
-			rtc_time64_to_tm(secs, &new);
-
-			/*
-			 * avoid writing when we're going to change the day of
-			 * the month. We will retry in the next minute. This
-			 * basically means that if the RTC must not drift
-			 * by more than 1 minute in 11 minutes.
-			 */
-			if (!((old.tm_hour == 23 && old.tm_min == 59) ||
-				(new.tm_hour == 23 && new.tm_min == 59)))
-				err = rtc->ops->set_time(rtc->dev.parent,
-						&new);
-		}
-	} else {
-		err = -EINVAL;
-	}
-
-	pm_stay_awake(rtc->dev.parent);
-	rtc_mutex_monitor_stop();
-	mutex_unlock(&rtc->ops_lock);
-	/* A timer might have just expired */
-	schedule_work(&rtc->irqwork);
-
-	return err;
-}
-EXPORT_SYMBOL_GPL(rtc_set_mmss);
-
 static int rtc_read_alarm_internal(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 {
 	int err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	if (rtc->ops == NULL)
 		err = -ENODEV;
 	else if (!rtc->ops->read_alarm)
 		err = -EINVAL;
 	else {
-		memset(alarm, 0, sizeof(struct rtc_wkalrm));
+		alarm->enabled = 0;
+		alarm->pending = 0;
+		alarm->time.tm_sec = -1;
+		alarm->time.tm_min = -1;
+		alarm->time.tm_hour = -1;
+		alarm->time.tm_mday = -1;
+		alarm->time.tm_mon = -1;
+		alarm->time.tm_year = -1;
+		alarm->time.tm_wday = -1;
+		alarm->time.tm_yday = -1;
+		alarm->time.tm_isdst = -1;
 		err = rtc->ops->read_alarm(rtc->dev.parent, alarm);
 	}
 
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
@@ -333,6 +227,13 @@ int __rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 			missing = year;
 	}
 
+	/* Can't proceed if alarm is still invalid after replacing
+	 * missing fields.
+	 */
+	err = rtc_valid_tm(&alarm->time);
+	if (err)
+		goto done;
+
 	/* with luck, no rollover is needed */
 	t_now = rtc_tm_to_time64(&now);
 	t_alm = rtc_tm_to_time64(&alarm->time);
@@ -384,9 +285,9 @@ int __rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 		dev_warn(&rtc->dev, "alarm rollover not handled\n");
 	}
 
-done:
 	err = rtc_valid_tm(&alarm->time);
 
+done:
 	if (err) {
 		dev_warn(&rtc->dev, "invalid alarm value: %d-%d-%d %d:%d:%d\n",
 			alarm->time.tm_year + 1900, alarm->time.tm_mon + 1,
@@ -401,16 +302,9 @@ int rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 {
 	int err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 	if (rtc->ops == NULL)
 		err = -ENODEV;
 	else if (!rtc->ops->read_alarm)
@@ -420,7 +314,6 @@ int rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 		alarm->enabled = rtc->aie_timer.enabled;
 		alarm->time = rtc_ktime_to_tm(rtc->aie_timer.node.expires);
 	}
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 
 	return err;
@@ -443,14 +336,8 @@ static int __rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	if (err)
 		return err;
 	now = rtc_tm_to_time64(&tm);
-	if (scheduled <= now) {
-		pr_emerg("alarm: %d/%d/%d, %d:%d:%d (%lld)\n", alarm->time.tm_year, alarm->time.tm_mon,
-			alarm->time.tm_mday, alarm->time.tm_hour, alarm->time.tm_min, alarm->time.tm_sec, scheduled);
-		pr_emerg("now: %d/%d/%d, %d:%d:%d (%lld)\n", tm.tm_year, tm.tm_mon, tm.tm_mday,
-			tm.tm_hour, tm.tm_min, tm.tm_sec, now);
-		pr_emerg("%s, -ETIME\n", __func__);
+	if (scheduled <= now)
 		return -ETIME;
-	}
 	/*
 	 * XXX - We just checked to make sure the alarm time is not
 	 * in the past, but there is still a race window where if
@@ -472,30 +359,26 @@ int rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 {
 	int err;
 
+	if (!rtc->ops)
+		return -ENODEV;
+	else if (!rtc->ops->set_alarm)
+		return -EINVAL;
+
 	err = rtc_valid_tm(&alarm->time);
 	if (err != 0)
 		return err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
-
 	if (rtc->aie_timer.enabled)
 		rtc_timer_remove(rtc, &rtc->aie_timer);
 
 	rtc->aie_timer.node.expires = rtc_tm_to_ktime(alarm->time);
-	rtc->aie_timer.period = ktime_set(0, 0);
+	rtc->aie_timer.period = 0;
 	if (alarm->enabled)
 		err = rtc_timer_enqueue(rtc, &rtc->aie_timer);
 
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
@@ -509,16 +392,9 @@ int rtc_set_alarm_poweron(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	if (err != 0)
 		return err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	if (!rtc->ops)
 		err = -ENODEV;
@@ -527,7 +403,6 @@ int rtc_set_alarm_poweron(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	else
 		err = rtc->ops->set_alarm(rtc->dev.parent, alarm);
 
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
@@ -547,49 +422,30 @@ int rtc_initialize_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	if (err)
 		return err;
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	rtc->aie_timer.node.expires = rtc_tm_to_ktime(alarm->time);
-	rtc->aie_timer.period = ktime_set(0, 0);
+	rtc->aie_timer.period = 0;
 
-	/* Alarm has to be enabled & in the futrure for us to enqueue it */
-	if (alarm->enabled && (rtc_tm_to_ktime(now).tv64 <
-			 rtc->aie_timer.node.expires.tv64)) {
+	/* Alarm has to be enabled & in the future for us to enqueue it */
+	if (alarm->enabled && (rtc_tm_to_ktime(now) <
+			 rtc->aie_timer.node.expires)) {
 
 		rtc->aie_timer.enabled = 1;
 		timerqueue_add(&rtc->timerqueue, &rtc->aie_timer.node);
 	}
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
 EXPORT_SYMBOL_GPL(rtc_initialize_alarm);
 
-
-
 int rtc_alarm_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 {
-	int err;
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
-	err = mutex_lock_interruptible(&rtc->ops_lock);
+	int err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 	if (rtc->aie_timer.enabled != enabled) {
 		if (enabled)
@@ -607,7 +463,6 @@ int rtc_alarm_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 	else
 		err = rtc->ops->alarm_irq_enable(rtc->dev.parent, enabled);
 
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return err;
 }
@@ -615,22 +470,12 @@ EXPORT_SYMBOL_GPL(rtc_alarm_irq_enable);
 
 int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 {
-	int err;
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
-	err = mutex_lock_interruptible(&rtc->ops_lock);
+	int err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
 		return err;
-	rtc_mutex_monitor_start(__func__);
 
 #ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
 	if (enabled == 0 && rtc->uie_irq_active) {
-		rtc_mutex_monitor_stop();
 		mutex_unlock(&rtc->ops_lock);
 		return rtc_dev_update_irq_enable_emul(rtc, 0);
 	}
@@ -658,7 +503,6 @@ int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 		rtc_timer_remove(rtc, &rtc->uie_rtctimer);
 
 out:
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 #ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
 	/*
@@ -746,7 +590,7 @@ enum hrtimer_restart rtc_pie_update_irq(struct hrtimer *timer)
 	int count;
 	rtc = container_of(timer, struct rtc_device, pie_timer);
 
-	period = ktime_set(0, NSEC_PER_SEC/rtc->irq_freq);
+	period = NSEC_PER_SEC / rtc->irq_freq;
 	count = hrtimer_forward_now(timer, period);
 
 	rtc_handle_legacy_irq(rtc, count, RTC_PF);
@@ -764,7 +608,7 @@ enum hrtimer_restart rtc_pie_update_irq(struct hrtimer *timer)
 void rtc_update_irq(struct rtc_device *rtc,
 		unsigned long num, unsigned long events)
 {
-	if (unlikely(IS_ERR_OR_NULL(rtc)))
+	if (IS_ERR_OR_NULL(rtc))
 		return;
 
 	pm_stay_awake(rtc->dev.parent);
@@ -857,7 +701,7 @@ static int rtc_update_hrtimer(struct rtc_device *rtc, int enabled)
 		return -1;
 
 	if (enabled) {
-		ktime_t period = ktime_set(0, NSEC_PER_SEC / rtc->irq_freq);
+		ktime_t period = NSEC_PER_SEC / rtc->irq_freq;
 
 		hrtimer_start(&rtc->pie_timer, period, HRTIMER_MODE_REL);
 	}
@@ -948,9 +792,23 @@ EXPORT_SYMBOL_GPL(rtc_irq_set_freq);
  */
 static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 {
+	struct timerqueue_node *next = timerqueue_getnext(&rtc->timerqueue);
+	struct rtc_time tm;
+	ktime_t now;
+
 	timer->enabled = 1;
+	__rtc_read_time(rtc, &tm);
+	now = rtc_tm_to_ktime(tm);
+
+	/* Skip over expired timers */
+	while (next) {
+		if (next->expires >= now)
+			break;
+		next = timerqueue_iterate_next(next);
+	}
+
 	timerqueue_add(&rtc->timerqueue, &timer->node);
-	if (&timer->node == timerqueue_getnext(&rtc->timerqueue)) {
+	if (!next || ktime_before(timer->node.expires, next->expires)) {
 		struct rtc_wkalrm alarm;
 		int err;
 		alarm.time = rtc_ktime_to_tm(timer->node.expires);
@@ -1031,84 +889,56 @@ void rtc_timer_do_work(struct work_struct *work)
 	struct rtc_device *rtc =
 		container_of(work, struct rtc_device, irqwork);
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	mutex_lock(&rtc->ops_lock);
-	rtc_mutex_monitor_start(__func__);
 again:
-	rtc_mutex_monitor_update(0);
 	__rtc_read_time(rtc, &tm);
-	rtc_mutex_monitor_update(1);
 	now = rtc_tm_to_ktime(tm);
 	while ((next = timerqueue_getnext(&rtc->timerqueue))) {
-		if (next->expires.tv64 > now.tv64)
+		if (next->expires > now)
 			break;
 
 		/* expire timer */
 		timer = container_of(next, struct rtc_timer, node);
 		timerqueue_del(&rtc->timerqueue, &timer->node);
-		rtc_mutex_monitor_update(2);
 		timer->enabled = 0;
-		if (timer->task.func) {
-			int64_t start_nt, cur_nt;
-			struct timespec time;
-
-			time.tv_sec = 0;
-			time.tv_nsec = 0;
-			get_monotonic_boottime(&time);
-			start_nt = time.tv_sec * 1000000000LL + time.tv_nsec;
-
+		if (timer->task.func)
 			timer->task.func(timer->task.private_data);
-
-			time.tv_sec = 0;
-			time.tv_nsec = 0;
-			get_monotonic_boottime(&time);
-			cur_nt = time.tv_sec * 1000000000LL + time.tv_nsec;
-
-			if ((cur_nt - start_nt) > 500000000LL)
-				pr_emerg("%s, timer->task.func = %p, (cur_nt - start_nt) = %lld\n", __func__,
-					timer->task.func, cur_nt - start_nt);
-		}
-		rtc_mutex_monitor_update(3);
 
 		/* Re-add/fwd periodic timers */
 		if (ktime_to_ns(timer->period)) {
 			timer->node.expires = ktime_add(timer->node.expires,
 							timer->period);
-			pr_emerg("%s, expire = %lld, now = %lld, period = %lld\n", __func__,
-				timer->node.expires.tv64, now.tv64, timer->period.tv64);
 			timer->enabled = 1;
 			timerqueue_add(&rtc->timerqueue, &timer->node);
 		}
-		rtc_mutex_monitor_update(4);
 	}
-	rtc_mutex_monitor_update(5);
 
 	/* Set next alarm */
 	if (next) {
 		struct rtc_wkalrm alarm;
 		int err;
-		rtc_mutex_monitor_update(6);
+		int retry = 3;
+
 		alarm.time = rtc_ktime_to_tm(next->expires);
 		alarm.enabled = 1;
+reprogram:
 		err = __rtc_set_alarm(rtc, &alarm);
-		rtc_mutex_monitor_update(7);
-		if (err == -ETIME) {
-			pr_emerg("%s, -ETIME\n", __func__);
+		if (err == -ETIME)
+			goto again;
+		else if (err) {
+			if (retry-- > 0)
+				goto reprogram;
+
+			timer = container_of(next, struct rtc_timer, node);
+			timerqueue_del(&rtc->timerqueue, &timer->node);
+			timer->enabled = 0;
+			dev_err(&rtc->dev, "__rtc_set_alarm: err=%d\n", err);
 			goto again;
 		}
-	} else {
-		rtc_mutex_monitor_update(8);
+	} else
 		rtc_alarm_disable(rtc);
-	}
-	rtc_mutex_monitor_update(9);
 
 	pm_relax(rtc->dev.parent);
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 }
 
@@ -1140,15 +970,7 @@ int rtc_timer_start(struct rtc_device *rtc, struct rtc_timer *timer,
 			ktime_t expires, ktime_t period)
 {
 	int ret = 0;
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	mutex_lock(&rtc->ops_lock);
-	rtc_mutex_monitor_start(__func__);
 	if (timer->enabled)
 		rtc_timer_remove(rtc, timer);
 
@@ -1157,7 +979,6 @@ int rtc_timer_start(struct rtc_device *rtc, struct rtc_timer *timer,
 
 	ret = rtc_timer_enqueue(rtc, timer);
 
-	rtc_mutex_monitor_stop();
 	mutex_unlock(&rtc->ops_lock);
 	return ret;
 }
@@ -1168,23 +989,66 @@ int rtc_timer_start(struct rtc_device *rtc, struct rtc_timer *timer,
  *
  * Kernel interface to cancel an rtc_timer
  */
-int rtc_timer_cancel(struct rtc_device *rtc, struct rtc_timer *timer)
+void rtc_timer_cancel(struct rtc_device *rtc, struct rtc_timer *timer)
 {
-	int ret = 0;
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	if (mutex_is_locked(&rtc->ops_lock) && rtc->ops_lock.owner)
-		pr_emerg("%s: mutex_is_locked, owner: %s/%d\n", __func__,
-			rtc->ops_lock.owner ? rtc->ops_lock.owner->comm : "<none>",
-			rtc->ops_lock.owner ? task_pid_nr(rtc->ops_lock.owner) : -1);
-#endif
 	mutex_lock(&rtc->ops_lock);
-	rtc_mutex_monitor_start(__func__);
 	if (timer->enabled)
 		rtc_timer_remove(rtc, timer);
-	rtc_mutex_monitor_stop();
+	mutex_unlock(&rtc->ops_lock);
+}
+
+/**
+ * rtc_read_offset - Read the amount of rtc offset in parts per billion
+ * @ rtc: rtc device to be used
+ * @ offset: the offset in parts per billion
+ *
+ * see below for details.
+ *
+ * Kernel interface to read rtc clock offset
+ * Returns 0 on success, or a negative number on error.
+ * If read_offset() is not implemented for the rtc, return -EINVAL
+ */
+int rtc_read_offset(struct rtc_device *rtc, long *offset)
+{
+	int ret;
+
+	if (!rtc->ops)
+		return -ENODEV;
+
+	if (!rtc->ops->read_offset)
+		return -EINVAL;
+
+	mutex_lock(&rtc->ops_lock);
+	ret = rtc->ops->read_offset(rtc->dev.parent, offset);
 	mutex_unlock(&rtc->ops_lock);
 	return ret;
 }
 
+/**
+ * rtc_set_offset - Adjusts the duration of the average second
+ * @ rtc: rtc device to be used
+ * @ offset: the offset in parts per billion
+ *
+ * Some rtc's allow an adjustment to the average duration of a second
+ * to compensate for differences in the actual clock rate due to temperature,
+ * the crystal, capacitor, etc.
+ *
+ * Kernel interface to adjust an rtc clock offset.
+ * Return 0 on success, or a negative number on error.
+ * If the rtc offset is not setable (or not implemented), return -EINVAL
+ */
+int rtc_set_offset(struct rtc_device *rtc, long offset)
+{
+	int ret;
 
+	if (!rtc->ops)
+		return -ENODEV;
+
+	if (!rtc->ops->set_offset)
+		return -EINVAL;
+
+	mutex_lock(&rtc->ops_lock);
+	ret = rtc->ops->set_offset(rtc->dev.parent, offset);
+	mutex_unlock(&rtc->ops_lock);
+	return ret;
+}

@@ -15,7 +15,8 @@
 #define __CMDQ_SEC_IWC_COMMON_H__
 
 /* shared DRAM */
-#define CMDQ_SEC_SHARED_IRQ_RAISED_OFFSET    (0x0) /* bit x = 1 means thread x raise IRQ */
+/* bit x = 1 means thread x raise IRQ */
+#define CMDQ_SEC_SHARED_IRQ_RAISED_OFFSET    (0x0)
 #define CMDQ_SEC_SHARED_THR_CNT_OFFSET (0x100)
 #define CMDQ_SEC_SHARED_TASK_VA_OFFSET (0x200)
 #define CMDQ_SEC_SHARED_OP_OFFSET (0x300)
@@ -32,19 +33,20 @@
 #define CMDQ_SEC_MESSAGE_INST_LEN (8)
 #define CMDQ_SEC_DISPATCH_LEN (8)
 
-typedef enum CMDQ_IWC_ADDR_METADATA_TYPE {
+enum CMDQ_IWC_ADDR_METADATA_TYPE {
 	CMDQ_IWC_H_2_PA = 0, /* sec handle to sec PA */
 	CMDQ_IWC_H_2_MVA = 1, /* sec handle to sec MVA */
 	CMDQ_IWC_NMVA_2_MVA = 2, /* map normal MVA to secure world */
-	CMDQ_IWC_DDP_REG_HDCP = 3, /* DDP register needs to set opposite value when HDCP fail */
-	CMDQ_IWC_NMVA_2_MVA_REVERSE = 4, /* map normal MVA to secure world */
-} CMDQ_IWC_ADDR_METADATA_TYPE;
+	/* DDP register needs to set opposite value when HDCP fail */
+	CMDQ_IWC_DDP_REG_HDCP = 3,
+};
 
 /*  */
 /* IWC message */
 /*  */
-typedef struct{
-	/* [IN]_d, index of instruction. Update its argB value to real PA/MVA in secure world */
+struct iwcCmdqAddrMetadata_t {
+	/* [IN]_d, index of instruction. Update its arg_b */
+	/* value to real PA/MVA in secure world */
 	uint32_t instrIndex;
 
 	/*
@@ -58,22 +60,23 @@ typedef struct{
 	 *
 	 *	A: baseHandle
 	 *	B: baseHandle + blockOffset
-	 *  C: baseHandle + blockOffset + offset
+	 *	C: baseHandle + blockOffset + offset
 	 *	A~B or B~D: size
 	 */
 
 	uint32_t type;		/* [IN] addr handle type*/
 	uint64_t baseHandle;	/* [IN]_h, secure address handle */
-	uint32_t blockOffset;	/* [IN]_b, block offset from handle(PA) to current block(plane) */
+	/* [IN]_b, block offset from handle(PA) to current block(plane) */
+	uint32_t blockOffset;
 	uint32_t offset;	/* [IN]_b, buffser offset to secure handle */
 	uint32_t size;		/* buffer size */
 	uint32_t port;		/* hw port id (i.e. M4U port id)*/
-} iwcCmdqAddrMetadata_t;
+};
 
-typedef struct {
+struct iwcCmdqDebugConfig_t {
 	int32_t logLevel;
 	int32_t enableProfile;
-} iwcCmdqDebugConfig_t;
+};
 
 struct iwcCmdqSecStatus_t {
 	uint32_t step;
@@ -84,10 +87,10 @@ struct iwcCmdqSecStatus_t {
 	char dispatch[CMDQ_SEC_DISPATCH_LEN];
 };
 
-typedef struct {
+struct iwcCmdqSystraceLog_t {
 	uint64_t startTime;	/* start timestamp */
 	uint64_t endTime;	/* end timestamp */
-} iwcCmdqSystraceLog_t;
+};
 
 /* tablet use */
 enum CMDQ_IWC_DISP_MODE {
@@ -97,9 +100,9 @@ enum CMDQ_IWC_DISP_MODE {
 	CMDQ_IWC_MDP_USER_MODE = 3,
 };
 
-typedef struct {
+struct iwcCmdqMetadata_t {
 	uint32_t addrListLength;
-	iwcCmdqAddrMetadata_t addrList[CMDQ_IWC_MAX_ADDR_LIST_LENGTH];
+	struct iwcCmdqAddrMetadata_t addrList[CMDQ_IWC_MAX_ADDR_LIST_LENGTH];
 
 	uint64_t enginesNeedDAPC;
 	uint64_t enginesNeedPortSecurity;
@@ -110,20 +113,21 @@ typedef struct {
 	uint32_t srcHandle;
 	uint32_t dstHandle;
 #endif
-} iwcCmdqMetadata_t;
+};
 
-typedef struct {
+struct iwcCmdqSectraceBuffer_t {
 	uint32_t addr; /* pass VA for TCI cases, and pass PA for DCI case */
 	uint32_t size;
-} iwcCmdqSectraceBuffer_t;
+};
 
-typedef struct {
-	long long shareMemoyPA; /* use long long for 64 bit compatible support */
+struct iwcCmdqPathResource_t {
+	/* use long long for 64 bit compatible support */
+	long long shareMemoyPA;
 	uint32_t size;
-	bool useNormalIRQ;		/* use normal IRQ in SWd */
-} iwcCmdqPathResource_t;
+	bool useNormalIRQ;	/* use normal IRQ in SWd */
+};
 
-typedef struct {
+struct iwcCmdqCancelTask_t {
 	/* [IN] */
 	int32_t thread;
 	uint32_t waitCookie;
@@ -136,9 +140,9 @@ typedef struct {
 	uint32_t errInstr[2]; /* errInstr[0] = instB, errInstr[1] = instA */
 	uint32_t regValue;
 	uint32_t pc;
-} iwcCmdqCancelTask_t;
+};
 
-typedef struct {
+struct iwcCmdqCommand_t {
 	/* basic execution data */
 	uint32_t thread;
 	uint32_t scenario;
@@ -148,7 +152,8 @@ typedef struct {
 	uint32_t pVABase[CMDQ_IWC_MAX_CMD_LENGTH];
 
 	/* exec order data */
-	uint32_t waitCookie; /* [IN] index in thread's task list, it should be (nextCookie - 1) */
+	/* [IN] index in thread's task list, it should be (nextCookie - 1) */
+	uint32_t waitCookie;
 	bool resetExecCnt;   /* [IN] reset HW thread */
 
 	/* client info */
@@ -156,38 +161,42 @@ typedef struct {
 	char callerName[CMDQ_IWC_CLIENT_NAME];
 
 	/* metadata */
-	iwcCmdqMetadata_t metadata;
+	struct iwcCmdqMetadata_t metadata;
 
 	/* debug */
 	uint64_t hNormalTask; /* handle to reference task in normal world*/
-} iwcCmdqCommand_t;
+};
 
 /*  */
 /* linex kernel and mobicore has their own MMU tables, */
 /* the latter's is used to map world shared memory and physical address */
 /* so mobicore dose not understand linux virtual address mapping. */
 /*  */
-/* if we want to transact a large buffer in TCI/DCI, there are 2 method (both need 1 copy): */
-/* 1. use mc_map, to map normal world buffer to WSM, and pass secure_virt_addr in TCI/DCI buffer */
-/* note mc_map implies a memcopy to copy content from normal world to WSM */
-/* 2. declare a fixed length array in TCI/DCI struct, and its size must be < 1M */
+/* if we want to transact a large buffer in TCI/DCI, */
+/* there are 2 method (both need 1 copy): */
+/* 1. use mc_map, to map normal world buffer to WSM, */
+/* and pass secure_virt_addr in TCI/DCI buffer */
+/* note mc_map implies a memcopy to copy */
+/* content from normal world to WSM */
+/* 2. declare a fixed length array in */
+/* TCI/DCI struct, and its size must be < 1M */
 /*  */
-typedef struct {
+struct iwcCmdqMessage_t {
 	union {
 		uint32_t cmd;	/* [IN] command id */
 		int32_t rsp;	/* [OUT] 0 for success, < 0 for error */
 	};
 
 	union {
-		iwcCmdqCommand_t command;
-		iwcCmdqCancelTask_t cancelTask;
-		iwcCmdqPathResource_t pathResource;
-		iwcCmdqSectraceBuffer_t sectracBuffer;
+		struct iwcCmdqCommand_t command;
+		struct iwcCmdqCancelTask_t cancelTask;
+		struct iwcCmdqPathResource_t pathResource;
+		struct iwcCmdqSectraceBuffer_t sectracBuffer;
 	};
 
-	iwcCmdqDebugConfig_t debug;
+	struct iwcCmdqDebugConfig_t debug;
 	struct iwcCmdqSecStatus_t secStatus;
-} iwcCmdqMessage_t, *iwcCmdqMessage_ptr;
+};
 
 /*  */
 /* ERROR code number (ERRNO) */

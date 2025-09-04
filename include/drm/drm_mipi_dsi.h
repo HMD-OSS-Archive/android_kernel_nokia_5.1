@@ -21,10 +21,6 @@ struct mipi_dsi_device;
 #define MIPI_DSI_MSG_REQ_ACK	BIT(0)
 /* use Low Power Mode to transmit message */
 #define MIPI_DSI_MSG_USE_LPM	BIT(1)
-/* calculate ECC in software */
-#define MIPI_DSI_MSG_SW_ECC	BIT(2)
-/* calculate checksum in software */
-#define MIPI_DSI_MSG_SW_CRC	BIT(3)
 
 /**
  * struct mipi_dsi_msg - read/write DSI buffer
@@ -58,14 +54,12 @@ bool mipi_dsi_packet_format_is_long(u8 type);
  *     Packet Data, and ECC)
  * @payload_length: number of bytes in the payload
  * @payload: a pointer to a buffer containing the payload, if any
- * @checksum: the CRC of the payload (only applies to long packets)
  */
 struct mipi_dsi_packet {
 	size_t size;
 	u8 header[4];
 	size_t payload_length;
 	const u8 *payload;
-	u16 checksum;
 };
 
 int mipi_dsi_create_packet(struct mipi_dsi_packet *packet,
@@ -102,14 +96,17 @@ struct mipi_dsi_host_ops {
  * struct mipi_dsi_host - DSI host device
  * @dev: driver model device node for this DSI host
  * @ops: DSI host operations
+ * @list: list management
  */
 struct mipi_dsi_host {
 	struct device *dev;
 	const struct mipi_dsi_host_ops *ops;
+	struct list_head list;
 };
 
 int mipi_dsi_host_register(struct mipi_dsi_host *host);
 void mipi_dsi_host_unregister(struct mipi_dsi_host *host);
+struct mipi_dsi_host *of_find_mipi_dsi_host_by_node(struct device_node *node);
 
 /* DSI mode flags */
 
@@ -145,10 +142,28 @@ enum mipi_dsi_pixel_format {
 	MIPI_DSI_FMT_RGB565,
 };
 
+#define DSI_DEV_NAME_SIZE		20
+
+/**
+ * struct mipi_dsi_device_info - template for creating a mipi_dsi_device
+ * @type: DSI peripheral chip type
+ * @channel: DSI virtual channel assigned to peripheral
+ * @node: pointer to OF device node or NULL
+ *
+ * This is populated and passed to mipi_dsi_device_new to create a new
+ * DSI device
+ */
+struct mipi_dsi_device_info {
+	char type[DSI_DEV_NAME_SIZE];
+	u32 channel;
+	struct device_node *node;
+};
+
 /**
  * struct mipi_dsi_device - DSI peripheral device
  * @host: DSI host for this peripheral
  * @dev: driver model device node for this peripheral
+ * @name: DSI peripheral chip type
  * @channel: virtual channel assigned to the peripheral
  * @format: pixel format for video mode
  * @lanes: number of active data lanes
@@ -158,20 +173,54 @@ struct mipi_dsi_device {
 	struct mipi_dsi_host *host;
 	struct device dev;
 
+	char name[DSI_DEV_NAME_SIZE];
 	unsigned int channel;
 	unsigned int lanes;
 	enum mipi_dsi_pixel_format format;
 	unsigned long mode_flags;
 };
 
+#define MIPI_DSI_MODULE_PREFIX "mipi-dsi:"
+
 static inline struct mipi_dsi_device *to_mipi_dsi_device(struct device *dev)
 {
 	return container_of(dev, struct mipi_dsi_device, dev);
 }
 
+/**
+ * mipi_dsi_pixel_format_to_bpp - obtain the number of bits per pixel for any
+ *                                given pixel format defined by the MIPI DSI
+ *                                specification
+ * @fmt: MIPI DSI pixel format
+ *
+ * Returns: The number of bits per pixel of the given pixel format.
+ */
+static inline int mipi_dsi_pixel_format_to_bpp(enum mipi_dsi_pixel_format fmt)
+{
+	switch (fmt) {
+	case MIPI_DSI_FMT_RGB888:
+	case MIPI_DSI_FMT_RGB666:
+		return 24;
+
+	case MIPI_DSI_FMT_RGB666_PACKED:
+		return 18;
+
+	case MIPI_DSI_FMT_RGB565:
+		return 16;
+	}
+
+	return -EINVAL;
+}
+
+struct mipi_dsi_device *
+mipi_dsi_device_register_full(struct mipi_dsi_host *host,
+			      const struct mipi_dsi_device_info *info);
+void mipi_dsi_device_unregister(struct mipi_dsi_device *dsi);
 struct mipi_dsi_device *of_find_mipi_dsi_device_by_node(struct device_node *np);
 int mipi_dsi_attach(struct mipi_dsi_device *dsi);
 int mipi_dsi_detach(struct mipi_dsi_device *dsi);
+int mipi_dsi_shutdown_peripheral(struct mipi_dsi_device *dsi);
+int mipi_dsi_turn_on_peripheral(struct mipi_dsi_device *dsi);
 int mipi_dsi_set_maximum_return_packet_size(struct mipi_dsi_device *dsi,
 					    u16 value);
 
@@ -216,20 +265,15 @@ int mipi_dsi_dcs_set_column_address(struct mipi_dsi_device *dsi, u16 start,
 				    u16 end);
 int mipi_dsi_dcs_set_page_address(struct mipi_dsi_device *dsi, u16 start,
 				  u16 end);
-int mipi_dsi_dcs_set_address_mode(struct mipi_dsi_device *dsi,
-				  bool reverse_page_address,
-				  bool reverse_col_address,
-				  bool reverse_page_col_address,
-				  bool refresh_from_bottom,
-				  bool reverse_rgb,
-				  bool latch_right_to_left,
-				  bool flip_horizontal,
-				  bool flip_vertical);
 int mipi_dsi_dcs_set_tear_off(struct mipi_dsi_device *dsi);
 int mipi_dsi_dcs_set_tear_on(struct mipi_dsi_device *dsi,
 			     enum mipi_dsi_dcs_tear_mode mode);
-int mipi_dsi_dcs_set_tear_scanline(struct mipi_dsi_device *dsi, u16 line);
 int mipi_dsi_dcs_set_pixel_format(struct mipi_dsi_device *dsi, u8 format);
+int mipi_dsi_dcs_set_tear_scanline(struct mipi_dsi_device *dsi, u16 scanline);
+int mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
+					u16 brightness);
+int mipi_dsi_dcs_get_display_brightness(struct mipi_dsi_device *dsi,
+					u16 *brightness);
 
 /**
  * struct mipi_dsi_driver - DSI driver

@@ -645,7 +645,7 @@ static int serial_lpc32xx_verify_port(struct uart_port *port,
 	return ret;
 }
 
-static struct uart_ops serial_lpc32xx_pops = {
+static const struct uart_ops serial_lpc32xx_pops = {
 	.tx_empty	= serial_lpc32xx_tx_empty,
 	.set_mctrl	= serial_lpc32xx_set_mctrl,
 	.get_mctrl	= serial_lpc32xx_get_mctrl,
@@ -691,12 +691,13 @@ static int serial_hs_lpc32xx_probe(struct platform_device *pdev)
 	p->port.mapbase = res->start;
 	p->port.membase = NULL;
 
-	p->port.irq = platform_get_irq(pdev, 0);
-	if (p->port.irq < 0) {
+	ret = platform_get_irq(pdev, 0);
+	if (ret < 0) {
 		dev_err(&pdev->dev, "Error getting irq for HS UART port %d\n",
 			uarts_registered);
-		return p->port.irq;
+		return ret;
 	}
+	p->port.irq = ret;
 
 	p->port.iotype = UPIO_MEM32;
 	p->port.uartclk = LPC32XX_MAIN_OSC_FREQ;
@@ -768,7 +769,6 @@ static struct platform_driver serial_hs_lpc32xx_driver = {
 	.resume		= serial_hs_lpc32xx_resume,
 	.driver		= {
 		.name	= MODNAME,
-		.owner	= THIS_MODULE,
 		.of_match_table	= serial_hs_lpc32xx_dt_ids,
 	},
 };

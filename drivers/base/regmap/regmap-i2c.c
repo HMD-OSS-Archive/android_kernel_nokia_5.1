@@ -13,12 +13,8 @@
 #include <linux/regmap.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
-#ifdef CONFIG_MTK_I2C_EXTENSION
-#include <linux/slab.h>
-#include <linux/dma-mapping.h>
-#include <linux/types.h>
-#endif
 
+#include "internal.h"
 
 static int regmap_smbus_byte_reg_read(void *context, unsigned int reg,
 				      unsigned int *val)
@@ -92,50 +88,42 @@ static struct regmap_bus regmap_smbus_word = {
 	.reg_read = regmap_smbus_word_reg_read,
 };
 
-#ifdef CONFIG_MTK_I2C_EXTENSION
-static int regmap_i2c_write(void *context, const void *data, size_t count)
+static int regmap_smbus_word_read_swapped(void *context, unsigned int reg,
+					  unsigned int *val)
 {
 	struct device *dev = context;
 	struct i2c_client *i2c = to_i2c_client(dev);
 	int ret;
-	struct i2c_msg msg;
-	uint8_t *data_v = NULL;
-	dma_addr_t dma_buf_p;
 
-	memset(&msg, 0, sizeof(struct i2c_msg));
+	if (reg > 0xff)
+		return -EINVAL;
 
-	if (count <= 8) {
-		msg.addr = i2c->addr;
-		msg.flags = 0;
-		msg.len = count;
-		msg.buf = (uint8_t *)data;
-	} else {
-		data_v = dma_alloc_coherent(&(i2c->adapter->dev), count, &dma_buf_p,
-					    GFP_KERNEL|GFP_DMA32);
-		if (!data_v)
-			return -1;
-
-		memcpy(data_v, (uint8_t *)data, count);
-		msg.addr = i2c->addr;
-		msg.flags = 0;
-		msg.len = count;
-		msg.buf = (void *)((uintptr_t)dma_buf_p);
-		msg.ext_flag |= I2C_DMA_FLAG;
-	}
-
-	ret = i2c_transfer(i2c->adapter, &msg, 1);
-
-	if (count > 8)
-		dma_free_coherent(&(i2c->adapter->dev), count, data_v, dma_buf_p);
-
-	if (ret == 1)
-		return 0;
-	else if (ret < 0)
+	ret = i2c_smbus_read_word_swapped(i2c, reg);
+	if (ret < 0)
 		return ret;
-	else
-		return -EIO;
+
+	*val = ret;
+
+	return 0;
 }
-#else
+
+static int regmap_smbus_word_write_swapped(void *context, unsigned int reg,
+					   unsigned int val)
+{
+	struct device *dev = context;
+	struct i2c_client *i2c = to_i2c_client(dev);
+
+	if (val > 0xffff || reg > 0xff)
+		return -EINVAL;
+
+	return i2c_smbus_write_word_swapped(i2c, reg, val);
+}
+
+static struct regmap_bus regmap_smbus_word_swapped = {
+	.reg_write = regmap_smbus_word_write_swapped,
+	.reg_read = regmap_smbus_word_read_swapped,
+};
+
 static int regmap_i2c_write(void *context, const void *data, size_t count)
 {
 	struct device *dev = context;
@@ -150,7 +138,6 @@ static int regmap_i2c_write(void *context, const void *data, size_t count)
 	else
 		return -EIO;
 }
-#endif
 
 static int regmap_i2c_gather_write(void *context,
 				   const void *reg, size_t reg_size,
@@ -186,66 +173,6 @@ static int regmap_i2c_gather_write(void *context,
 		return -EIO;
 }
 
-#ifdef CONFIG_MTK_I2C_EXTENSION
-static int regmap_i2c_read(void *context,
-			   const void *reg, size_t reg_size,
-			   void *val, size_t val_size)
-{
-	struct device *dev = context;
-	struct i2c_client *i2c = to_i2c_client(dev);
-	struct i2c_msg msg;
-	int ret;
-	size_t def_len = (val_size > reg_size) ? val_size : reg_size;
-	uint8_t *data_v = NULL;
-	dma_addr_t dma_buf_p;
-
-	memset(&msg, 0, sizeof(struct i2c_msg));
-
-	if (def_len <= 8) {
-		data_v = kzalloc(def_len, GFP_KERNEL);
-		if (data_v == NULL)
-			return -1;
-
-		memcpy(data_v, (uint8_t *)reg, reg_size);
-		msg.addr = i2c->addr;
-		msg.flags = 0;
-		msg.len = ((val_size & 0xff)<<8) | reg_size;
-		msg.buf = data_v;
-		msg.ext_flag = I2C_WR_FLAG | I2C_RS_FLAG;
-
-		ret = i2c_transfer(i2c->adapter, &msg, 1);
-
-		memcpy((uint8_t *)val, data_v, val_size);
-
-		kfree(data_v);
-	} else {
-		data_v = dma_alloc_coherent(&(i2c->adapter->dev), def_len, &dma_buf_p,
-					    GFP_KERNEL|GFP_DMA32);
-		if (!data_v)
-			return -1;
-
-		memcpy(data_v, (uint8_t *)reg, reg_size);
-		msg.addr = i2c->addr;
-		msg.flags = 0;
-		msg.len = ((val_size & 0xff)<<8) | reg_size;
-		msg.buf = (void *)((uintptr_t)dma_buf_p);
-		msg.ext_flag = I2C_WR_FLAG | I2C_RS_FLAG | I2C_DMA_FLAG;
-
-		ret = i2c_transfer(i2c->adapter, &msg, 1);
-
-		memcpy((uint8_t *)val, data_v, val_size);
-
-		dma_free_coherent(&(i2c->adapter->dev), def_len, data_v, dma_buf_p);
-	}
-
-	if (ret == 1)
-		return 0;
-	else if (ret < 0)
-		return ret;
-	else
-		return -EIO;
-}
-#else
 static int regmap_i2c_read(void *context,
 			   const void *reg, size_t reg_size,
 			   void *val, size_t val_size)
@@ -273,7 +200,6 @@ static int regmap_i2c_read(void *context,
 	else
 		return -EIO;
 }
-#endif
 
 static struct regmap_bus regmap_i2c = {
 	.write = regmap_i2c_write,
@@ -283,15 +209,71 @@ static struct regmap_bus regmap_i2c = {
 	.val_format_endian_default = REGMAP_ENDIAN_BIG,
 };
 
+static int regmap_i2c_smbus_i2c_write(void *context, const void *data,
+				      size_t count)
+{
+	struct device *dev = context;
+	struct i2c_client *i2c = to_i2c_client(dev);
+
+	if (count < 1)
+		return -EINVAL;
+	if (count >= I2C_SMBUS_BLOCK_MAX)
+		return -E2BIG;
+
+	--count;
+	return i2c_smbus_write_i2c_block_data(i2c, ((u8 *)data)[0], count,
+					      ((u8 *)data + 1));
+}
+
+static int regmap_i2c_smbus_i2c_read(void *context, const void *reg,
+				     size_t reg_size, void *val,
+				     size_t val_size)
+{
+	struct device *dev = context;
+	struct i2c_client *i2c = to_i2c_client(dev);
+	int ret;
+
+	if (reg_size != 1 || val_size < 1)
+		return -EINVAL;
+	if (val_size >= I2C_SMBUS_BLOCK_MAX)
+		return -E2BIG;
+
+	ret = i2c_smbus_read_i2c_block_data(i2c, ((u8 *)reg)[0], val_size, val);
+	if (ret == val_size)
+		return 0;
+	else if (ret < 0)
+		return ret;
+	else
+		return -EIO;
+}
+
+static struct regmap_bus regmap_i2c_smbus_i2c_block = {
+	.write = regmap_i2c_smbus_i2c_write,
+	.read = regmap_i2c_smbus_i2c_read,
+	.max_raw_read = I2C_SMBUS_BLOCK_MAX,
+	.max_raw_write = I2C_SMBUS_BLOCK_MAX,
+};
+
 static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 					const struct regmap_config *config)
 {
 	if (i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C))
 		return &regmap_i2c;
+	else if (config->val_bits == 8 && config->reg_bits == 8 &&
+		 i2c_check_functionality(i2c->adapter,
+					 I2C_FUNC_SMBUS_I2C_BLOCK))
+		return &regmap_i2c_smbus_i2c_block;
 	else if (config->val_bits == 16 && config->reg_bits == 8 &&
 		 i2c_check_functionality(i2c->adapter,
 					 I2C_FUNC_SMBUS_WORD_DATA))
-		return &regmap_smbus_word;
+		switch (regmap_get_val_endian(&i2c->dev, NULL, config)) {
+		case REGMAP_ENDIAN_LITTLE:
+			return &regmap_smbus_word;
+		case REGMAP_ENDIAN_BIG:
+			return &regmap_smbus_word_swapped;
+		default:		/* everything else is not supported */
+			break;
+		}
 	else if (config->val_bits == 8 && config->reg_bits == 8 &&
 		 i2c_check_functionality(i2c->adapter,
 					 I2C_FUNC_SMBUS_BYTE_DATA))
@@ -300,47 +282,34 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 	return ERR_PTR(-ENOTSUPP);
 }
 
-/**
- * regmap_init_i2c(): Initialise register map
- *
- * @i2c: Device that will be interacted with
- * @config: Configuration for register map
- *
- * The return value will be an ERR_PTR() on error or a valid pointer to
- * a struct regmap.
- */
-struct regmap *regmap_init_i2c(struct i2c_client *i2c,
-			       const struct regmap_config *config)
+struct regmap *__regmap_init_i2c(struct i2c_client *i2c,
+				 const struct regmap_config *config,
+				 struct lock_class_key *lock_key,
+				 const char *lock_name)
 {
 	const struct regmap_bus *bus = regmap_get_i2c_bus(i2c, config);
 
 	if (IS_ERR(bus))
 		return ERR_CAST(bus);
 
-	return regmap_init(&i2c->dev, bus, &i2c->dev, config);
+	return __regmap_init(&i2c->dev, bus, &i2c->dev, config,
+			     lock_key, lock_name);
 }
-EXPORT_SYMBOL_GPL(regmap_init_i2c);
+EXPORT_SYMBOL_GPL(__regmap_init_i2c);
 
-/**
- * devm_regmap_init_i2c(): Initialise managed register map
- *
- * @i2c: Device that will be interacted with
- * @config: Configuration for register map
- *
- * The return value will be an ERR_PTR() on error or a valid pointer
- * to a struct regmap.  The regmap will be automatically freed by the
- * device management code.
- */
-struct regmap *devm_regmap_init_i2c(struct i2c_client *i2c,
-				    const struct regmap_config *config)
+struct regmap *__devm_regmap_init_i2c(struct i2c_client *i2c,
+				      const struct regmap_config *config,
+				      struct lock_class_key *lock_key,
+				      const char *lock_name)
 {
 	const struct regmap_bus *bus = regmap_get_i2c_bus(i2c, config);
 
 	if (IS_ERR(bus))
 		return ERR_CAST(bus);
 
-	return devm_regmap_init(&i2c->dev, bus, &i2c->dev, config);
+	return __devm_regmap_init(&i2c->dev, bus, &i2c->dev, config,
+				  lock_key, lock_name);
 }
-EXPORT_SYMBOL_GPL(devm_regmap_init_i2c);
+EXPORT_SYMBOL_GPL(__devm_regmap_init_i2c);
 
 MODULE_LICENSE("GPL");

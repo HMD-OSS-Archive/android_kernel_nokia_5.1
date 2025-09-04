@@ -1,7 +1,7 @@
-/*
- * Copyright (c) 2017 FIH Mobile Limited.
- */
-
+/**+===========================================================================
+  File: proc_info.c
+============================================================================+*/
+#include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/seq_file.h>
@@ -11,51 +11,61 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/delay.h>
+#include <linux/delay.h> 
 #include <linux/kthread.h>
-#include <linux/unistd.h>
-#include <linux/stat.h>
-#include <linux/fs.h>
 #include <linux/io.h>
+//20180331add fver patches for AB partition BEGIN
 #include <asm/setup.h>
-#include "../misc/mediatek/include/mt-plat/mt_boot_reason.h"
-#include "../misc/mediatek/aee/common/aee-common.h"
-
-#define FALSE  0
-#define TRUE   1
+//20180331add fver patches for AB partition END
+#include "../misc/mediatek/pmic/mt6370/inc/mt6370_pmu_bled.h"
+#define FALSE 	0
+#define TRUE 	1
 
 #define SIZE_512M  (512*1024)  //kB
 #define SIZE_1GB   (1024*1024) //kB
 #define SIZE_2GB   (2048*1024) //kB
 #define SIZE_3GB   (3072*1024) //kB
 #define SIZE_4GB   (4096*1024) //kB
+#define SIZE_6GB   (6144*1024) //kB
+#define SIZE_8GB   (8192*1024) //kB
 
 #define MEMINFO "/proc/meminfo"
 
+
 extern unsigned short fih_hwid;
-extern char *saved_command_line;
+extern char fih_cpu_info[32];
+
 extern int sec_schip_enabled(void);
 
 //extern unsigned short fih_gethwid(void);
 extern unsigned short fih_get_memory_type(void);
-extern unsigned short fih_get_memory_vendor(void);
+extern unsigned short fih_get_memory_vendor(void); 
 extern unsigned long long fih_get_emmc_size(void);
 extern unsigned long long fih_get_emmc_usersize(void);
-extern unsigned int fih_get_ramtest_result(void);
-
-char nfc_hw_support[16] = {'\0'};
-struct mutex proc_read_mutex;
+extern unsigned int fih_get_ramtest_result(void); //sun +
+extern unsigned short fih_get_simslot(void);
+extern uint32_t mt6370_max_bled_brightness_get(void);
+extern int mt6370_max_bled_brightness_set(uint32_t fs_curr);
 
 static char causeStr[99];
+//20180331add fver patches for AB partition BEGIN
 static char slot_suffix[8];
+//20180331add fver patches for AB partition END
 static char *fver_preload;
 static int fver_len = 65536;
 static int fver_open_times = 0;
 static char sim_state='\0';
-static char str_imei[32];
-static char str_imei2[32];
+static char str_imei[20];
+static char str_imei2[20];
 static char str_pid[33];
 static char str_uicolor[20];
+static char *wifimac_preload;
+static int wifimac_len = 20;
+static int wifimac_open_times = 0;
+static char str_wifimac[20];
+static char *btmac_preload;
+static int btmac_len = 20;
+static char str_btmac[20];
 
 static char fih_emmc_info[20];
 static char fih_emmc_vendor[10];
@@ -70,19 +80,19 @@ static unsigned long long mtk_emmc_size = 0;
 static char *root_status_load;
 static int root_status_len = 4096;
 static bool open_already = 0;
-static int root_cda_user_flag = 0;
 
 int devmodel_init = 0;
-static char str_project[3];
-static int sim_card_slot;
+static char str_project[16];
+static char str_hwmodel[4];
+static int sim_card_slot = 2;
 
 #define FIH_PROC_DIR   "AllHWList"
 #define FIH_PROC_PATH  "AllHWList/draminfo"
-#define FIH_PROC_TESTRESULT_PATH  "dramtest_result" //"AllHWList/dramtest_result"
+#define FIH_PROC_TESTRESULT_PATH  "dramtest_result" //"AllHWList/dramtest_result"// add for memory test in RUNIN
 #define FIH_PROC_SIZE  32
 
 static char fih_proc_data[FIH_PROC_SIZE] = "";
-static char fih_proc_test_result[FIH_PROC_SIZE] = {0};
+static char fih_proc_test_result[FIH_PROC_SIZE] = {0};// add for memory test in RUNIN
 
 #define FIH_MEM_ST_HEAD  0x6400000  /* HFME */
 #define FIH_MEM_ST_TAIL  0x1400000  /* EMFT */
@@ -90,54 +100,57 @@ static char fih_proc_test_result[FIH_PROC_SIZE] = {0};
 #define FIH_MEM_MEM_ADDR 0x6400000
 #define FIH_MEM_MEM_SIZE 0x1400000
 
-#define IMEI_SIZE        16
-#define IMEI_OFFSET (4096+4096+16) //E2P+CDA+BSET
-
-#define FQC_DEFAULT_PATH "system/etc/fqc_ds_ES2.xml"
+extern unsigned int g_fih_panelid;
 
 struct st_fih_mem {
 	unsigned int head;
 	unsigned int mfr_id;
 	unsigned int ddr_type;
 	unsigned int size_mb;
-	unsigned int test_result;
+	unsigned int test_result;// add for memory test in RUNIN
 	unsigned int tail;
 };
 struct st_fih_mem dram;
 
 static void fih_dram_setup_MEM(void)
 {
-	char *buf = fih_proc_data;
-	struct st_fih_mem *p;
 	char size[16];
+	struct st_fih_mem *p;
+	char *buf = fih_proc_data;
 
 	/* get dram in mem which lk write */
 	p = (struct st_fih_mem *)ioremap(FIH_MEM_MEM_ADDR, sizeof(struct st_fih_mem));
-	if (p == NULL) {
+
+	if (p == NULL)
+	{
 		pr_err("%s: ioremap fail\n", __func__);
 		dram.head = FIH_MEM_ST_HEAD;
 		dram.mfr_id = 0;
 		dram.ddr_type = 0;
 		dram.size_mb = 0;
-		dram.test_result = 0;
+		dram.test_result = 0;// add for memory test in RUNIN
 		dram.tail = FIH_MEM_ST_TAIL;
-	} else {
+	}
+	else
+	{
 		memcpy(&dram, p, sizeof(struct st_fih_mem));
 		iounmap(p);
 	}
 
 	/* check magic of dram */
-	if ((dram.head != FIH_MEM_ST_HEAD)||(dram.tail != FIH_MEM_ST_TAIL)) {
+	if ((dram.head != FIH_MEM_ST_HEAD)||(dram.tail != FIH_MEM_ST_TAIL))
+	{
 		pr_err("%s: bad magic\n", __func__);
 		dram.head = FIH_MEM_ST_HEAD;
 		dram.mfr_id = 0;
 		dram.ddr_type = 0;
 		dram.size_mb = 0;
-		dram.test_result = 0;//HCLai add for memory test in RUNIN
+		dram.test_result = 0;// add for memory test in RUNIN
 		dram.tail = FIH_MEM_ST_TAIL;
 	}
 
-	switch (dram.mfr_id) {
+	switch (dram.mfr_id)
+	{
 		case 0x01: strcat(buf, "SAMSUNG"); break;
 		case 0x03: strcat(buf, "ELPIDA"); break;
 		case 0x06: strcat(buf, "SK-HYNIX"); break;
@@ -145,84 +158,109 @@ static void fih_dram_setup_MEM(void)
 		default: strcat(buf, "UNKNOWN"); break;
 	}
 
-	switch (dram.ddr_type) {
+	switch (dram.ddr_type)
+	{
 		case 2: strcat(buf, " LPDDR2"); break;
 		case 5: strcat(buf, " LPDDR3"); break;
 		default: strcat(buf, " LPDDRX"); break;
 	}
 
 	snprintf(size, sizeof(size), " %dMB", dram.size_mb);
-	strcat(buf, size);
+	strcat(buf, size); 
 
+	// add for memory test in RUNIN START
 	//To-Do: use switch case to identify PASS/FAIL
 	snprintf(fih_proc_test_result, sizeof(fih_proc_test_result), "%d", dram.test_result);
+	printk("BBox::UPD;101::%s\n", buf);
+	// add for memory test in RUNIN END
 }
+//sun + for runin
 
-static int draminfo_test_result_wtite(struct file *flip,const char __user *buf,
-                                      size_t count,loff_t *f_pos)
+//static int draminfo_test_result_wtite(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
+static ssize_t draminfo_test_result_wtite(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+
+    ssize_t ret;
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
+
 #if 0
-		struct st_fih_mem *mem = (struct st_fih_mem *)FIH_MEM_MEM_ADDR;
+	struct st_fih_mem *mem = (struct st_fih_mem *)FIH_MEM_MEM_ADDR;
 	//dprintf(INFO, "fih_mem_exit and set mem address %p\n",mem);
-	 if (FIH_MEM_MEM_SIZE < sizeof(struct st_fih_mem)) {
+	if (FIH_MEM_MEM_SIZE < sizeof(struct st_fih_mem))
+	{
 		printk("%s: memory is too small\n", __func__);
 		return ;
 	}
-	strcpy(mem->test_result,temp);
+	strcpy(mem->test_result,temp);  
 #endif
+
 	memset(fih_proc_test_result, 0, sizeof(fih_proc_test_result));
 	strcpy(fih_proc_test_result, temp);
-	return count;
-	//snprintf(fih_proc_test_result, sizeof(fih_proc_test_result), "%d",
-  //simple_strtol(temp,NULL,0));
+
+    ret=count;
+//	return count;
+	//snprintf(fih_proc_test_result, sizeof(fih_proc_test_result), "%d", simple_strtol(temp,NULL,0));
+    return ret;
 }
 
+//20180331 add fver patches for AB partition BEGIN
 static int __init  slot_suffix_param(char *line)
 {
         strlcpy(slot_suffix, line, sizeof(slot_suffix));
         return 1;
 }
 __setup("androidboot.slot_suffix=", slot_suffix_param);
+//20180331 add fver patches for AB partition END
 
-
+/**************************************************************************/
 static int fver_show(struct seq_file *s, void *unused)
 {
 	struct file *fver_filp = NULL;
+//20180331 add fver patches for AB partition BEGIN
 	char str_fver[128];
+//20180331 add fver patches for AB partition END
 	mm_segment_t oldfs;
+	loff_t pos = 0;
 
+//20180331 add fver patches for AB partition BEGIN
 	memset(str_fver, 0, 128);
 	strcpy(str_fver, fver_BLOCK);
 	strcat(str_fver, slot_suffix);
+//20180331 add fver patches for AB partition END
 
 	if(!fver_open_times)
 	{
 		oldfs = get_fs();
 		set_fs(KERNEL_DS);
+//20180331 add fver patches for AB partition BEGIN
+		//fver_filp = filp_open(fver_BLOCK, O_RDONLY, 0);
 		fver_filp = filp_open(str_fver, O_RDONLY, 0);
+//20180331 add fver patches for AB partition END
 
 		if(!IS_ERR(fver_filp))
 		{
-			fver_filp->f_op->read(fver_filp, fver_preload,
-                                              sizeof(char)*fver_len, &fver_filp->f_pos);
+			//fver_filp->f_op->read(fver_filp, fver_preload, sizeof(char)*fver_len, &fver_filp->f_pos);
+			vfs_read(fver_filp, (char __user *)fver_preload, sizeof(char)*fver_len, &pos);
+                        printk("fver read OK!!!!!!!\n");
 			filp_close(fver_filp, NULL);
 			fver_open_times++;
-			seq_printf(s, "%s\n", fver_preload);
+	                set_fs(oldfs);
 		}
 		else
 		{
+//20180331 add fver patches for AB partition BEGIN
+			//printk("[dw]open %s fail\n", fver_BLOCK);
 			printk("[dw]open %s fail\n", str_fver);
+	                set_fs(oldfs);
+			return 0;
+//20180331 add fver patches for AB partition END
 		}
 
-		set_fs(oldfs);
 	}
-	else
-	{
-		seq_printf(s, "%s\n", fver_preload);
-	}
+
+	seq_printf(s, "%s\n", fver_preload);
 
 	return 0;
 }
@@ -235,10 +273,9 @@ static int model_show(struct seq_file *s, void *unused)
 	{
 		memset(str_project, 0, sizeof(str_project));
 		strcpy(str_project, model[hw_project].model_name);
-
-		printk("%s: str_project = %s\n", __func__, str_project);
+		devmodel_init++;
 	}
-
+	printk("%s: str_project = %s\n", __func__, str_project);
 	seq_printf(s, "%s\n", str_project);
 
 	return 0;
@@ -247,10 +284,38 @@ static int model_show(struct seq_file *s, void *unused)
 static int hwmodel_show(struct seq_file *s, void *unused)
 {
 	unsigned short hw_project = (fih_hwid >> 8) & 0x000F;
+	unsigned short hw_rfband = fih_hwid & 0x000F;
+        unsigned short hw_phase = (fih_hwid >> 4) & 0x000F;
 
+	memset(str_hwmodel, 0, sizeof(str_hwmodel));
+
+	if(hw_phase>0x08)
+	{
+		switch (hw_rfband)
+                {
+                case 0x01: strcat(str_hwmodel, "PPA"); break;
+                case 0x02: strcat(str_hwmodel, "PPL"); break;
+                case 0x03: strcat(str_hwmodel, "PPI"); break;
+                case 0x04: strcat(str_hwmodel, "PPC"); break;
+                default: strcat(str_hwmodel, "ERR"); break;
+                }
+	}
+	else
+	{
+		switch (hw_rfband)
+		{
+		case 0x01: strcat(str_hwmodel, "PDA"); break;
+		case 0x02: strcat(str_hwmodel, "PDL"); break;
+		case 0x03: strcat(str_hwmodel, "PDI"); break;
+		case 0x04: strcat(str_hwmodel, "PDC"); break;
+	        default: strcat(str_hwmodel, "ERR"); break;
+		}
+	}
 	printk("%s: model_name = %s\n", __func__, model[hw_project].model_name);
+	printk("%s: str_hwmodel = %s\n", __func__, str_hwmodel);
 
-	seq_printf(s, "%s\n", model[hw_project].model_name);
+	//seq_printf(s, "%s\n", model[hw_project].model_name);
+	seq_printf(s, "%s\n", str_hwmodel);
 
 	return 0;
 }
@@ -261,7 +326,8 @@ static void get_emmc_vendor_and_size(void)
 {
 	u8 samsung_cid = 0x15;
 	u8 hynix_cid = 0x90;
-	u8 micron_cid = 0xfe;
+	// Sun
+	u8 micron_cid = 0x13;	// 0xfe
 	u8 sandisk_cid = 0x45;
 	u8 kingston_cid = 0x70;
 	u8 toshiba_cid = 0x11;
@@ -271,38 +337,38 @@ static void get_emmc_vendor_and_size(void)
 	num = (fih_hwid >> 4) & 0x00F;
 	hw_preload = (fih_hwid >> 8) & 0x00F;
 
-	memset(fih_emmc_info, 0, 20);
-	memset(fih_emmc_vendor, 0, 10);
-	memset(fih_emmc_size, 0, 5);
+	memset(fih_emmc_info, 0, sizeof(fih_emmc_info));
+	memset(fih_emmc_vendor, 0, sizeof(fih_emmc_vendor));
+	memset(fih_emmc_size, 0, sizeof(fih_emmc_size));
 
 	if (memcmp(mem_cid, &samsung_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Samsung");
+		strcpy(fih_emmc_vendor, "Samsung ");
 	}
 	else if (memcmp(mem_cid, &hynix_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Hynix");
+		strcpy(fih_emmc_vendor, "Hynix ");
 	}
 	else if (memcmp(mem_cid, &micron_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Micron");
+		strcpy(fih_emmc_vendor, "Micron ");
 	}
 	else if (memcmp(mem_cid, &sandisk_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Sandisk");
+		strcpy(fih_emmc_vendor, "Sandisk ");
 	}
 	else if (memcmp(mem_cid, &kingston_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Kingston");
+		strcpy(fih_emmc_vendor, "Kingston ");
 	}
 	else if (memcmp(mem_cid, &toshiba_cid, 1) == 0)
 	{
-		strcpy(fih_emmc_vendor, "Toshiba");
+		strcpy(fih_emmc_vendor, "Toshiba ");
 	}
 
 	if(mtk_emmc_size == 0)
 	{
-		mtk_emmc_size = fih_get_emmc_size();
+		mtk_emmc_size = fih_get_emmc_size(); 
 	}
 
 	if(mtk_emmc_size/(SIZE_1GB_EMMC) < 4)
@@ -321,10 +387,10 @@ static void get_emmc_vendor_and_size(void)
 	{
 		strcpy(fih_emmc_size,"32GB");
 	}
-	else if(mtk_emmc_size/(SIZE_1GB_EMMC) > 0x20 && mtk_emmc_size/(SIZE_1GB_EMMC) <= 0x40)
-	{
-		strcpy(fih_emmc_size,"64GB");
-	}
+    else if(mtk_emmc_size/(SIZE_1GB_EMMC) > 0x20 && mtk_emmc_size/(SIZE_1GB_EMMC) <= 0x40)
+    {
+        strcpy(fih_emmc_size,"64GB");
+    }
 
 	strcpy(fih_emmc_info, fih_emmc_vendor);
 	strcat(fih_emmc_info, fih_emmc_size);
@@ -351,6 +417,7 @@ static bool fih_read_meminfo(char *temp, int size)
 	struct file *fdata_filp = NULL;
 	mm_segment_t oldfs;
 	bool ret = FALSE;
+	loff_t pos = 0;
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -360,8 +427,9 @@ static bool fih_read_meminfo(char *temp, int size)
 	if(!IS_ERR(fdata_filp))
 	{
 		memset(temp, 0, size);
-		fdata_filp->f_op->read(fdata_filp, temp, size, &fdata_filp->f_pos);
-
+		//fdata_filp->f_op->read(fdata_filp, temp, size, &fdata_filp->f_pos);
+                vfs_read(fdata_filp, (char __user *)temp, size-1, &pos);
+		printk("meminfo read OK!!!!!!!\n");
 		if(0 == strcmp(temp, "0"))
 		{
 			ret = FALSE;
@@ -384,34 +452,33 @@ static bool fih_read_meminfo(char *temp, int size)
 	return ret;
 }
 
+/*qyf end*/
 static int dram_show(struct seq_file *s, void *unused)
 {
 	char info[30];
-	char size[10];
+	char size[30];
 
 	int i = 0, count = 0, final = 0;
-
-	unsigned short hw_preload = 0, dram_num = 0;
+	unsigned short hw_preload = 0;
 	unsigned int memory_type = 0, ddr_verdor = 0;
 
 	memory_type = fih_get_memory_type();
 	ddr_verdor = fih_get_memory_vendor();
 
-	dram_num = (fih_hwid >> 4) & 0x00F;
 	hw_preload = (fih_hwid >> 8) & 0x00F;
 
-	memset(fih_dram_info, 0, 20);
-	memset(fih_dram_vendor, 0, 10);
-	memset(fih_dram_size, 0, 5);
+	memset(fih_dram_info, 0, sizeof(fih_dram_info));
+	memset(fih_dram_vendor, 0, sizeof(fih_dram_vendor));
+	memset(fih_dram_size, 0, sizeof(fih_dram_size));
 
 	printk("qyf memory_type = 0x%x, ddr_verdor =0x%x\n", memory_type, ddr_verdor);
 
-	/* nuc start for fqc info show*/
+	/* nuc start for fqc info show @07/03/2013 */
 	if((memory_type & 0xF00) != 0)   //for EMCP project:H1M
 	{
+		get_emmc_vendor_and_size();
 		printk("qyf111 fih_emmc_vendor = %s\n", fih_emmc_vendor);
 
-		get_emmc_vendor_and_size();
 		strcpy(fih_dram_vendor, fih_emmc_vendor);
 	}
 	else
@@ -420,37 +487,42 @@ static int dram_show(struct seq_file *s, void *unused)
 
 		if(ddr_verdor == 0x1)
 		{
-			strcpy(fih_dram_vendor, "Samsung");
+			strcpy(fih_dram_vendor, "Samsung ");
 		}
 		else if(ddr_verdor == 0x3)
 		{
-			strcpy(fih_dram_vendor, "Elpida");
+			strcpy(fih_dram_vendor, "Elpida ");
 		}
 		else if(ddr_verdor == 0x5)
 		{
-			strcpy(fih_dram_vendor, "Kingston");
+			strcpy(fih_dram_vendor, "Kingston ");
 		}
 		else if(ddr_verdor == 0x6)
 		{
-			strcpy(fih_dram_vendor, "Hynix");
+			strcpy(fih_dram_vendor, "Hynix ");
 		}
 	}
 
-	memset(info, 0, 30);
-	memset(size, 0, 10);
-	fih_read_meminfo(info, 30);
+	memset(info, 0, sizeof(info));
+	memset(size, 0, sizeof(size));
+	fih_read_meminfo(info, sizeof(info));
 
 	printk("%s: qyf info = %s \n", __func__, info);
 
-	for(i = 0; i < 30; i++)
+	for(i = 0; i < sizeof(info); i++)
 	{
 		//printk("%s: qyf info[%d] = %d \n", __func__,  i, info[i]);
+
 		if(info[i] >= '0' && info[i] <= '9')
 		{
 			size[count] = info[i];
 
 			//printk("%s: qyf size[%d] = %d \n", __func__, count, size[count]);
 			count++;
+		}
+		else if(count > 0)    //Terry
+		{				
+			break;    //No need to read more
 		}
 	}
 	//printk("%s: qyf count = %d \n", __func__, count);
@@ -470,6 +542,11 @@ static int dram_show(struct seq_file *s, void *unused)
 		strcpy(fih_dram_size, "3GB");
 	else if(final >= SIZE_3GB && final <= SIZE_4GB)
 		strcpy(fih_dram_size, "4GB");
+        else if(final >= SIZE_4GB && final <= SIZE_6GB)
+                strcpy(fih_dram_size, "6GB");
+        else if(final >= SIZE_6GB && final <= SIZE_8GB)
+                strcpy(fih_dram_size, "8GB");
+
 
 	printk("qyf fih_dram_vendor = %s, fih_dram_size = %s\n", fih_dram_vendor, fih_dram_size);
 
@@ -487,12 +564,14 @@ static int dram_show(struct seq_file *s, void *unused)
 static int emmc_show(struct seq_file *s, void *unused)
 {
 	extern u8 mem_cid[9];
+
 	unsigned short hw_preload = 0,emmc_num = 0;
 
 	emmc_num = (fih_hwid >> 4) & 0x00F;
 	hw_preload = (fih_hwid >> 8) & 0x00F;
 
-	get_emmc_vendor_and_size();  /* nuc start for fqc info show */
+	get_emmc_vendor_and_size();		/* nuc start for fqc info show */
+
 	seq_printf(s, "%s\n", model[hw_preload].emmc);
 
 	return 0;
@@ -504,9 +583,12 @@ static int poweroncause_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int poweroncause_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int poweroncause_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t poweroncause_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char buff[25] = {'\0'};
+
+    ssize_t ret;
 
 	if(copy_from_user(buff, buf, count))
 		return -EFAULT;
@@ -514,15 +596,18 @@ static int poweroncause_write(struct file *flip, const char __user *buf, size_t 
 	printk("kernel: poweroncause virtual file created.\n");
 
 	strcpy(causeStr, buff);
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
 static int cpu_show(struct seq_file *s, void *unused)
 {
-	unsigned short hw_project = (fih_hwid >> 8) & 0x00F;
+	//unsigned short hw_project = (fih_hwid >> 8) & 0x00F;
 
-	printk("%s: cpu_name = %s\n", __func__, model[hw_project].cpu_name);
-	seq_printf(s,"%s\n", model[hw_project].cpu_name);
+	printk("%s: cpu_name = %s\n", __func__, fih_cpu_info);//model[hw_project].cpu_name);
+
+	seq_printf(s,"%s\n", fih_cpu_info);//model[hw_project].cpu_name);
 
 	return 0;
 }
@@ -531,7 +616,7 @@ static char fih_lcm_info[256] = "unknown";
 
 static int lcm_show(struct seq_file *s, void *unused)
 {
-	//add for ZM1 FQC lcm info.
+	//add for ZM1 FQC lcm info by alex 20151106.
 	if (!strcmp(fih_lcm_info, "nt35521_hd720_dsi_vdo_innolux"))
 	{
 		seq_printf(s, "NT35521 5.0' 720P\n");
@@ -545,13 +630,14 @@ static int lcm_show(struct seq_file *s, void *unused)
 }
 
 static char fih_touch[32] = "unknown";
-
+/*
 void fih_info_set_touch(char *info)
 {
 	printk("touch: fih_info_set_touch.\n");
 	strcpy(fih_touch, info);
 }
-
+*/
+/*
 static int fih_touch_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
 	int len;
@@ -559,7 +645,7 @@ static int fih_touch_read_proc(char *page, char **start, off_t off, int count, i
 	printk("touch: allhwlist touch virtual file read.\n");
 	return snprintf(page, PAGE_SIZE, "%s\n", fih_touch);
 }
-
+*/
 
 void fih_info_set_lcm(char *info)
 {
@@ -613,17 +699,21 @@ static int sim2_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int sim_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int sim_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t sim_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[25] = {'\0'};
+
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
 
 	if((temp[0] - '0') < 4)
 		sim_state = temp[0];
-
-	return count;
+    ret = count;
+//	return count;
+    return ret;
 }
 
 static int imei_show(struct seq_file *s, void *unused)
@@ -691,9 +781,11 @@ static int pid_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int pid_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int pid_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t pid_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -703,13 +795,18 @@ static int pid_write(struct file *flip, const char __user *buf, size_t count, lo
 	memset(str_pid, 0, sizeof(str_pid));
 	strcpy(str_pid, temp);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
-static int model_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+#if 0
+//static int model_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t model_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[4] = {0};
 
+    ssize_t ret;
 	//printk("model_write enter count = %d\n", count);
 	if(copy_from_user(temp, buf, (count>3?3:count)))
 		return -EFAULT;
@@ -720,8 +817,13 @@ static int model_write(struct file *flip, const char __user *buf, size_t count, 
 	strncpy(str_project, temp, (count > 3 ? 3 : count));
 
 	devmodel_init = 1;
-	return count;
+    ret=count;
+//	return count;
+
+    return ret;
+
 }
+#endif
 
 static int touch_show(struct seq_file *s, void *unused)
 {
@@ -731,9 +833,11 @@ static int touch_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int touch_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int 
+static ssize_t touch_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -743,7 +847,9 @@ static int touch_write(struct file *flip, const char __user *buf, size_t count, 
 	memset(fih_touch, 0, sizeof(fih_touch));
 	strcpy(fih_touch, temp);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
 static int lcm_info_show(struct seq_file *s, void *unused)
@@ -754,9 +860,11 @@ static int lcm_info_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int lcm_info_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int 
+static ssize_t lcm_info_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[256] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -766,9 +874,12 @@ static int lcm_info_write(struct file *flip, const char __user *buf, size_t coun
 	memset(fih_lcm_info, 0, sizeof(fih_lcm_info));
 	strcpy(fih_lcm_info, temp);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
+//sun +
 #if 0
 static int ram_result_show(struct seq_file *s, void *unused)
 {
@@ -778,123 +889,97 @@ static int ram_result_show(struct seq_file *s, void *unused)
         return 0;
 }
 #endif
+//sun +
 
 static int fih_proc_test_result_show(struct seq_file *m, void *v)
 {
 	printk("fih_proc_test_result_show enter\n");
-	//sunjie seq_printf(m, "%s\n", fih_proc_test_result);
+	// seq_printf(m, "%s\n", fih_proc_test_result);
 	sprintf(fih_proc_test_result, "%d\n", fih_get_ramtest_result());
 	seq_printf(m, "%s\n", fih_proc_test_result);
 	return 0;
 }
-
 static int draminfo_test_result_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, fih_proc_test_result_show, &inode->i_private);
 };
 
-static void fih_imei_setup(int flag, char *info)
-{
-	struct file *pid_filp = NULL;
-	mm_segment_t oldfs;
-
-	oldfs = get_fs();
-	set_fs(KERNEL_DS);
-	pid_filp = filp_open(DEVICEINFO_LOCATION, O_RDWR, S_IRWXU);
-
-	if (IS_ERR(pid_filp)) {
-		printk("[%s] Fail to open %s\n", __func__, DEVICEINFO_LOCATION);
-		set_fs(oldfs);
-		return;
-	}
-
-	if(flag == 1) {
-		memset(str_imei, 0, sizeof(str_imei));
-		snprintf(str_imei, sizeof(str_imei), "%s", info);
-		pid_filp->f_op->llseek(pid_filp, IMEI_OFFSET, SEEK_SET);
-		pid_filp->f_op->write(pid_filp, (char *)str_imei, IMEI_SIZE, &pid_filp->f_pos);
-	} else if(flag == 2) {
-		memset(str_imei2, 0, sizeof(str_imei2));
-		snprintf(str_imei2, sizeof(str_imei2), "%s", info);
-		pid_filp->f_op->llseek(pid_filp, IMEI_OFFSET+IMEI_SIZE, SEEK_SET);
-		pid_filp->f_op->write(pid_filp, (char *)str_imei2, IMEI_SIZE, &pid_filp->f_pos);
-	} else {
-		printk("[%s] Invalid IMEI\n", __func__);
-	}
-
-	vfs_fsync(pid_filp, 0);
-	filp_close(pid_filp, NULL);
-	set_fs(oldfs);
-	return;
-
-}
-
-static int imei_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
-{
-	char p_imei[32] = {0};
-
-	printk("[dw]imei_write enter\n");
-
-	if(count <=2)
-	{
-		pr_info("input node is NULL \n");
-		return -EFAULT;
-	}
-	if(copy_from_user(p_imei, buf, count))
-		return -EFAULT;
-
-	printk("[dw]imei_write = %s*\n", p_imei);
-
-	fih_imei_setup(1,p_imei);
-
-	return count;
-}
-
-static int imei2_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
-{
-	char p_imei[32] = {0};
-
-	printk("[dw]imei_write enter\n");
-
-	if(count <=2)
-	{
-		pr_info("input node is NULL \n");
-		return -EFAULT;
-	}
-	if(copy_from_user(p_imei, buf, count))
-		return -EFAULT;
-
-	printk("[dw]imei_write = %s*\n", p_imei);
-
-	fih_imei_setup(2,p_imei);
-
-	return count;
-}
-
-static int cavis_d_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int imei_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t imei_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[25] = {'\0'};
+
+    ssize_t ret;
+
+	printk("[dw]imei_write enter\n");
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
 
-	memset(temp+2, 0, sizeof(temp)-2);
+	printk("[dw]imei_write = %s*\n", temp);
+
+	memset(str_imei, 0, sizeof(str_imei));
+	strcpy(str_imei, temp);
+
+    ret=count;
+//	return count;
+    return ret;
+}
+
+//static int imei2_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t imei2_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	char temp[25] = {'\0'};
+
+    ssize_t ret;
+
+	printk("[dw]imei_write enter\n");
+
+	if(copy_from_user(temp, buf, count))
+		return -EFAULT;
+
+	printk("[dw]imei_write = %s*\n", temp);
+
+	memset(str_imei2, 0, sizeof(str_imei2));
+	strcpy(str_imei2, temp);
+
+    ret=count;
+//	return count;
+    return ret;
+}
+
+//static int cavis_d_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t cavis_d_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	char temp[25] = {'\0'};
+    ssize_t ret;
+
+	if(copy_from_user(temp, buf, count))
+		return -EFAULT;
+
+	memset(temp+2, 0, sizeof(temp));
 	fih_write_CAVIS(temp, 1);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
-static int cavis_r_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+//static int cavis_r_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+static ssize_t cavis_r_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[25] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
 
-	memset(temp+2,0,sizeof(temp)-2);
+	memset(temp+2,0,sizeof(temp));
 	fih_write_CAVIS(temp,2);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
 static int baseband_show(struct seq_file *s, void *unused)
@@ -944,8 +1029,8 @@ static int pcba_description_show(struct seq_file *s, void *unused)
 
 static int hwidv_show(struct seq_file *s, void *unused)
 {
-	int data[4];
-	int proj, phase, module, rawvalue;
+	//int data[4];
+	int proj, phase, module;//, rawvalue;
 
 	proj   = (fih_hwid >> 8) & 0x00F;
 	phase  = (fih_hwid >> 4) & 0x00F;
@@ -957,8 +1042,11 @@ static int hwidv_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
+// add audio [
 static int audio_info_show(struct seq_file *s, void *unused)
-{
+{    
+
+// modify for NE1 [
 #if 0
 	unsigned short project_id = (fih_hwid >> 8) & 0x00F;
 
@@ -967,20 +1055,27 @@ static int audio_info_show(struct seq_file *s, void *unused)
 
 	return 0;
 #endif
-	char audio_parameters_version[10] = "5719";
-	printk("audio parameters version: %s\n",audio_parameters_version);
-	seq_printf(s, "%s\n",audio_parameters_version );
+
+ 	char audio_parameters_version[10] = "6445";
+ 	printk("audio parameters version: %s\n",audio_parameters_version);
+	seq_printf(s, "%s\n",audio_parameters_version );	
 	return 0;
+// modify for NE1 ]
+
 }
 
-static int audio_info_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+/* @20150717 add for audio parameter version show*/
+//static int 
+static ssize_t audio_info_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
     unsigned short project_id = (fih_hwid >> 8) & 0x000F;
     char kbuf[6] = {'\0'};//default the audio version can not exceed 6 bit
 
     int i;
+    ssize_t ret;
     char *para = model[project_id].audio_para;
 
+    /* modify for G42 audio info show bug @20151215*/
     memset(model[project_id].audio_para, 0, 30);
     printk("audio_info_write para=%s,model[project_id].model_name=%s\n", para,model[project_id].model_name);
     //the default count is 6
@@ -995,11 +1090,13 @@ static int audio_info_write(struct file *flip, const char __user *buf, size_t co
         *(para + i) = *(kbuf + i);
     }
     *(para + i) = '\0';
-
+ 
     printk("audio_info_write  para=%s\n", para);
-    return count;
+    ret=count;
+//    return count;	
+    return ret;
 }
-//jennyxu add audio ]
+// add audio ]
 static int uicolor_show(struct seq_file *s,void *unused)
 {
 	printk("uicolor_show enter\n");
@@ -1007,9 +1104,11 @@ static int uicolor_show(struct seq_file *s,void *unused)
 	return 0;
 }
 
-static int uicolor_write(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
+//static int 
+static ssize_t uicolor_write(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -1018,34 +1117,53 @@ static int uicolor_write(struct file *flip,const char __user *buf,size_t count,l
 	strcpy(str_uicolor, temp);
 	//printk("[dw]str_uicolor=%s*\n",str_uicolor);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 };
 
 static int sim_card_slot_show(struct seq_file *s,void *unused)
 {
-	printk("sim_card_slot_show enter\n");
-        unsigned short project_id = 0;
+        unsigned short project_id = 0, phase_id = 0, rf_id = 0;
 
         project_id = (fih_hwid >> 8) & 0x00F;
+        phase_id   = (fih_hwid >> 4) & 0x00F;
+        rf_id  = fih_hwid & 0x00F;
 
-	printk("Current project id = %d, sim_num = %s.\n", project_id, model[project_id].sim_num);
-	if(0 == strncmp(model[project_id].sim_num, "Single", strlen("Single")))
-	{
-		seq_printf(s,"%d\n",1);
-		printk("set sim_card_slot = 1\n");
-		sim_card_slot = 1;
+
+	printk("sim_card_slot_show enter\n");
+
+
+	if((0x4 == project_id) &&(phase_id >= 0x7) &&((0x1 == rf_id) || (0x2 == rf_id)))
+                {
+                        printk("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!fih_get_simslot=%d\n",fih_get_simslot());
+                        if(1 == fih_get_simslot())
+                        {
+				sim_card_slot=1;
+                                printk("!!!!PVT SS sim_card_slot=1\n");
+                        }
+                        else if(2 == fih_get_simslot())
+                        {
+				sim_card_slot=2;
+                                printk("!!!!PVT SS sim_card_slot=2\n");
+                        }
+                }
+
+
+        if(0x5 == project_id)//for PDA
+        {
+		sim_card_slot=1;
 	}
-	else
-	{
-		seq_printf(s,"%d\n",2);
-		printk("set sim_card_slot = 2\n");
-	}
+	printk("!!!!!!!!!!sim_card_slot_show enter=%d\n",sim_card_slot);
+	seq_printf(s,"%d\n",sim_card_slot);
 	return 0;
 }
 
-static int sim_card_slot_write(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
+//static int 
+static ssize_t sim_card_slot_write(struct file *flip,const char __user *buf,size_t count,loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -1053,20 +1171,24 @@ static int sim_card_slot_write(struct file *flip,const char __user *buf,size_t c
 	sim_card_slot = simple_strtol(temp,NULL,0);
 	//printk("[dw]sim_card_slot=%d\n",sim_card_slot);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 };
 
 static int hwid_info_show(struct seq_file *s, void *unused)
-{
+{	
 	unsigned short hw_preload = 0, project_id = 0, phase_id = 0, module_id = 0;
 
 	project_id = (fih_hwid >> 8) & 0x00f;
 	phase_id   = (fih_hwid >> 4) & 0x00f;
 	module_id  = fih_hwid & 0x00f;
 
-	hw_preload = project_id * 100 + phase_id * 10 + module_id;
+//	hw_preload = project_id * 100 + phase_id * 10 + module_id;
+	hw_preload = (project_id << 8) | (phase_id << 4) | module_id;
+	seq_printf(s, "%x\n", hw_preload);
 
-	seq_printf(s, "%d\n", hw_preload);
+    return 0;
 }
 
 static int bandinfo_show(struct seq_file *s,void *unused)
@@ -1089,6 +1211,7 @@ static int root_status_info_show(struct seq_file *s, void *unused)
 {
 	mm_segment_t oldfs;
 	struct file *rs_filp = NULL;
+	loff_t pos = 0;
 
 	printk("root_status_info_show open_already = %d\n", open_already);
 
@@ -1101,18 +1224,20 @@ static int root_status_info_show(struct seq_file *s, void *unused)
 
 		if(!IS_ERR(rs_filp))
 		{
-			rs_filp->f_op->read(rs_filp, root_status_load,
-                                            sizeof(char)*root_status_len, &rs_filp->f_pos);
+			//rs_filp->f_op->read(rs_filp, root_status_load, sizeof(char)*root_status_len, &rs_filp->f_pos);
+			vfs_read(rs_filp, (char __user *)root_status_load, sizeof(char)*root_status_len, &pos);
+			printk("root_status_info_show read OK!!!!!!!\n");
 			filp_close(rs_filp, NULL);
-
 			open_already = TRUE;
+	                set_fs(oldfs);
 		}
 		else
 		{
 			printk("Open %s Failed\n", STATUSROOT_LOCATION);
+	                set_fs(oldfs);
+			return 0;
 		}
 
-		set_fs(oldfs);
 	}
 
 	seq_printf(s, "%s\n", root_status_load);
@@ -1121,7 +1246,7 @@ static int root_status_info_show(struct seq_file *s, void *unused)
 }
 
 static int efuse_enabled_show(struct seq_file *s, void *unused)
-{
+{	
 	int sec_en = 0xff;
 
 	sec_en = sec_schip_enabled();
@@ -1129,17 +1254,20 @@ static int efuse_enabled_show(struct seq_file *s, void *unused)
 	printk("efuse_enabled_show() sec_en = %d\n", sec_en);
 
 	seq_printf(s, "%d\n", sec_en);
+    return 0;
 }
 
 static int otg_last_flag_show(struct seq_file *s, void *unused)
 {
 	seq_printf(s, "%d\n", otg_last_flag);
+    return 0;
 }
 
-static int otg_last_flag_write(struct file *flip, const char __user *buf,
-                               size_t count, loff_t *f_pos)
+//static int 
+static ssize_t otg_last_flag_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	char temp[32] = {'\0'};
+    ssize_t ret;
 
 	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
@@ -1147,7 +1275,9 @@ static int otg_last_flag_write(struct file *flip, const char __user *buf,
 	otg_last_flag = simple_strtol(temp,NULL,0);
 	//printk("[dw]sim_card_slot=%d\n",sim_card_slot);
 
-	return count;
+    ret=count;
+//	return count;
+    return ret;
 }
 
 static int sim_number_show(struct seq_file *s, void *unused)
@@ -1165,114 +1295,390 @@ static int sim_number_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int nfc_support_show(struct seq_file *s, void *unused)
+static int fqc_xml_path_show(struct seq_file *s, void *unused)
 {
-	unsigned short project_id = 0, phase_id = 0, module_id = 0;
+	unsigned short project_id = 0, phase_id = 0, rf_id = 0;
 
 	project_id = (fih_hwid >> 8) & 0x00F;
 	phase_id   = (fih_hwid >> 4) & 0x00F;
-	module_id  = fih_hwid & 0x00F;
+	rf_id  = fih_hwid & 0x00F;
 
-	printk("%s: %s\n", __func__, model[project_id].nfc_support);
+//	printk("%s: %s\n", __func__, model[project_id].sim_num);
 
-	seq_printf(s, "%s\n", model[project_id].nfc_support);
+        if((0x4 == project_id) || (0x5 == project_id))//for PDA
+        {
+		if(0x4 == rf_id)
+		{
+			seq_printf(s, "%s\n", "vendor/etc/fqc_ds_PDC.xml");
+			printk("!!!!vendor/etc/fqc_ds_PDC.xml\n");
+		}
+		else if(0x3 == rf_id)
+	        {
+			seq_printf(s, "%s\n", "vendor/etc/fqc_ds_PDI.xml");
+			printk("!!!!vendor/etc/fqc_ds_PDI.xml\n");
+		}
+		else if((0x4 == project_id) && ((0x1 == rf_id) || (0x2 == rf_id)))
+		{
+			printk("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!fih_get_simslot=%d\n",fih_get_simslot());
+			if(1 == fih_get_simslot())
+			{
+				seq_printf(s, "%s\n", "vendor/etc/fqc_ss_PDA.xml");
+				printk("!!!!vendor/etc/fqc_ss_PDA.xml\n");
+			}
+			else if(2 == fih_get_simslot())
+			{
+				seq_printf(s, "%s\n", "vendor/etc/fqc_ds_PDA.xml");
+				printk("!!!!vendor/etc/fqc_ds_PDA.xml\n");
+			}
+		}
+		else if((0x5 == project_id) && ((0x1 == rf_id) || (0x2 == rf_id)))
+		{
+			seq_printf(s, "%s\n", "vendor/etc/fqc_ss_PDA.xml");
+			printk("!!!!vendor/etc/fqc_ss_PDA.xml\n");
+		}
+		else
+		{
+			printk("%s: SIM Number Check ERROR\n", __func__);
+			seq_printf(s, "%s\n", "vendor/etc/fqc_ds_PDA.xml");
+		}
+	}
+	return 0;
+}
+
+//PDA: for lcm runin {
+char fih_awer_cnt[32] = "unknown";
+void fih_awer_cnt_set(char *info)
+{
+	strcpy(fih_awer_cnt, info);
+}
+
+static int fih_awer_cnt_read_proc(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%s\n", fih_awer_cnt);
+	return 0;
+}
+
+char fih_awer_status[32] = "unknown";
+void fih_awer_status_set(char *info)
+{
+	strcpy(fih_awer_status, info);
+}
+
+static int fih_awer_status_read_proc(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%s\n", fih_awer_status);
+	return 0;
+}
+//PDA: for lcm runin }
+
+static int fih_fs_curr_read_proc(struct seq_file *m, void *v)
+{
+	if (mt6370_max_bled_brightness_get() == PDA_BL_10MA_PER_CH)
+		seq_printf(m, "%d\n", 0);
+	else
+		seq_printf(m, "%d\n", 1);
+	return 0;
+}
+
+static int fih_panelid_read_proc(struct seq_file *m, void *v)
+{
+	seq_printf(m, "0x%08X\n", g_fih_panelid);
 
 	return 0;
 }
 
-static int fqc_xml_path_show(struct seq_file *s, void *unused)
+static int wifi_show(struct seq_file *s, void *unused)
 {
-	unsigned short project_id = 0, phase_id = 0, module_id = 0;
-        char fqc_path[30] = FQC_DEFAULT_PATH;
+	struct file *wifimac_filp = NULL;
+	mm_segment_t oldfs;
+	loff_t pos = 0;
+	int offset = 4;
 
-	project_id = (fih_hwid >> 8) & 0x00F;
-
-	printk("%s: %s\n", __func__, model[project_id].sim_num);
-        printk("%s: %s\n", __func__, model[project_id].nfc_support);
-
-	if(0 == strncmp(model[project_id].sim_num, "Single", strlen("Single")))
+//	if(!wifimac_open_times)
+	if (1)
 	{
-                fqc_path[15] = 's';
-        }
+		oldfs = get_fs();
+		set_fs(KERNEL_DS);
+		wifimac_filp = filp_open(wifimac_BLOCK, O_RDONLY, 0);
 
-        if(0 == strncmp(model[project_id].nfc_support, "Support", strlen("Support")))
-        {
-                fqc_path[20] = 'N';
-        }
-        if(strchr(model[project_id].model_name, 'C') != NULL)
-        {
-                fqc_path[18] = 'C';
-                fqc_path[19] = 'O';
-        }
-        printk("%s: %s\n", __func__, fqc_path);
-        seq_printf(s, "%s\n", fqc_path);
+		if(!IS_ERR(wifimac_filp))
+		{
+			if (wifimac_filp->f_pos != offset) {
+				if (wifimac_filp->f_op->llseek) {
+					if (wifimac_filp->f_op->llseek(wifimac_filp, offset, 0) != offset) {
+						printk("[nvram_read] : failed to seek!!\n");
+						//break;
+					}
+				} else {
+					wifimac_filp->f_pos = offset;
+				}
+			}
+
+			//p = (__force char __user *)buf;
+			pos = (loff_t)offset;
+
+			vfs_read(wifimac_filp, (char __user *)wifimac_preload, sizeof(char)*wifimac_len, &pos);
+			filp_close(wifimac_filp, NULL);
+			wifimac_open_times++;
+
+			seq_printf(s, "%x:",(int)wifimac_preload[0]);
+			seq_printf(s, "%x:",(int)wifimac_preload[1]);
+			seq_printf(s, "%x:",(int)wifimac_preload[2]);
+			seq_printf(s, "%x:",(int)wifimac_preload[3]);
+			seq_printf(s, "%x:",(int)wifimac_preload[4]);
+			seq_printf(s, "%x",(int)wifimac_preload[5]);
+		}
+		else
+		{
+			printk("[dw]open %s fail\n", wifimac_BLOCK);
+		}
+
+		set_fs(oldfs);
+	}
+	else
+	{
+		seq_printf(s, "%s\n", wifimac_preload);
+	}
+
 	return 0;
 }
 
-static int skuid_show(struct seq_file *s, void *unused)
+int atoh(char *hex_string)
 {
-	char fih_skuid[30] = {'\0'};
-	char *p, *q;
+    int ret=0;
 
-	p = strstr(saved_command_line, "fih_skuid=");
-	if (p == NULL) return 0;
-	p = p+10;
-	q = p;
-	while(*q != ' ') q++;
-	strncpy(fih_skuid, p, (int)(q-p));
-	printk("%s: fih_skuid=%s\n", __func__, fih_skuid);
+    if (!hex_string)
+        return ret;
+    
+    switch (hex_string[0]) {
+        //0~9
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            ret = ret + (hex_string[0]-48) * 16;
+            break;
+            
+        //A~F
+        case 'A':
+        case 'B':
+        case 'C':
+        case 'D':
+        case 'E':
+        case 'F':
+            ret = ret + (hex_string[0]-55) * 16;
+            break;
+            
+        //a~f
+        case 'a':
+        case 'b':
+        case 'c':
+        case 'd':
+        case 'e':
+        case 'f': 
+            ret = ret + (hex_string[0]-87) * 16;
+            break;
 
-	seq_printf(s, "%s\n", fih_skuid);
+        default: 
+            break;
+    }
 
-	return 0;
+    switch (hex_string[1]) {
+        //0~9
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            ret = ret + (hex_string[1]-48);
+            break;
+            
+        //A~F
+        case 'A':
+        case 'B':
+        case 'C':
+        case 'D':
+        case 'E':
+        case 'F':
+            ret = ret + (hex_string[1]-55);
+            break;
+            
+        //a~f
+        case 'a':
+        case 'b':
+        case 'c':
+        case 'd':
+        case 'e':
+        case 'f': 
+            ret = ret + (hex_string[1]-87);
+            break;
+
+        default:
+            break;
+    }
+
+    return ret;
 }
 
-static int cda_user_read_show(struct seq_file *m, void *v)
+static ssize_t wifi_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
 {
-	seq_printf(m, "%d\n", root_cda_user_flag);
-	return 0;
-}
+	char temp[25] = {'\0'};
+	ssize_t ret;
+	struct file *wifimac_filp = NULL;
+	mm_segment_t oldfs;
+	loff_t pos = 0;
+	int offset = 4;
+	char wifi_mac[6] = {'\0'};
+	char token_temp[2]= {'\0'};
+	ssize_t ptr_wifi_mac = 0;
+	int i= 0 ;
+	int step = 2;
 
-static int cda_user_proc_write(struct file *file, const char  __user *buffer,
-                                        size_t count, loff_t *data)
-{
-	struct manuf_data fih_proinfo_data;
-	char tmp[16] = {0};
-	int access = 0;
+	printk("[dw]wifi_write enter\n");
 
-	if ( copy_from_user(tmp, buffer, count) ) {
+	if(copy_from_user(temp, buf, count))
 		return -EFAULT;
+
+	printk("[dw]wifi_write = %s*\n", temp);
+
+	if (temp[2] == ':' )
+		step = 3;
+
+	for (i=0;i<6;i++) {
+		token_temp[0] = temp[i*step];
+		token_temp[1] = temp[i*step+1];
+		wifi_mac[i] = atoh(token_temp);
+		printk("[dw]token_temp = %s  wifi_mac[%d]=%d\n", token_temp, i, wifi_mac[i]);
 	}
 
-	memset(&fih_proinfo_data, 0, sizeof(struct manuf_data));
+	printk("[dw]wifi_mac = %s\n", wifi_mac);
 
-	access = read_ef(&fih_proinfo_data);
-	if ((FILE_NOT_FOUND == access) || (FILE_CORRUPTED == access))
+    ret=count;
+
+	//write WIFI MAC address into nvram partition
+	if (1)
 	{
-		printk("cda_user_proc_writ: Read failed\n");
-		return READ_MANUFACTURE_FAIL;
-	}
+		oldfs = get_fs();
+		set_fs(KERNEL_DS);
+		wifimac_filp = filp_open(wifimac_BLOCK, O_RDWR , 0);
 
-	root_cda_user_flag = simple_strtoull(tmp, NULL, 0);
+		if(!IS_ERR(wifimac_filp))
+		{
+			if (wifimac_filp->f_pos != offset) {
+				if (wifimac_filp->f_op->llseek) {
+					if (wifimac_filp->f_op->llseek(wifimac_filp, offset, 0) != offset) {
+						printk("[nvram_write] : failed to seek!!\n");
+						//break;
+					}
+				} else {
+					wifimac_filp->f_pos = offset;
+				}
+			}
 
-	switch (root_cda_user_flag) {
-	case FIH_CDA_KERN_USER:
-		fih_proinfo_data.rootflag.status = FIH_CDA_STAT_USER;
-		break;
-	case FIH_CDA_KERN_ROOT:
-		fih_proinfo_data.rootflag.status = FIH_CDA_STAT_ROOT;
-		break;
-	default:
-		fih_proinfo_data.rootflag.status = FIH_CDA_STAT_ROOT;
-		break;
+			pos = (loff_t)offset;
+
+			vfs_write(wifimac_filp, wifi_mac, sizeof(wifi_mac), &pos);
+			filp_close(wifimac_filp, NULL);
+			wifimac_open_times++;
+		}
+		else
+		{
+			printk("[dw]write %s fail\n", wifimac_BLOCK);
+		}
+
+		set_fs(oldfs);
 	}
-	access = write_ef(&fih_proinfo_data);
-	if ((FILE_NOT_FOUND == access) || (FILE_CORRUPTED == access))
+	else
 	{
-		printk("cda_user_proc_write: write_ef\n");
-		return WRITE_MANUFACTURE_FAIL;
+		//Nothing to do.
 	}
-	return count;
+
+
+	return ret;
+}
+
+static int bt_mac_show(struct seq_file *s, void *unused)
+{
+	struct file *btmac_filp = NULL;
+	mm_segment_t oldfs;
+	loff_t pos = 0;
+	int offset = 0;
+
+	printk("[dw]bt_mac_show enter\n");
+
+	if (1)
+	{
+		oldfs = get_fs();
+		set_fs(KERNEL_DS);
+		btmac_filp = filp_open(btmac_BLOCK, O_RDONLY, 0);
+
+		if(!IS_ERR(btmac_filp))
+		{
+			if (btmac_filp->f_pos != offset) {
+				if (btmac_filp->f_op->llseek) {
+					if (btmac_filp->f_op->llseek(btmac_filp, offset, 0) != offset) {
+						printk("[nvram_read] : failed to seek!!\n");
+						//break;
+					}
+				} else {
+					btmac_filp->f_pos = offset;
+				}
+			}
+
+			//p = (__force char __user *)buf;
+			pos = (loff_t)offset;
+
+			vfs_read(btmac_filp, (char __user *)btmac_preload, sizeof(char)*btmac_len, &pos);
+			filp_close(btmac_filp, NULL);
+
+			seq_printf(s,"%02x:%02x:%02x:%02x:%02x:%02x\n",
+					btmac_preload[0], btmac_preload[1], btmac_preload[2],
+					btmac_preload[3], btmac_preload[4], btmac_preload[5]);
+		}
+		else
+		{
+			printk("[dw]open %s fail\n", btmac_BLOCK);
+		}
+
+		set_fs(oldfs);
+	}
+	else
+	{
+		seq_printf(s, "%s\n", btmac_preload);
+	}
+
+	return 0;
+}
+
+static ssize_t bt_mac_write(struct file *flip, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	char temp[25] = {'\0'};
+	ssize_t ret;
+
+	printk("[dw]bt_mac_write enter\n");
+
+	if(copy_from_user(temp, buf, count))
+		return -EFAULT;
+
+	printk("[dw]bt_mac_write = %s*\n", temp);
+
+	memset(str_btmac, 0, sizeof(str_btmac));
+	strcpy(str_btmac, temp);
+
+	ret=count;
+
+	return 0;
 }
 
 static int baseband_open(struct inode *inode, struct file *file)
@@ -1280,12 +1686,12 @@ static int baseband_open(struct inode *inode, struct file *file)
 	return single_open(file, baseband_show, &inode->i_private);
 }
 
-static int baseband_settings_open(struct inode *inode, struct file *file)
+static int baseband_settings_open(struct inode *inode, struct file *file) 
 {
 	return single_open(file, baseband_settings_show, &inode->i_private);
 }
 
-static int pcba_description_open(struct inode *inode, struct file *file)
+static int pcba_description_open(struct inode *inode, struct file *file) 
 {
 	return single_open(file, pcba_description_show, &inode->i_private);
 }
@@ -1392,7 +1798,7 @@ static int audio_info_open(struct inode *inode, struct file *file)
 	return single_open(file, audio_info_show, &inode->i_private);
 }
 
-static int hwid_info_open(struct inode *inode, struct file *file)
+static int hwid_info_open(struct inode *inode, struct file *file)    
 {
 	return single_open(file, hwid_info_show, &inode->i_private);
 }
@@ -1401,11 +1807,6 @@ static int root_status_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, root_status_info_show, &inode->i_private);
 }
-
-static int cda_user_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cda_user_read_show, &inode->i_private);
-};
 
 static int uicolor_open(struct inode *inode, struct file *file)
 {
@@ -1437,21 +1838,82 @@ static int sim_number_open(struct inode *inode, struct file *file)
 	return single_open(file, sim_number_show, &inode->i_private);
 }
 
-static int nfc_support_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, nfc_support_show, &inode->i_private);
-}
-
 static int fqc_xml_path_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, fqc_xml_path_show, &inode->i_private);
 }
 
-static int skuid_open(struct inode *inode, struct file *file)
+//PDA: for lcm runin {
+static int fih_awer_cnt_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, skuid_show, &inode->i_private);
+	return single_open(file, fih_awer_cnt_read_proc, NULL);
 }
 
+static int fih_awer_status_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, fih_awer_status_read_proc, NULL);
+}
+//PDA: for lcm runin }
+
+static int fih_fs_curr_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, fih_fs_curr_read_proc, NULL);
+}
+
+static ssize_t fih_fs_curr_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *offp)
+{
+	char *buf;
+	unsigned int res = 0;
+
+	if (count < 1)
+		return -EINVAL;
+
+	buf = kmalloc(count, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+
+	buf[1] = 0;
+
+	pr_err("%s write %s\n", __func__, buf);
+
+	if(simple_strtoul(buf, NULL, 0) > 0) {
+		if (mt6370_max_bled_brightness_get() != PDA_BL_11_5MA_PER_CH) {
+			res = mt6370_max_bled_brightness_set(PDA_BL_11_5MA_PER_CH);
+		}
+	} else {
+		if (mt6370_max_bled_brightness_get() != PDA_BL_10MA_PER_CH) {
+			res = mt6370_max_bled_brightness_set(PDA_BL_10MA_PER_CH);
+		}
+	}
+
+	if (res < 0)
+	{
+		kfree(buf);
+		return res;
+	}
+
+	kfree(buf);
+	/* claim that we wrote everything */
+	return count;
+}
+
+static int fih_panelid_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, fih_panelid_read_proc, NULL);
+}
+
+static int wifi_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, wifi_show, &inode->i_private);
+}
+
+static int bt_mac_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bt_mac_show, &inode->i_private);
+}
 
 static const struct file_operations fver_fops = {
         .open        = fver_open,
@@ -1462,7 +1924,7 @@ static const struct file_operations fver_fops = {
 
 static const struct file_operations model_fops = {
         .open        = model_open,
-        .write       = model_write,
+//        .write		 = model_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
@@ -1484,7 +1946,7 @@ static const struct file_operations emmc_fops = {
 
 static const struct file_operations poweroncause_fops = {
         .open        = poweroncause_open,
-	.write		= poweroncause_write,
+		.write		 = poweroncause_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
@@ -1595,7 +2057,7 @@ static const struct file_operations module_fops = {
 
 static const struct file_operations pid_fops = {
         .open        = pid_open,
-	.write		 = pid_write,
+		.write		 = pid_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
@@ -1603,7 +2065,7 @@ static const struct file_operations pid_fops = {
 
 static const struct file_operations touch_fops = {
         .open        = touch_open,
-	.write		 = touch_write,
+		.write		 = touch_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
@@ -1611,25 +2073,28 @@ static const struct file_operations touch_fops = {
 
 static const struct file_operations lcm_info_fops = {
         .open        = lcm_info_open,
-	.write		= lcm_info_write,
+		.write		 = lcm_info_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
 };
 
+//  add audio [
 static const struct file_operations AUDIO_para_info_fops = {
         .open        = audio_info_open,
-	.write= audio_info_write,
+		.write		 = audio_info_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
 };
+// add audio ]
 
+//sun + for RUNIN
 static struct file_operations draminfo_test_result_ops = {
 	.owner   = THIS_MODULE,
-	.open    = draminfo_test_result_open,
+	.open    = draminfo_test_result_open,	
 	.read    = seq_read,
-	.write   = draminfo_test_result_wtite,
+	.write		 = draminfo_test_result_wtite,  /*sun +*/
 	.llseek  = seq_lseek,
 	.release = single_release
 };
@@ -1648,42 +2113,34 @@ static const struct file_operations root_status_fops = {
 	.release	 = single_release,
 };
 
-static const struct file_operations cda_user_file_ops = {
-	.open    = cda_user_proc_open,
-	.read    = seq_read,
-	.write   = cda_user_proc_write,
-	.llseek  = seq_lseek,
-	.release = single_release
-};
-
 static const struct file_operations uicolor_fops = {
-	.open		 =  uicolor_open,
-	.write		 =  uicolor_write,
-	.read		 =  seq_read,
-	.llseek		 =  seq_lseek,
-	.release	 =  single_release,
+		.open		 =  uicolor_open,
+		.write		 =  uicolor_write,
+		.read		 =  seq_read,
+		.llseek		 =  seq_lseek,
+		.release	 =  single_release,
 };
 
 static const struct file_operations hwid_info_fops = {
-	.open		 =  hwid_info_open,
-	.read		 =  seq_read,
-	.llseek		 =  seq_lseek,
-	.release	 =  single_release,
+		.open		 =  hwid_info_open,
+		.read		 =  seq_read,
+		.llseek		 =  seq_lseek,
+		.release	 =  single_release,
 };
 
 static const struct file_operations sim_card_slot_fops = {
-	.open		 =  sim_card_slot_open,
-	.write		 =  sim_card_slot_write,
-	.read		 =  seq_read,
-	.llseek		 =  seq_lseek,
-	.release	 =  single_release,
+		.open		 =  sim_card_slot_open,
+		.write		 = 	sim_card_slot_write,
+		.read		 =  seq_read,
+		.llseek		 =  seq_lseek,
+		.release	 =  single_release,
 };
 
 static const struct file_operations bandinfo_fops = {
-	.open		 =  bandinfo_open,
-	.read		 =  seq_read,
-	.llseek		 =  seq_lseek,
-	.release	 =  single_release,
+		.open		 =  bandinfo_open,
+		.read		 =  seq_read,
+		.llseek		 =  seq_lseek,
+		.release	 =  single_release,
 };
 
 static const struct file_operations efuse_state_fops = {
@@ -1694,8 +2151,8 @@ static const struct file_operations efuse_state_fops = {
 };
 
 static const struct file_operations otg_last_flag_fops = {
-	.open        = otg_last_flag_open,
-	.write       = otg_last_flag_write,
+		.open        = otg_last_flag_open,
+		.write		 = otg_last_flag_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
@@ -1708,13 +2165,6 @@ static const struct file_operations sim_number_fops = {
         .release     = single_release,
 };
 
-static const struct file_operations nfc_support_fops = {
-        .open        = nfc_support_open,
-        .read        = seq_read,
-        .llseek      = seq_lseek,
-        .release     = single_release,
-};
-
 static const struct file_operations fqc_xml_path_fops = {
         .open        = fqc_xml_path_open,
         .read        = seq_read,
@@ -1722,12 +2172,55 @@ static const struct file_operations fqc_xml_path_fops = {
         .release     = single_release,
 };
 
-static const struct file_operations skuid_fops = {
-        .open        = skuid_open,
+//PDA: for lcm runin {
+static struct file_operations awer_cnt_operations = {
+	.open		= fih_awer_cnt_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+
+static struct file_operations awer_status_operations = {
+	.open		= fih_awer_status_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+//PDA: for lcm runin }
+
+static struct file_operations fs_curr_operations = {
+	.owner   = THIS_MODULE,
+	.open    = fih_fs_curr_proc_open,
+	.read    = seq_read,
+	.write   = fih_fs_curr_proc_write,
+	.llseek  = seq_lseek,
+	.release = single_release
+};
+
+static struct file_operations panelid_operations = {
+	.open    = fih_panelid_proc_open,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = single_release
+};
+
+static const struct file_operations wifi_fops = {
+        .open        = wifi_open,
+        .write	     = wifi_write,
         .read        = seq_read,
         .llseek      = seq_lseek,
         .release     = single_release,
 };
+
+static const struct file_operations bt_mac_fops = {
+		.open		 =  bt_mac_open,
+		.write		 =  bt_mac_write,
+		.read		 =  seq_read,
+		.llseek		 =  seq_lseek,
+		.release	 =  single_release,
+};
+
+/*******************************************************************************************************************************************/
 
 static int dec2hex_under100(int num_dec)
 {
@@ -1743,10 +2236,13 @@ static int fs_get_hwid_num(void)
 {
 	mm_segment_t oldfs;
 	struct file *fdata_filp = NULL;
+        loff_t pos = 0;
+	int i;
 
 	char hwid_num = 0;
 	char hwid_tag[FIH_HWID_TAG_SIZE] = {0};
-	int i;
+
+	printk("fs_get_hwid_num() fih_hwid=0X%x.\n",fih_hwid);
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -1757,36 +2253,43 @@ static int fs_get_hwid_num(void)
 
 		if(!IS_ERR(fdata_filp))
 		{
-			fdata_filp->f_op->llseek(fdata_filp, 0, SEEK_SET);
-			fdata_filp->f_op->read(fdata_filp, hwid_tag, FIH_HWID_TAG_SIZE, &fdata_filp->f_pos);
+
+			//fdata_filp->f_op->llseek(fdata_filp, 0, SEEK_SET);
+
+			//fdata_filp->f_op->read(fdata_filp, hwid_tag, 13, &fdata_filp->f_pos);
+			vfs_read(fdata_filp, (char __user *)hwid_tag, FIH_HWID_TAG_SIZE, &pos);
+			//printk("fs_get_hwid_num() read hwid_tag OK!\n");
 
 			if(0 == strncmp(hwid_tag, "FIH_HWID_INFO", strlen("FIH_HWID_INFO")))
 			{
-				fdata_filp->f_op->llseek(fdata_filp, FIH_HWID_TAG_SIZE, SEEK_SET);
-				fdata_filp->f_op->read(fdata_filp, &hwid_num, 1, &fdata_filp->f_pos);
+
+				//fdata_filp->f_op->llseek(fdata_filp, FIH_HWID_TAG_SIZE, SEEK_SET);
+				pos=0+FIH_HWID_TAG_SIZE;
+				vfs_read(fdata_filp, (char __user *)&hwid_num, 1, &pos);
+				//fdata_filp->f_op->read(fdata_filp, &hwid_num, 1, &fdata_filp->f_pos);
 
 				hwid_num = dec2hex_under100(hwid_num);
+				//printk("fs_get_hwid_num() read hwid_num OK.\n");
 			}
 			else
 			{
 				hwid_num = 0;
-				printk("fs_get_hwid_num() check hwid_info error!\n");
+				printk("fs_get_hwid_num() check hwid_info failed! (err=%x)\n", IS_ERR(fdata_filp));
 			}
-
 			filp_close(fdata_filp, NULL);
-			printk("fs_get_hwid_num() Read hwid_info Success!\n");
+			//printk("fs_get_hwid_num() Read hwid_info Success!\n");
 			break;
 		}
 		else
 		{
 			hwid_num = 0;
-			printk("fs_get_hwid_num() Read hwid_info failed! %d\n", PTR_ERR(fdata_filp));
+			printk("fs_get_hwid_num() Read hwid_info failed!\n");
 		}
-
 		msleep(100);
 	}
 
 	set_fs(oldfs);
+
 	return hwid_num;
 }
 
@@ -1794,6 +2297,7 @@ static void fs_read_hwid_info(char *temp, int offset, int size)
 {
 	struct file *fdata_filp = NULL;
 	mm_segment_t oldfs;
+        loff_t pos = 0;
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -1802,9 +2306,11 @@ static void fs_read_hwid_info(char *temp, int offset, int size)
 
 	if(!IS_ERR(fdata_filp))
 	{
-		fdata_filp->f_op->llseek(fdata_filp, offset, SEEK_SET);
-		fdata_filp->f_op->read(fdata_filp, temp, size, &fdata_filp->f_pos);
-
+		pos=0+offset;
+		//fdata_filp->f_op->llseek(fdata_filp, offset, SEEK_SET);
+		//fdata_filp->f_op->read(fdata_filp, temp, size, &fdata_filp->f_pos);
+		vfs_read(fdata_filp, (char __user *)temp, size, &pos);
+		//printk("fs_read_hwid_info read OK!!!!!!!\n");
 		filp_close(fdata_filp, NULL);
 		printk("fs_read_hwid_info() Read hwid_info Success!\n");
 	}
@@ -1824,10 +2330,11 @@ int fih_read_hwid_info(void *x)
 	struct fih_hwid_info *hwid_info_tabel = NULL;
 
 	unsigned short hw_project = 0, hw_phase = 0, hw_module = 0;
-
+	
 	hw_project = (fih_hwid >> 8) & 0xF;
 	hw_phase   = (fih_hwid >> 4) & 0xF;
 	hw_module  = fih_hwid  & 0xF;
+
 
 	fih_hwid_num = fs_get_hwid_num();
 	printk("fih_read_hwid_info() fih_hwid_num = %d\n", fih_hwid_num);
@@ -1843,32 +2350,33 @@ int fih_read_hwid_info(void *x)
 
 			printk("fih_read_hwid_info() kmalloc Failed!\n");
 
-			return;
+			return 1;
 		}
 
 		memset(hwid_info_tabel, 0, sizeof(struct fih_hwid_info)*fih_hwid_num);
 
-		fs_read_hwid_info(hwid_info_tabel, FIH_HWID_TAG_SIZE*2,
-                                  sizeof(struct fih_hwid_info)*fih_hwid_num);
+		fs_read_hwid_info((char *)hwid_info_tabel, FIH_HWID_TAG_SIZE*2, sizeof(struct fih_hwid_info)*fih_hwid_num);
 
 		for(i = 0; i < fih_hwid_num; i++, hwid_info_tabel++)
 		{
+			//printk("fih_read_hwid_info() prj=%x phase=%x rf=%x\n",hwid_info_tabel->project_id,hwid_info_tabel->phase_id,hwid_info_tabel->module_id);
+
 			if((hwid_info_tabel->project_id == hw_project) &&
-				(hwid_info_tabel->phase_id == hw_phase) &&
-                           (hwid_info_tabel->module_id == hw_module))
+				(hwid_info_tabel->phase_id == hw_phase) && (hwid_info_tabel->module_id == hw_module))
 			{
+				printk("fih_read_hwid_info() prj=%x phase=%x rf=%x\n",hwid_info_tabel->project_id,hwid_info_tabel->phase_id,hwid_info_tabel->module_id);
+
 				strcpy(model[hw_project].model_name, hwid_info_tabel->project_name);
 				strcpy(model[hw_project].cpu_name, hwid_info_tabel->cpu_name);
 				strcpy(model[hw_project].phase_settings, hwid_info_tabel->phase_sw);
 				strcpy(model[hw_project].phase, hwid_info_tabel->phase_hw);
 				strcpy(model[hw_project].module, hwid_info_tabel->module);
 				strcpy(model[hw_project].bandinfo, hwid_info_tabel->bandinfo);
-				strcpy(model[hw_project].pcba_description,
-                                       hwid_info_tabel->pcba_description);
+				strcpy(model[hw_project].pcba_description, hwid_info_tabel->pcba_description);
 				strcpy(model[hw_project].hw_family, hwid_info_tabel->hw_family);
 				strcpy(model[hw_project].hac, hwid_info_tabel->hac);
 				strcpy(model[hw_project].sim_num, hwid_info_tabel->sim_num);
-				strcpy(model[hw_project].nfc_support, hwid_info_tabel->nfc_support);
+
 				break;
 			}
 		}
@@ -1880,9 +2388,6 @@ int fih_read_hwid_info(void *x)
 			memset(&model[hw_project], 0, sizeof(struct systeminfo));
 			memcpy(&model[hw_project], &model[0], sizeof(struct systeminfo));
 		}
-		mutex_lock(&proc_read_mutex);
-		strcpy(nfc_hw_support, model[hw_project].nfc_support);
-		mutex_unlock(&proc_read_mutex);
 
 	}
 	else
@@ -1893,38 +2398,23 @@ int fih_read_hwid_info(void *x)
 	return 0;
 }
 
-static void init_poweroncause(void)
-{
-	enum boot_reason_t boot_reason = BR_UNKNOWN;
-	boot_reason = get_boot_reason();
-	switch(boot_reason)
-	{
-		case BR_UNKNOWN:
-			strcpy(causeStr, FIH_PON_APR_UNKNOWN_RESET);break;
-		default:
-			     strcpy(causeStr, "0x00\n");
-	}
-#ifdef CONFIG_MTK_RAM_CONSOLE
-	if (aee_rr_last_fiq_step() != 0)
-		strcpy(causeStr, FIH_PON_APR_KERNEL_PANIC);
-#endif
-}
 
 static int __init proc_info_module_init(void)
 {
 	struct proc_dir_entry *entry;
 	struct proc_dir_entry *baseband_entry;
 	struct proc_dir_entry *baseband_settings_entry;
-	struct proc_dir_entry *pcba_description_entry;
+	struct proc_dir_entry *pcba_description_entry;		
 	struct proc_dir_entry *hwidv_entry;
 	struct proc_dir_entry *poweroncause_entry;
 	struct proc_dir_entry *entry_C;
+	struct proc_dir_entry *lcm0_dir; //PDA: for lcm runin
 
-	mutex_init(&proc_read_mutex);
+	//kthread_run(hwid_info_polling, NULL, "hwid_info_polling");
 	kthread_run(fih_read_hwid_info, NULL, "fih_read_hwid_info");
-	//fih_read_hwid_info();
+//	fih_read_hwid_info();
 
-	entry = proc_create(FVER_PROC, S_IFREG | S_IRUGO, NULL, &fver_fops);
+	entry = proc_create(FVER_PROC, 0777, NULL, &fver_fops);
 	if(entry == NULL)
 		printk("[dw]creat proc %s fail\n", FVER_PROC);
 	fver_preload = kmalloc(sizeof(char)*fver_len, GFP_KERNEL);
@@ -1949,13 +2439,11 @@ static int __init proc_info_module_init(void)
 	if(baseband_entry == NULL)
 		printk("[dw]creat proc %s fail\n", BASEBAND_PROC);
 
-	baseband_settings_entry = proc_create(BASEBAND_SETTINGS_PROC, S_IFREG | S_IRUGO, NULL,
-                                              &baseband_settings_fops);
+	baseband_settings_entry = proc_create(BASEBAND_SETTINGS_PROC, S_IFREG | S_IRUGO, NULL, &baseband_settings_fops);
 	if(baseband_settings_entry==NULL)
 		printk("[dw]creat proc %s fail\n", BASEBAND_SETTINGS_PROC);
 
-	pcba_description_entry = proc_create(PCBA_DESCRIPTION_PROC, S_IFREG | S_IRUGO, NULL,
-                                             &pcba_description_fops);
+	pcba_description_entry = proc_create(PCBA_DESCRIPTION_PROC, S_IFREG | S_IRUGO, NULL, &pcba_description_fops);
 	if(pcba_description_entry==NULL)
 		printk("[dw]creat proc %s fail\n", PCBA_DESCRIPTION_PROC);
 
@@ -1963,12 +2451,10 @@ static int __init proc_info_module_init(void)
 	if(hwidv_entry == NULL)
 		printk("[dw]creat proc %s fail\n", HWIDV_PROC);
 
-	poweroncause_entry = proc_create(POWERONCAUSE_PROC, S_IFREG | S_IRUGO | S_IWUGO, NULL,
-                                         &poweroncause_fops);
+	poweroncause_entry = proc_create(POWERONCAUSE_PROC, S_IFREG | S_IRUGO | S_IWUGO, NULL, &poweroncause_fops);
 	if(poweroncause_entry == NULL)
 		printk("[dw]creat proc %s fail\n", POWERONCAUSE_PROC);
-	init_poweroncause();
-	//strcpy(causeStr, "0x00\n");
+	strcpy(causeStr, "0x00\n");
 
 	entry = proc_create(LCM_PROC, S_IFREG | S_IRUGO, NULL, &lcm_fops);
 	if(entry == NULL)
@@ -2030,20 +2516,11 @@ static int __init proc_info_module_init(void)
 	if(entry == NULL)
 		printk("[dw]creat proc %s fail\n", HWMODEL_PROC);
 
-	entry = proc_create(IMEI_PROC, 0777, entry_C, &imei_fops);
-	if(entry == NULL)
-		printk("[dw]creat proc %s fail\n", IMEI_PROC);
-
-	entry = proc_create(IMEI2_PROC, 0777, entry_C, &imei2_fops);
-	if(entry == NULL)
-		printk("[dw]creat proc %s fail\n", IMEI2_PROC);
-
 	fih_dram_setup_MEM();
-	entry = proc_create(FIH_PROC_TESTRESULT_PATH, 0777, entry_C, &draminfo_test_result_ops);
-
+	entry = proc_create(FIH_PROC_TESTRESULT_PATH, 0777, entry_C, &draminfo_test_result_ops); //sun + for runin
 	if(entry == NULL)
 		printk("creat AllHWList/dramtest_result proc %s fail\n", RAMRESULT_PROC);
-
+		
 	entry = proc_create(UICOLOR_PROC, S_IFREG | S_IRUGO, NULL, &uicolor_fops);
 	if(entry == NULL)
 		printk("creat proc %s fail\n", UICOLOR_PROC);
@@ -2053,18 +2530,17 @@ static int __init proc_info_module_init(void)
 		printk("[dw]creat proc %s fail\n", PROC_STATUSROOT);
 	root_status_load = kmalloc(sizeof(char)*root_status_len, GFP_KERNEL);
 
-	proc_mkdir(FIH_PROC_CDA_USER_DIR, NULL);
-	entry = proc_create(FIH_PROC_CDA_USER_PATH, 0777, NULL, &cda_user_file_ops);
-	if(entry == NULL)
-		printk("[dw]creat proc %s fail\n", FIH_PROC_CDA_USER_PATH);
-
 	entry = proc_create(HWINFO_PROC, S_IFREG | S_IRUGO, NULL, &hwid_info_fops);
 	if(entry == NULL)
 		printk("creat proc %s fail\n", HWINFO_PROC);
-
+	
 	entry = proc_create(SIM_CARD_SLOT_PROC, S_IFREG | S_IRUGO, NULL, &sim_card_slot_fops);
 	if(entry == NULL)
 		printk("creat proc %s fail\n", SIM_CARD_SLOT_PROC);
+
+        entry = proc_create("SIMSlot", S_IFREG | S_IRUGO, NULL, &sim_card_slot_fops);
+        if(entry == NULL)
+                printk("creat proc %s fail\n", SIM_CARD_SLOT_PROC);
 
 	entry = proc_create(BANDINFO, S_IFREG | S_IRUGO, NULL, &bandinfo_fops);
 	if(entry == NULL)
@@ -2082,20 +2558,54 @@ static int __init proc_info_module_init(void)
 	if(entry == NULL)
 		printk("creat proc %s fail\n", SIM_NUMBER);
 
-	entry = proc_create(NFC_SUPPORT, S_IFREG | S_IRUGO, NULL, &nfc_support_fops);
-        if(entry == NULL)
-                 printk("creat proc %s fail\n", NFC_SUPPORT);
-
 	entry = proc_create(FQCXMLPATH, S_IFREG | S_IRUGO, NULL, &fqc_xml_path_fops);
 	if(entry == NULL)
 		printk("creat proc %s fail\n", FQCXMLPATH);
 
-	entry = proc_create(SKUID_PROC, S_IFREG | S_IRUGO, NULL, &skuid_fops);
+	//PDA: for lcm runin {
+	lcm0_dir = proc_mkdir("AllHWList/LCM0", NULL);
+	entry = proc_create(LCM0_AWER_CNT, 0, lcm0_dir, &awer_cnt_operations);
+	if (entry == NULL)
+	{
+		pr_err("\n\nUnable to create /proc/%s", LCM0_AWER_CNT);
+	}
+	pr_debug("\n\n*** [LCM] %s, succeed to create proc/%s ***\n\n", __func__, LCM0_AWER_CNT);
+
+	entry = proc_create(LCM0_AWER_STATUS, 0, lcm0_dir, &awer_status_operations);
+	if (entry == NULL)
+	{
+		pr_err("\n\nUnable to create /proc/%s", LCM0_AWER_STATUS);
+	}
+	pr_debug("\n\n*** [LCM] %s, succeed to create proc/%s ***\n\n", __func__, LCM0_AWER_STATUS);
+	//PDA: for lcm runin }
+
+	entry = proc_create(LCM0_FS_CURR, 0, lcm0_dir, &fs_curr_operations);
+	if (entry == NULL)
+	{
+		pr_err("\n\nUnable to create /proc/%s", LCM0_FS_CURR);
+	}
+	pr_debug("\n\n*** [LCM] %s, succeed to create proc/%s ***\n\n", __func__, LCM0_FS_CURR);
+
+	entry = proc_create(LCM0_PANELID, 0, lcm0_dir, &panelid_operations);
+	if (entry == NULL)
+	{
+		pr_err("\n\nUnable to create /proc/%s", LCM0_PANELID);
+	}
+	pr_debug("\n\n*** [LCM] %s, succeed to create proc/%s ***\n\n", __func__, LCM0_PANELID);
+
+	entry = proc_create(WIFI_MAC, 0777, NULL, &wifi_fops);
 	if(entry == NULL)
-		printk("creat proc %s fail\n", SKUID_PROC);
+		printk("[dw]creat proc %s fail\n", WIFI_MAC);
+	wifimac_preload = kmalloc(sizeof(char)*wifimac_len, GFP_KERNEL);
+
+	entry = proc_create(BT_MAC, 0777, NULL, &bt_mac_fops);
+	if(entry == NULL)
+		printk("create proc %s fail\n", BT_MAC);
+	btmac_preload = kmalloc(sizeof(char)*btmac_len, GFP_KERNEL);
 
 	return 0;
 }
+
 
 static void __exit proc_info_module_exit(void)
 {

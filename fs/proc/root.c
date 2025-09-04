@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/proc/root.c
  *
@@ -6,7 +7,7 @@
  *  proc root directory handling functions
  */
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <linux/errno.h>
 #include <linux/time.h>
@@ -14,12 +15,14 @@
 #include <linux/stat.h>
 #include <linux/init.h>
 #include <linux/sched.h>
+#include <linux/sched/stat.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
 #include <linux/user_namespace.h>
 #include <linux/mount.h>
 #include <linux/pid_namespace.h>
 #include <linux/parser.h>
+#include <linux/cred.h>
 
 #include "internal.h"
 
@@ -73,7 +76,8 @@ static int proc_parse_options(char *options, struct pid_namespace *pid)
 		case Opt_hidepid:
 			if (match_int(&args[0], &option))
 				return 0;
-			if (option < 0 || option > 2) {
+			if (option < HIDEPID_OFF ||
+			    option > HIDEPID_INVISIBLE) {
 				pr_err("proc: hidepid value must be between 0 and 2.\n");
 				return 0;
 			}
@@ -121,13 +125,6 @@ static struct dentry *proc_mount(struct file_system_type *fs_type,
 	if (IS_ERR(sb))
 		return ERR_CAST(sb);
 
-	/*
-	 * procfs isn't actually a stacking filesystem; however, there is
-	 * too much magic going on inside it to permit stacking things on
-	 * top of it
-	 */
-	sb->s_stack_depth = FILESYSTEM_MAX_STACK_DEPTH;
-
 	if (!proc_parse_options(options, ns)) {
 		deactivate_locked_super(sb);
 		return ERR_PTR(-EINVAL);
@@ -141,6 +138,8 @@ static struct dentry *proc_mount(struct file_system_type *fs_type,
 		}
 
 		sb->s_flags |= MS_ACTIVE;
+		/* User space would break if executables appear on proc */
+		sb->s_iflags |= SB_I_NOEXEC;
 	}
 
 	return dget(sb->s_root);
@@ -163,7 +162,7 @@ static struct file_system_type proc_fs_type = {
 	.name		= "proc",
 	.mount		= proc_mount,
 	.kill_sb	= proc_kill_sb,
-	.fs_flags	= FS_USERNS_VISIBLE | FS_USERNS_MOUNT,
+	.fs_flags	= FS_USERNS_MOUNT,
 };
 
 void __init proc_root_init(void)
@@ -171,6 +170,7 @@ void __init proc_root_init(void)
 	int err;
 
 	proc_init_inodecache();
+	set_proc_pid_nlink();
 	err = register_filesystem(&proc_fs_type);
 	if (err)
 		return;
@@ -180,26 +180,26 @@ void __init proc_root_init(void)
 	proc_symlink("mounts", NULL, "self/mounts");
 
 	proc_net_init();
-
+	proc_uid_init();
 #ifdef CONFIG_SYSVIPC
 	proc_mkdir("sysvipc", NULL);
 #endif
 	proc_mkdir("fs", NULL);
 	proc_mkdir("driver", NULL);
-	proc_mkdir("fs/nfsd", NULL); /* somewhere for the nfsd filesystem to be mounted */
+	proc_create_mount_point("fs/nfsd"); /* somewhere for the nfsd filesystem to be mounted */
 #if defined(CONFIG_SUN_OPENPROMFS) || defined(CONFIG_SUN_OPENPROMFS_MODULE)
 	/* just give it a mountpoint */
-	proc_mkdir("openprom", NULL);
+	proc_create_mount_point("openprom");
 #endif
 	proc_tty_init();
 	proc_mkdir("bus", NULL);
 	proc_sys_init();
 }
 
-static int proc_root_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat
-)
+static int proc_root_getattr(const struct path *path, struct kstat *stat,
+			     u32 request_mask, unsigned int query_flags)
 {
-	generic_fillattr(dentry->d_inode, stat);
+	generic_fillattr(d_inode(path->dentry), stat);
 	stat->nlink = proc_root.nlink + nr_processes();
 	return 0;
 }
@@ -231,8 +231,8 @@ static int proc_root_readdir(struct file *file, struct dir_context *ctx)
  */
 static const struct file_operations proc_root_operations = {
 	.read		 = generic_read_dir,
-	.iterate	 = proc_root_readdir,
-	.llseek		= default_llseek,
+	.iterate_shared	 = proc_root_readdir,
+	.llseek		= generic_file_llseek,
 };
 
 /*
@@ -255,6 +255,7 @@ struct proc_dir_entry proc_root = {
 	.proc_iops	= &proc_root_inode_operations, 
 	.proc_fops	= &proc_root_operations,
 	.parent		= &proc_root,
+	.subdir		= RB_ROOT_CACHED,
 	.name		= "/proc",
 };
 

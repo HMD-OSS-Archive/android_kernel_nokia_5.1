@@ -122,7 +122,7 @@ static const u32 smscufx_info_flags = FBINFO_DEFAULT | FBINFO_READS_FAST |
 	FBINFO_VIRTFB |	FBINFO_HWACCEL_IMAGEBLIT | FBINFO_HWACCEL_FILLRECT |
 	FBINFO_HWACCEL_COPYAREA | FBINFO_MISC_ALWAYS_SETPAR;
 
-static struct usb_device_id id_table[] = {
+static const struct usb_device_id id_table[] = {
 	{USB_DEVICE(0x0424, 0x9d00),},
 	{USB_DEVICE(0x0424, 0x9d01),},
 	{},
@@ -1142,8 +1142,7 @@ static void ufx_free_framebuffer_work(struct work_struct *work)
 		fb_dealloc_cmap(&info->cmap);
 	if (info->monspecs.modedb)
 		fb_destroy_modedb(info->monspecs.modedb);
-	if (info->screen_base)
-		vfree(info->screen_base);
+	vfree(info->screen_base);
 
 	fb_destroy_modelist(&info->modelist);
 
@@ -1647,8 +1646,9 @@ static int ufx_usb_probe(struct usb_interface *interface,
 	dev_dbg(dev->gdev, "%s %s - serial #%s\n",
 		usbdev->manufacturer, usbdev->product, usbdev->serial);
 	dev_dbg(dev->gdev, "vid_%04x&pid_%04x&rev_%04x driver's ufx_data struct at %p\n",
-		usbdev->descriptor.idVendor, usbdev->descriptor.idProduct,
-		usbdev->descriptor.bcdDevice, dev);
+		le16_to_cpu(usbdev->descriptor.idVendor),
+		le16_to_cpu(usbdev->descriptor.idProduct),
+		le16_to_cpu(usbdev->descriptor.bcdDevice), dev);
 	dev_dbg(dev->gdev, "console enable=%d\n", console);
 	dev_dbg(dev->gdev, "fb_defio enable=%d\n", fb_defio);
 
@@ -1743,8 +1743,7 @@ error:
 				fb_dealloc_cmap(&info->cmap);
 			if (info->monspecs.modedb)
 				fb_destroy_modedb(info->monspecs.modedb);
-			if (info->screen_base)
-				vfree(info->screen_base);
+			vfree(info->screen_base);
 
 			fb_destroy_modelist(&info->modelist);
 
@@ -1763,10 +1762,8 @@ error:
 static void ufx_usb_disconnect(struct usb_interface *interface)
 {
 	struct ufx_data *dev;
-	struct fb_info *info;
 
 	dev = usb_get_intfdata(interface);
-	info = dev->info;
 
 	pr_debug("USB disconnect starting\n");
 
